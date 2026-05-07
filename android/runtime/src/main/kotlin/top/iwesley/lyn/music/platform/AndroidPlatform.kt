@@ -36,6 +36,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.room.Room
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.request.request
 import io.ktor.client.request.setBody
 import io.ktor.client.request.url
@@ -364,7 +365,13 @@ private class AndroidDailyRecommendationDateChangeNotifier(
 }
 
 internal class AndroidLyricsHttpClient : LyricsHttpClient {
-    private val client = HttpClient(OkHttp)
+    private val client = HttpClient(OkHttp) {
+        install(HttpTimeout) {
+            requestTimeoutMillis = 30_000L
+            connectTimeoutMillis = 30_000L
+            socketTimeoutMillis = 30_000L
+        }
+    }
 
     override suspend fun request(request: LyricsRequest): Result<LyricsHttpResponse> {
         return runCatching {

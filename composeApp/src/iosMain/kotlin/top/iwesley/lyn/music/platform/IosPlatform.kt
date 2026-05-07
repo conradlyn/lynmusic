@@ -3,6 +3,7 @@ package top.iwesley.lyn.music.platform
 import androidx.room.Room
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.darwin.Darwin
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.request.request
 import io.ktor.client.request.setBody
 import io.ktor.client.request.url
@@ -233,7 +234,13 @@ private class IosDailyRecommendationDateChangeNotifier(
 }
 
 private class IosLyricsHttpClient : LyricsHttpClient {
-    private val client = HttpClient(Darwin)
+    private val client = HttpClient(Darwin) {
+        install(HttpTimeout) {
+            requestTimeoutMillis = 30_000L
+            connectTimeoutMillis = 30_000L
+            socketTimeoutMillis = 30_000L
+        }
+    }
 
     override suspend fun request(request: LyricsRequest): Result<LyricsHttpResponse> {
         return runCatching {
