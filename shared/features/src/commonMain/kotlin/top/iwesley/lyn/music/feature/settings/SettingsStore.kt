@@ -61,6 +61,7 @@ data class SettingsState(
     val appDisplayScalePreset: AppDisplayScalePreset = AppDisplayScalePreset.Default,
     val navidromeWifiAudioQuality: NavidromeAudioQuality = NavidromeAudioQuality.Original,
     val navidromeMobileAudioQuality: NavidromeAudioQuality = NavidromeAudioQuality.Kbps192,
+    val useAndroidExtensionDecoder: Boolean = false,
     val supportsLyricsShareFontImport: Boolean = false,
     val importedLyricsShareFonts: List<LyricsShareFontOption> = emptyList(),
     val lyricsShareFontsLoading: Boolean = false,
@@ -106,6 +107,7 @@ sealed interface SettingsIntent {
     data class AppDisplayScalePresetChanged(val value: AppDisplayScalePreset) : SettingsIntent
     data class NavidromeWifiAudioQualityChanged(val value: NavidromeAudioQuality) : SettingsIntent
     data class NavidromeMobileAudioQualityChanged(val value: NavidromeAudioQuality) : SettingsIntent
+    data class AndroidExtensionDecoderChanged(val value: Boolean) : SettingsIntent
     data class ThemeSelected(val value: AppThemeId) : SettingsIntent
     data class ThemeTextPaletteSelected(val themeId: AppThemeId, val value: AppThemeTextPalette) : SettingsIntent
     data class CustomThemeColorUpdated(val role: CustomThemeColorRole, val argb: Int) : SettingsIntent
@@ -229,6 +231,11 @@ class SettingsStore(
             }
         }
         scope.launch {
+            repository.useAndroidExtensionDecoder.collect { enabled ->
+                updateState { state -> state.copy(useAndroidExtensionDecoder = enabled) }
+            }
+        }
+        scope.launch {
             repository.selectedTheme.collect { themeId ->
                 updateState { state -> state.copy(selectedTheme = themeId) }
             }
@@ -294,6 +301,11 @@ class SettingsStore(
             is SettingsIntent.NavidromeMobileAudioQualityChanged -> {
                 repository.setNavidromeMobileAudioQuality(intent.value)
                 updateState { it.copy(navidromeMobileAudioQuality = intent.value) }
+            }
+
+            is SettingsIntent.AndroidExtensionDecoderChanged -> {
+                repository.setUseAndroidExtensionDecoder(intent.value)
+                updateState { it.copy(useAndroidExtensionDecoder = intent.value) }
             }
 
             is SettingsIntent.ThemeSelected -> {

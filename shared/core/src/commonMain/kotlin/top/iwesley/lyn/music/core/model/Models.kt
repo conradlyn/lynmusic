@@ -415,6 +415,7 @@ data class PlatformCapabilities(
     val supportsNavidromeImport: Boolean,
     val supportsSystemMediaControls: Boolean,
     val supportsAppDisplayScaleAdjustment: Boolean = false,
+    val supportsAndroidExtensionDecoder: Boolean = false,
 )
 
 data class PlatformDescriptor(

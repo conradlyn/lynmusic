@@ -339,6 +339,51 @@ class SettingsStoreTest {
     }
 
     @Test
+    fun `android extension decoder preference defaults to false`() = runTest {
+        val repository = FakeSettingsRepository()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(repository, scope)
+
+        advanceUntilIdle()
+
+        assertFalse(store.state.value.useAndroidExtensionDecoder)
+        scope.cancel()
+    }
+
+    @Test
+    fun `store loads persisted android extension decoder preference`() = runTest {
+        val repository = FakeSettingsRepository(useAndroidExtensionDecoder = true)
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(repository, scope)
+
+        advanceUntilIdle()
+
+        assertTrue(store.state.value.useAndroidExtensionDecoder)
+        scope.cancel()
+    }
+
+    @Test
+    fun `updating android extension decoder preference writes through immediately`() = runTest {
+        val repository = FakeSettingsRepository()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(repository, scope)
+
+        advanceUntilIdle()
+        assertFalse(store.state.value.useAndroidExtensionDecoder)
+
+        store.dispatch(SettingsIntent.AndroidExtensionDecoderChanged(true))
+        advanceUntilIdle()
+        assertTrue(store.state.value.useAndroidExtensionDecoder)
+        assertTrue(repository.currentUseAndroidExtensionDecoder())
+
+        store.dispatch(SettingsIntent.AndroidExtensionDecoderChanged(false))
+        advanceUntilIdle()
+        assertFalse(store.state.value.useAndroidExtensionDecoder)
+        assertFalse(repository.currentUseAndroidExtensionDecoder())
+        scope.cancel()
+    }
+
+    @Test
     fun `store loads persisted app display scale preset`() = runTest {
         val repository = FakeSettingsRepository(appDisplayScalePreset = AppDisplayScalePreset.Large)
         val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
@@ -1193,6 +1238,7 @@ private class FakeSettingsRepository(
     sources: List<LyricsSourceDefinition> = emptyList(),
     showCompactPlayerLyrics: Boolean = false,
     autoPlayOnStartup: Boolean = false,
+    useAndroidExtensionDecoder: Boolean = false,
     appDisplayScalePreset: AppDisplayScalePreset = AppDisplayScalePreset.Default,
     navidromeWifiAudioQuality: NavidromeAudioQuality = NavidromeAudioQuality.Original,
     navidromeMobileAudioQuality: NavidromeAudioQuality = NavidromeAudioQuality.Kbps192,
@@ -1206,6 +1252,7 @@ private class FakeSettingsRepository(
     private val mutableUseSambaCache = MutableStateFlow(false)
     private val mutableShowCompactPlayerLyrics = MutableStateFlow(showCompactPlayerLyrics)
     private val mutableAutoPlayOnStartup = MutableStateFlow(autoPlayOnStartup)
+    private val mutableUseAndroidExtensionDecoder = MutableStateFlow(useAndroidExtensionDecoder)
     private val mutableAppDisplayScalePreset = MutableStateFlow(appDisplayScalePreset)
     private val mutableNavidromeWifiAudioQuality = MutableStateFlow(navidromeWifiAudioQuality)
     private val mutableNavidromeMobileAudioQuality = MutableStateFlow(navidromeMobileAudioQuality)
@@ -1222,6 +1269,8 @@ private class FakeSettingsRepository(
     override val useSambaCache: StateFlow<Boolean> = mutableUseSambaCache.asStateFlow()
     override val showCompactPlayerLyrics: StateFlow<Boolean> = mutableShowCompactPlayerLyrics.asStateFlow()
     override val autoPlayOnStartup: StateFlow<Boolean> = mutableAutoPlayOnStartup.asStateFlow()
+    override val useAndroidExtensionDecoder: StateFlow<Boolean> =
+        mutableUseAndroidExtensionDecoder.asStateFlow()
     override val appDisplayScalePreset: StateFlow<AppDisplayScalePreset> = mutableAppDisplayScalePreset.asStateFlow()
     override val navidromeWifiAudioQuality: StateFlow<NavidromeAudioQuality> =
         mutableNavidromeWifiAudioQuality.asStateFlow()
@@ -1240,6 +1289,7 @@ private class FakeSettingsRepository(
     fun currentSources(): List<LyricsSourceDefinition> = mutableSources.value
     fun currentShowCompactPlayerLyrics(): Boolean = mutableShowCompactPlayerLyrics.value
     fun currentAutoPlayOnStartup(): Boolean = mutableAutoPlayOnStartup.value
+    fun currentUseAndroidExtensionDecoder(): Boolean = mutableUseAndroidExtensionDecoder.value
     fun currentAppDisplayScalePreset(): AppDisplayScalePreset = mutableAppDisplayScalePreset.value
     fun currentNavidromeWifiAudioQuality(): NavidromeAudioQuality = mutableNavidromeWifiAudioQuality.value
     fun currentNavidromeMobileAudioQuality(): NavidromeAudioQuality = mutableNavidromeMobileAudioQuality.value
@@ -1260,6 +1310,10 @@ private class FakeSettingsRepository(
 
     override suspend fun setAutoPlayOnStartup(enabled: Boolean) {
         mutableAutoPlayOnStartup.value = enabled
+    }
+
+    override suspend fun setUseAndroidExtensionDecoder(enabled: Boolean) {
+        mutableUseAndroidExtensionDecoder.value = enabled
     }
 
     override suspend fun setAppDisplayScalePreset(preset: AppDisplayScalePreset) {

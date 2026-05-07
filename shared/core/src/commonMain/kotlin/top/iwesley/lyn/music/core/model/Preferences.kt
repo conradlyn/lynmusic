@@ -22,6 +22,7 @@ enum class NavidromeAudioQuality(
 
 val DEFAULT_NAVIDROME_WIFI_AUDIO_QUALITY: NavidromeAudioQuality = NavidromeAudioQuality.Original
 val DEFAULT_NAVIDROME_MOBILE_AUDIO_QUALITY: NavidromeAudioQuality = NavidromeAudioQuality.Kbps192
+const val DEFAULT_ANDROID_EXTENSION_DECODER_ENABLED: Boolean = false
 
 fun appDisplayScalePresetOrDefault(name: String?): AppDisplayScalePreset {
     return AppDisplayScalePreset.entries.firstOrNull { it.name == name } ?: AppDisplayScalePreset.Default
@@ -84,6 +85,12 @@ interface NavidromeAudioQualityPreferencesStore {
     suspend fun setNavidromeMobileAudioQuality(quality: NavidromeAudioQuality)
 }
 
+interface PlaybackDecoderPreferencesStore {
+    val useAndroidExtensionDecoder: StateFlow<Boolean>
+
+    suspend fun setUseAndroidExtensionDecoder(enabled: Boolean)
+}
+
 interface LyricsShareFontPreferencesStore {
     val selectedLyricsShareFontKey: StateFlow<String?>
 
@@ -133,6 +140,17 @@ object UnsupportedNavidromeAudioQualityPreferencesStore : NavidromeAudioQualityP
 
     override suspend fun setNavidromeMobileAudioQuality(quality: NavidromeAudioQuality) {
         mutableMobileAudioQuality.value = quality
+    }
+}
+
+object UnsupportedPlaybackDecoderPreferencesStore : PlaybackDecoderPreferencesStore {
+    private val mutableUseAndroidExtensionDecoder =
+        MutableStateFlow(DEFAULT_ANDROID_EXTENSION_DECODER_ENABLED)
+
+    override val useAndroidExtensionDecoder: StateFlow<Boolean> = mutableUseAndroidExtensionDecoder
+
+    override suspend fun setUseAndroidExtensionDecoder(enabled: Boolean) {
+        mutableUseAndroidExtensionDecoder.value = enabled
     }
 }
 

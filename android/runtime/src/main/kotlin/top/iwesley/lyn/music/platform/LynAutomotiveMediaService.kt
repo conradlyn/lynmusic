@@ -77,6 +77,7 @@ class LynAutomotiveMediaService : MediaBrowserServiceCompat() {
                     database = openedDatabase,
                     secureCredentialStore = secureStore,
                     playbackPreferencesStore = preferencesStore,
+                    playbackDecoderPreferencesStore = preferencesStore,
                     navidromeAudioQualityPreferencesStore = preferencesStore,
                     networkConnectionTypeProvider = networkConnectionTypeProvider,
                     logger = logger,

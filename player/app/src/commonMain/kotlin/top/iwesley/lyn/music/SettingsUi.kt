@@ -647,6 +647,8 @@ private fun GeneralSettingsPane(
         currentPlatformDescriptor.capabilities.supportsAppDisplayScaleAdjustment
     val showCompactPlayerLyricsSetting = isMobilePlatform
     val showNavidromeAudioQualitySetting = isMobilePlatform || currentPlatformDescriptor.isAndroidPlatform()
+    val showAndroidExtensionDecoderSetting =
+        currentPlatformDescriptor.capabilities.supportsAndroidExtensionDecoder
     val showDesktopVlcSettings = currentPlatformDescriptor.isPCPlatform()
     val manualPath = state.desktopVlcManualPath?.takeIf { it.isNotBlank() }
     val autoDetectedPath = state.desktopVlcAutoDetectedPath?.takeIf { it.isNotBlank() }
@@ -821,6 +823,40 @@ private fun GeneralSettingsPane(
                         onSelected = { quality ->
                             onSettingsIntent(SettingsIntent.NavidromeMobileAudioQualityChanged(quality))
                         },
+                    )
+                }
+            }
+        }
+        if (showAndroidExtensionDecoderSetting) {
+            MainShellElevatedCard(shape = RoundedCornerShape(28.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = "FFmpeg 扩展解码器",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = "用于提升部分 Android 设备的音频格式兼容性，切换后下一首歌生效。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = shellColors.secondaryText,
+                        )
+                    }
+                    Switch(
+                        checked = state.useAndroidExtensionDecoder,
+                        onCheckedChange = { enabled ->
+                            onSettingsIntent(SettingsIntent.AndroidExtensionDecoderChanged(enabled))
+                        },
+                        colors = SwitchDefaults.colors(),
                     )
                 }
             }

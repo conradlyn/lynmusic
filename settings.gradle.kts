@@ -44,3 +44,6 @@ include(":player:core")
 include(":player:app")
 include(":cast:api")
 include(":cast:upnp:android")
+include(":media3-ffmpeg-decoder-aar")
+project(":media3-ffmpeg-decoder-aar").projectDir =
+    file("third_party/prebuilt/media3-ffmpeg-decoder")

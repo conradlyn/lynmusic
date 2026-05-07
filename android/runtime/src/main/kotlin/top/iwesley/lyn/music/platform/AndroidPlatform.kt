@@ -27,7 +27,12 @@ import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DecoderReuseEvaluation
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.room.Room
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
@@ -58,6 +63,7 @@ import top.iwesley.lyn.music.core.model.AudioTagGateway
 import top.iwesley.lyn.music.core.model.AudioTagPatch
 import top.iwesley.lyn.music.core.model.AudioTagSnapshot
 import top.iwesley.lyn.music.core.model.CompactPlayerLyricsPreferencesStore
+import top.iwesley.lyn.music.core.model.DEFAULT_ANDROID_EXTENSION_DECODER_ENABLED
 import top.iwesley.lyn.music.core.model.DEFAULT_SAMBA_PORT
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
 import top.iwesley.lyn.music.core.model.GlobalDiagnosticLogger
@@ -78,6 +84,7 @@ import top.iwesley.lyn.music.core.model.NonNavidromeAudioScanResult
 import top.iwesley.lyn.music.core.model.PlatformCapabilities
 import top.iwesley.lyn.music.core.model.PlatformDescriptor
 import top.iwesley.lyn.music.core.model.PlaybackAudioFormat
+import top.iwesley.lyn.music.core.model.PlaybackDecoderPreferencesStore
 import top.iwesley.lyn.music.core.model.PlaybackGateway
 import top.iwesley.lyn.music.core.model.PlaybackGatewayState
 import top.iwesley.lyn.music.core.model.PlaybackLoadToken
@@ -182,7 +189,7 @@ fun createAndroidRuntimeGraph(
     database: LynMusicDatabase,
     platformName: String = "Android",
 ): AndroidRuntimeGraph {
-    val logger = AndroidDiagnosticLogger(enabled = activity.applicationContext.isDebuggableApp(), label = platformName)
+    val logger = AndroidDiagnosticLogger(enabled = true, label = platformName)
     GlobalDiagnosticLogger.installStrategy(logger)
     val secureStore = AndroidCredentialStore(
         context = activity.applicationContext,
@@ -202,6 +209,7 @@ fun createAndroidRuntimeGraph(
             supportsNavidromeImport = true,
             supportsSystemMediaControls = true,
             supportsAppDisplayScaleAdjustment = true,
+            supportsAndroidExtensionDecoder = true,
         ),
     )
     val sharedGraph = buildSharedGraph(
@@ -216,6 +224,7 @@ fun createAndroidRuntimeGraph(
             compactPlayerLyricsPreferencesStore = appPreferencesStore,
             autoPlayOnStartupPreferencesStore = appPreferencesStore,
             navidromeAudioQualityPreferencesStore = appPreferencesStore,
+            playbackDecoderPreferencesStore = appPreferencesStore,
             networkConnectionTypeProvider = networkConnectionTypeProvider,
             librarySourceFilterPreferencesStore = appPreferencesStore,
             lyricsShareFontLibraryPlatformService = lyricsShareFontLibraryPlatformService,
@@ -260,6 +269,7 @@ fun createAndroidRuntimeGraph(
                 database = database,
                 secureCredentialStore = secureStore,
                 playbackPreferencesStore = appPreferencesStore,
+                playbackDecoderPreferencesStore = appPreferencesStore,
                 navidromeAudioQualityPreferencesStore = appPreferencesStore,
                 networkConnectionTypeProvider = networkConnectionTypeProvider,
                 logger = logger,
@@ -460,7 +470,7 @@ internal class AndroidAppPreferencesStore(
     context: Context,
 ) : PlaybackPreferencesStore, SambaCachePreferencesStore, ThemePreferencesStore, AppDisplayPreferencesStore,
     CompactPlayerLyricsPreferencesStore, NavidromeAudioQualityPreferencesStore, LibrarySourceFilterPreferencesStore,
-    LyricsShareFontPreferencesStore {
+    LyricsShareFontPreferencesStore, PlaybackDecoderPreferencesStore {
     private val preferences: SharedPreferences =
         context.getSharedPreferences("lynmusic.settings", Context.MODE_PRIVATE)
     private val mutableUseSambaCache = MutableStateFlow(
@@ -472,6 +482,12 @@ internal class AndroidAppPreferencesStore(
     )
     private val mutableAutoPlayOnStartup = MutableStateFlow(
         preferences.getBoolean(KEY_AUTO_PLAY_ON_STARTUP, false),
+    )
+    private val mutableUseAndroidExtensionDecoder = MutableStateFlow(
+        preferences.getBoolean(
+            KEY_ANDROID_EXTENSION_DECODER_ENABLED,
+            DEFAULT_ANDROID_EXTENSION_DECODER_ENABLED,
+        ),
     )
     private val mutableAppDisplayScalePreset = MutableStateFlow(
         readAppDisplayScalePreset(),
@@ -505,6 +521,8 @@ internal class AndroidAppPreferencesStore(
     override val playbackVolume: StateFlow<Float> = mutablePlaybackVolume.asStateFlow()
     override val showCompactPlayerLyrics: StateFlow<Boolean> = mutableShowCompactPlayerLyrics.asStateFlow()
     override val autoPlayOnStartup: StateFlow<Boolean> = mutableAutoPlayOnStartup.asStateFlow()
+    override val useAndroidExtensionDecoder: StateFlow<Boolean> =
+        mutableUseAndroidExtensionDecoder.asStateFlow()
     override val appDisplayScalePreset: StateFlow<AppDisplayScalePreset> = mutableAppDisplayScalePreset.asStateFlow()
     override val navidromeWifiAudioQuality: StateFlow<NavidromeAudioQuality> =
         mutableNavidromeWifiAudioQuality.asStateFlow()
@@ -538,6 +556,11 @@ internal class AndroidAppPreferencesStore(
     override suspend fun setAutoPlayOnStartup(enabled: Boolean) {
         preferences.edit().putBoolean(KEY_AUTO_PLAY_ON_STARTUP, enabled).apply()
         mutableAutoPlayOnStartup.value = enabled
+    }
+
+    override suspend fun setUseAndroidExtensionDecoder(enabled: Boolean) {
+        preferences.edit().putBoolean(KEY_ANDROID_EXTENSION_DECODER_ENABLED, enabled).apply()
+        mutableUseAndroidExtensionDecoder.value = enabled
     }
 
     override suspend fun setAppDisplayScalePreset(preset: AppDisplayScalePreset) {
@@ -1564,12 +1587,15 @@ internal class AndroidPlaybackGateway(
     private val database: LynMusicDatabase,
     private val secureCredentialStore: SecureCredentialStore,
     private val playbackPreferencesStore: PlaybackPreferencesStore,
+    private val playbackDecoderPreferencesStore: PlaybackDecoderPreferencesStore,
     private val navidromeAudioQualityPreferencesStore: NavidromeAudioQualityPreferencesStore,
     private val networkConnectionTypeProvider: NetworkConnectionTypeProvider,
     private val logger: DiagnosticLogger,
 ) : PlaybackGateway {
-    private val player = ExoPlayer.Builder(context).build()
-    private val playerHandler = Handler(player.applicationLooper)
+    private var activeAndroidExtensionDecoderEnabled =
+        playbackDecoderPreferencesStore.useAndroidExtensionDecoder.value
+    private var player = createPlayer(activeAndroidExtensionDecoderEnabled)
+    private var playerHandler = Handler(player.applicationLooper)
     private val mutableState = MutableStateFlow(PlaybackGatewayState())
     private var released = false
     private var progressTickerRunning = false
@@ -1596,60 +1622,99 @@ internal class AndroidPlaybackGateway(
 
     override val state: StateFlow<PlaybackGatewayState> = mutableState.asStateFlow()
 
-    init {
-        player.addListener(object : Player.Listener {
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
+    private val playerListener = object : Player.Listener {
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            publishPlayerState()
+            if (isPlaying) {
+                ensureProgressTicker()
+            }
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_ENDED) {
+                mutableState.update {
+                    it.copy(
+                        isPlaying = false,
+                        positionMs = 0L,
+                        canSeek = player.isCurrentMediaItemSeekable,
+                        completionCount = it.completionCount + 1,
+                    )
+                }
+            } else {
                 publishPlayerState()
-                if (isPlaying) {
+                if (shouldKeepTickerRunning()) {
                     ensureProgressTicker()
                 }
             }
+        }
 
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_ENDED) {
-                    mutableState.update {
-                        it.copy(
-                            isPlaying = false,
-                            positionMs = 0L,
-                            canSeek = player.isCurrentMediaItemSeekable,
-                            completionCount = it.completionCount + 1,
-                        )
-                    }
-                } else {
-                    publishPlayerState()
-                    if (shouldKeepTickerRunning()) {
-                        ensureProgressTicker()
-                    }
+        private fun Throwable.messageChain(): String {
+            return generateSequence(this) { it.cause }
+                .map { throwable ->
+                    val name = throwable::class.simpleName ?: throwable::class.qualifiedName ?: "Throwable"
+                    val message = throwable.message?.takeIf { it.isNotBlank() }
+                    if (message == null) name else "$name: $message"
                 }
-            }
+                .distinct()
+                .joinToString(" -> ")
+        }
 
-            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                currentRemoteLogTag?.let { tag ->
-                    logger.error(tag, error) {
-                        "play-failed locator=${currentRemoteLabel.orEmpty()}"
-                    }
-                }
-                mutableState.update { it.copy(canSeek = false, errorMessage = error.message ?: "播放器出错") }
+        override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+            logger.error(PLAYBACK_LOG_TAG, error) {
+                "play-failed locator=${currentRemoteLabel.orEmpty()}"
             }
+            val detail = error.messageChain()
+            mutableState.update { it.copy(canSeek = false, errorMessage = detail.ifBlank { "播放器出错" }) }
+        }
 
-            override fun onPositionDiscontinuity(
-                oldPosition: Player.PositionInfo,
-                newPosition: Player.PositionInfo,
-                reason: Int,
-            ) {
-                publishPlayerState()
-            }
+        override fun onPositionDiscontinuity(
+            oldPosition: Player.PositionInfo,
+            newPosition: Player.PositionInfo,
+            reason: Int,
+        ) {
+            publishPlayerState()
+        }
 
-            override fun onTracksChanged(tracks: Tracks) {
-                mutableState.update {
-                    it.copy(currentPlaybackAudioFormat = tracks.selectedAudioFormat())
-                }
+        override fun onTracksChanged(tracks: Tracks) {
+            mutableState.update {
+                it.copy(currentPlaybackAudioFormat = tracks.selectedAudioFormat())
             }
+        }
 
-            override fun onEvents(player: Player, events: Player.Events) {
-                publishPlayerState()
+        override fun onEvents(player: Player, events: Player.Events) {
+            publishPlayerState()
+        }
+    }
+
+    private val analyticsListener = object : AnalyticsListener {
+        override fun onAudioDecoderInitialized(
+            eventTime: AnalyticsListener.EventTime,
+            decoderName: String,
+            initializedTimestampMs: Long,
+            initializationDurationMs: Long,
+        ) {
+            logger.info(PLAYBACK_LOG_TAG) {
+                "analyticsListener audio-decoder-initialized decoder=$decoderName"
             }
-        })
+        }
+
+        override fun onAudioInputFormatChanged(
+            eventTime: AnalyticsListener.EventTime,
+            format: Format,
+            decoderReuseEvaluation: DecoderReuseEvaluation?
+        ) {
+            super.onAudioInputFormatChanged(eventTime, format, decoderReuseEvaluation)
+            logger.info(PLAYBACK_LOG_TAG) {
+                "analyticsListener onAudioInputFormatChanged format=$format"
+            }
+        }
+    }
+
+    init {
+        player.addListener(playerListener)
+
+        player.addAnalyticsListener(analyticsListener)
+
     }
 
     override suspend fun load(
@@ -1665,6 +1730,13 @@ internal class AndroidPlaybackGateway(
         if (!loadToken.isCurrent()) {
             logger.debug(PLAYBACK_LOG_TAG) {
                 "load-discarded-stale request=${loadToken.requestId} track=${track.id} before-stop"
+            }
+            return
+        }
+        applyRendererPreferenceForNextLoad()
+        if (!loadToken.isCurrent()) {
+            logger.debug(PLAYBACK_LOG_TAG) {
+                "load-discarded-stale request=${loadToken.requestId} track=${track.id} after-renderer-preference"
             }
             return
         }
@@ -1767,6 +1839,30 @@ internal class AndroidPlaybackGateway(
             }
             playerHandler.removeCallbacks(progressTicker)
             progressTickerRunning = false
+        }
+    }
+
+    private suspend fun applyRendererPreferenceForNextLoad() {
+        val nextAndroidExtensionDecoderEnabled =
+            playbackDecoderPreferencesStore.useAndroidExtensionDecoder.value
+        if (nextAndroidExtensionDecoderEnabled == activeAndroidExtensionDecoderEnabled) return
+        onPlayerThread {
+            val previousHandler = playerHandler
+            val previousPlayer = player
+            val volume = previousPlayer.volume
+            previousHandler.removeCallbacks(progressTicker)
+            progressTickerRunning = false
+            previousPlayer.removeListener(playerListener)
+            runCatching { previousPlayer.stop() }
+            previousPlayer.release()
+
+            activeAndroidExtensionDecoderEnabled = nextAndroidExtensionDecoderEnabled
+            player = createPlayer(nextAndroidExtensionDecoderEnabled).also { nextPlayer ->
+                nextPlayer.volume = volume
+                nextPlayer.addListener(playerListener)
+                nextPlayer.addAnalyticsListener(analyticsListener)
+            }
+            playerHandler = Handler(player.applicationLooper)
         }
     }
 
@@ -1921,6 +2017,40 @@ internal class AndroidPlaybackGateway(
 
     private fun shouldKeepTickerRunning(): Boolean {
         return player.isPlaying || player.playbackState == Player.STATE_BUFFERING
+    }
+
+    @UnstableApi
+    private fun createPlayer(useAndroidExtensionDecoder: Boolean): ExoPlayer {
+        return if (useAndroidExtensionDecoder) {
+            ExoPlayer.Builder(
+                context,
+                DefaultRenderersFactory(context).setExtensionRendererMode(
+                    DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER,
+                ),
+            ).build()
+            //如果引入LibflacAudioRenderer需要使用下面的方式，因为它会在 extractor 阶段就用 libFLAC 解码，输出的 sampleMimeType 直接是 audio/raw。
+            //webdav 和 samba 也要改 ，这里对他们不生效，他们自定义了 media source
+//            val mediaSourceFactory = DefaultMediaSourceFactory(
+//                context,
+//                FfmpegFlacExtractorsFactory(),
+//            )
+//            ExoPlayer.Builder(
+//                context,
+//                LynAudioRenderersFactory(
+//                    context = context,
+//                    preferFfmpeg = true,
+//                ),
+//                mediaSourceFactory,
+//            ).build()
+        } else {
+            //ExoPlayer.Builder(context).build()
+            ExoPlayer.Builder(
+                context,
+                DefaultRenderersFactory(context).setExtensionRendererMode(
+                    DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON,
+                ),
+            ).build()
+        }
     }
 }
 
@@ -2097,6 +2227,7 @@ private const val KEY_USE_SAMBA_CACHE = "use_samba_cache"
 private const val KEY_PLAYBACK_VOLUME = "playback_volume"
 private const val KEY_SHOW_COMPACT_PLAYER_LYRICS = "show_compact_player_lyrics"
 private const val KEY_AUTO_PLAY_ON_STARTUP = "auto_play_on_startup"
+private const val KEY_ANDROID_EXTENSION_DECODER_ENABLED = "android_extension_decoder_enabled"
 private const val KEY_APP_DISPLAY_SCALE_PRESET = "app_display_scale_preset"
 private const val KEY_NAVIDROME_WIFI_AUDIO_QUALITY = "navidrome_wifi_audio_quality"
 private const val KEY_NAVIDROME_MOBILE_AUDIO_QUALITY = "navidrome_mobile_audio_quality"
