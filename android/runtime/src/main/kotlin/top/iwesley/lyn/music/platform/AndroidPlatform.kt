@@ -211,6 +211,7 @@ fun createAndroidRuntimeGraph(
             supportsSystemMediaControls = true,
             supportsAppDisplayScaleAdjustment = true,
             supportsAndroidExtensionDecoder = true,
+            supportsPlaybackBackgroundArtworkBlur = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S,
         ),
     )
     val sharedGraph = buildSharedGraph(

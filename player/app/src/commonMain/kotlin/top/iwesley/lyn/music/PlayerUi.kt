@@ -1169,7 +1169,7 @@ private fun PlayerOverlay(
         color = backgroundBaseColor,
     ) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            if (!artworkLocator.isNullOrBlank()) {
+            if (shouldRenderPlaybackBackgroundArtwork(platform, artworkLocator)) {
                 LynArtworkImage(
                     artworkLocator = artworkLocator,
                     contentDescription = null,
@@ -1496,6 +1496,14 @@ private fun PlayerOverlay(
             }
         }
     }
+}
+
+internal fun shouldRenderPlaybackBackgroundArtwork(
+    platform: PlatformDescriptor,
+    artworkLocator: String?,
+): Boolean {
+    return platform.capabilities.supportsPlaybackBackgroundArtworkBlur &&
+        !artworkLocator.isNullOrBlank()
 }
 
 @Composable
