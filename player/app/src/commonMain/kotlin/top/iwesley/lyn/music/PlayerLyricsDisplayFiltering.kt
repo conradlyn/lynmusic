@@ -34,6 +34,17 @@ internal fun buildVisiblePlayerLyricsLines(
     }
 }
 
+internal fun shouldShowPlayerLyricsEmptyState(
+    isLyricsLoading: Boolean,
+    hasLyricsLookupCompleted: Boolean,
+    lyrics: LyricsDocument?,
+    visibleLines: List<VisiblePlayerLyricsLine>,
+): Boolean {
+    return !isLyricsLoading &&
+        hasLyricsLookupCompleted &&
+        (lyrics == null || visibleLines.isEmpty())
+}
+
 internal fun resolveVisiblePlayerLyricsHighlightedIndex(
     visibleLines: List<VisiblePlayerLyricsLine>,
     highlightedRawIndex: Int,

@@ -78,6 +78,7 @@ data class PlayerState(
     val isExpanded: Boolean = false,
     val isQueueVisible: Boolean = false,
     val isLyricsLoading: Boolean = false,
+    val hasLyricsLookupCompleted: Boolean = false,
     val lyrics: LyricsDocument? = null,
     val highlightedLineIndex: Int = -1,
     val isManualLyricsSearchVisible: Boolean = false,
@@ -409,6 +410,11 @@ class PlayerStore(
             current.copy(
                 snapshot = snapshot,
                 isLyricsLoading = if (trackChanged || snapshot.currentTrack == null) false else current.isLyricsLoading,
+                hasLyricsLookupCompleted = if (trackChanged || snapshot.currentTrack == null) {
+                    false
+                } else {
+                    current.hasLyricsLookupCompleted
+                },
                 lyrics = if (trackChanged || snapshot.currentTrack == null) null else current.lyrics,
                 isQueueVisible = if (snapshot.currentTrack == null) false else current.isQueueVisible,
                 highlightedLineIndex = findHighlightedLine(
@@ -1497,7 +1503,14 @@ class PlayerStore(
             requestKey = requestKey,
         )
         val previousJob = lyricsLoadJob
-        updateState { it.copy(isLyricsLoading = true, lyrics = null, highlightedLineIndex = -1) }
+        updateState {
+            it.copy(
+                isLyricsLoading = true,
+                hasLyricsLookupCompleted = false,
+                lyrics = null,
+                highlightedLineIndex = -1,
+            )
+        }
         lyricsLoadJob = storeScope.launch {
             previousJob?.cancelAndJoin()
             if (!isLatestLyricsRequest(requestId, track.id, requestKey)) return@launch
@@ -1540,6 +1553,7 @@ class PlayerStore(
                 } else {
                     latest.copy(
                         isLyricsLoading = false,
+                        hasLyricsLookupCompleted = true,
                         lyrics = lyrics,
                         highlightedLineIndex = findHighlightedLine(lyrics, latest.effectiveSnapshot.positionMs),
                     )
@@ -1553,7 +1567,14 @@ class PlayerStore(
         val track = snapshot.currentTrack
         if (track == null) {
             cancelAutomaticLyricsLoad(resetTracking = true)
-            updateState { it.copy(isLyricsLoading = false, lyrics = null, highlightedLineIndex = -1) }
+            updateState {
+                it.copy(
+                    isLyricsLoading = false,
+                    hasLyricsLookupCompleted = false,
+                    lyrics = null,
+                    highlightedLineIndex = -1,
+                )
+            }
             return
         }
         val lookupTrack = snapshot.toLyricsLookupTrack()

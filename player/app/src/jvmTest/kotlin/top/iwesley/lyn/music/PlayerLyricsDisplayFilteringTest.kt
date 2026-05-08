@@ -2,7 +2,9 @@ package top.iwesley.lyn.music
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import top.iwesley.lyn.music.core.model.LyricsDocument
 import top.iwesley.lyn.music.core.model.LyricsLine
 import top.iwesley.lyn.music.domain.EnhancedLyricsDisplayLine
@@ -10,6 +12,67 @@ import top.iwesley.lyn.music.domain.EnhancedLyricsPresentation
 import top.iwesley.lyn.music.feature.player.SleepTimerState
 
 class PlayerLyricsDisplayFilteringTest {
+    @Test
+    fun `lyrics empty state waits for lookup completion`() {
+        assertFalse(
+            shouldShowPlayerLyricsEmptyState(
+                isLyricsLoading = true,
+                hasLyricsLookupCompleted = false,
+                lyrics = null,
+                visibleLines = emptyList(),
+            ),
+        )
+        assertFalse(
+            shouldShowPlayerLyricsEmptyState(
+                isLyricsLoading = false,
+                hasLyricsLookupCompleted = false,
+                lyrics = null,
+                visibleLines = emptyList(),
+            ),
+        )
+        assertTrue(
+            shouldShowPlayerLyricsEmptyState(
+                isLyricsLoading = false,
+                hasLyricsLookupCompleted = true,
+                lyrics = null,
+                visibleLines = emptyList(),
+            ),
+        )
+    }
+
+    @Test
+    fun `lyrics empty state shows when completed lyrics have no visible lines`() {
+        val structureOnlyLyrics = syncedLyricsDocument(
+            LyricsLine(timestampMs = 1_000L, text = "[Verse]"),
+            LyricsLine(timestampMs = 2_000L, text = "[Chorus]"),
+        )
+
+        assertTrue(
+            shouldShowPlayerLyricsEmptyState(
+                isLyricsLoading = false,
+                hasLyricsLookupCompleted = true,
+                lyrics = structureOnlyLyrics,
+                visibleLines = buildVisiblePlayerLyricsLines(structureOnlyLyrics),
+            ),
+        )
+    }
+
+    @Test
+    fun `lyrics empty state is hidden when visible lyrics exist`() {
+        val lyrics = syncedLyricsDocument(
+            LyricsLine(timestampMs = 1_000L, text = "第一句"),
+        )
+
+        assertFalse(
+            shouldShowPlayerLyricsEmptyState(
+                isLyricsLoading = false,
+                hasLyricsLookupCompleted = true,
+                lyrics = lyrics,
+                visibleLines = buildVisiblePlayerLyricsLines(lyrics),
+            ),
+        )
+    }
+
     @Test
     fun `build visible lyrics lines filters structure tags and keeps raw indices aligned`() {
         val lyrics = syncedLyricsDocument(

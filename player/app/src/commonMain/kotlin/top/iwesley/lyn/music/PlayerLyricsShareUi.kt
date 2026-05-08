@@ -262,14 +262,21 @@ internal fun PlayerLyricsPane(
                     )
                 }
             }
-            if (lyrics == null || visibleLyricsLines.isEmpty()) {
+            if (
+                shouldShowPlayerLyricsEmptyState(
+                    isLyricsLoading = state.isLyricsLoading,
+                    hasLyricsLookupCompleted = state.hasLyricsLookupCompleted,
+                    lyrics = lyrics,
+                    visibleLines = visibleLyricsLines,
+                )
+            ) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     EmptyStateCard(
                         title = "暂时没有歌词",
                         body = "会先使用本地缓存与内嵌歌词，拿不到时再按当前标题和歌手请求。",
                     )
                 }
-            } else {
+            } else if (lyrics != null && visibleLyricsLines.isNotEmpty()) {
                 BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                     val centerPadding =
                         (maxHeight / 2 - 36.dp).coerceAtLeast(if (compact) 56.dp else 86.dp)

@@ -297,12 +297,14 @@ class PlayerStoreQueueTest {
 
         advanceUntilIdle()
         assertEquals(listOf("track-1"), lyricsRepository.requestedTrackIds)
+        assertEquals(false, store.state.value.hasLyricsLookupCompleted)
 
         playbackRepository.updateSnapshot(sampleSnapshot().copy(currentIndex = 2))
         advanceUntilIdle()
 
         assertEquals("track-3", store.state.value.snapshot.currentTrack?.id)
         assertEquals(true, store.state.value.isLyricsLoading)
+        assertEquals(false, store.state.value.hasLyricsLookupCompleted)
         assertEquals(listOf("track-1", "track-3"), lyricsRepository.requestedTrackIds)
 
         lyricsRepository.complete(
@@ -317,6 +319,7 @@ class PlayerStoreQueueTest {
 
         assertEquals("track-3", store.state.value.snapshot.currentTrack?.id)
         assertEquals(null, store.state.value.lyrics)
+        assertEquals(false, store.state.value.hasLyricsLookupCompleted)
         assertEquals(null, playbackRepository.lastArtworkOverride)
 
         lyricsRepository.complete(
@@ -331,7 +334,47 @@ class PlayerStoreQueueTest {
 
         assertEquals("track-3", store.state.value.snapshot.currentTrack?.id)
         assertEquals("lyrics for track-3", store.state.value.lyrics?.rawPayload)
+        assertEquals(true, store.state.value.hasLyricsLookupCompleted)
         assertEquals("/tmp/track-3.jpg", playbackRepository.lastArtworkOverride)
+        scope.cancel()
+    }
+
+    @Test
+    fun `automatic lyrics marks lookup completed when no result is returned`() = runTest {
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val playbackRepository = FakeQueuePlaybackRepository(sampleSnapshot())
+        val store = PlayerStore(playbackRepository, NoopQueueLyricsRepository(), scope)
+
+        advanceUntilIdle()
+
+        assertEquals(false, store.state.value.isLyricsLoading)
+        assertEquals(true, store.state.value.hasLyricsLookupCompleted)
+        assertEquals(null, store.state.value.lyrics)
+        scope.cancel()
+    }
+
+    @Test
+    fun `automatic lyrics marks lookup completed when result is returned`() = runTest {
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val playbackRepository = FakeQueuePlaybackRepository(sampleSnapshot())
+        val lyricsRepository = DeferredQueueLyricsRepository()
+        val store = PlayerStore(playbackRepository, lyricsRepository, scope)
+
+        advanceUntilIdle()
+        assertEquals(false, store.state.value.hasLyricsLookupCompleted)
+
+        lyricsRepository.complete(
+            trackId = "track-1",
+            result = resolvedLyricsResult(
+                sourceId = "source-track-1",
+                line = "lyrics for track-1",
+            ),
+        )
+        advanceUntilIdle()
+
+        assertEquals(false, store.state.value.isLyricsLoading)
+        assertEquals(true, store.state.value.hasLyricsLookupCompleted)
+        assertEquals("lyrics for track-1", store.state.value.lyrics?.rawPayload)
         scope.cancel()
     }
 
