@@ -1,7 +1,10 @@
 package top.iwesley.lyn.music.platform
 
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.alloc
+import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.pointed
+import kotlinx.cinterop.ptr
 import kotlinx.cinterop.toKString
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -129,12 +132,19 @@ private class IosArtworkCacheStore : ArtworkCacheStore {
 }
 
 private fun iosArtworkCachedTarget(path: String): ArtworkCachedTarget? {
-    val payload = readIosLocalBytes(path)?.takeIf(::isCompleteArtworkPayload) ?: return null
+    readIosLocalBytes(path)?.takeIf(::isCompleteArtworkPayload) ?: return null
     return ArtworkCachedTarget(
         target = path,
-        version = "${payload.size}:0",
+        version = iosArtworkFileVersion(path),
         isLocalFile = true,
     )
+}
+
+@OptIn(ExperimentalForeignApi::class)
+private fun iosArtworkFileVersion(path: String): String? = memScoped {
+    val metadata = alloc<platform.posix.stat>()
+    if (platform.posix.stat(path, metadata.ptr) != 0) return@memScoped null
+    "${metadata.st_size}:${metadata.st_mtimespec.tv_sec}:${metadata.st_mtimespec.tv_nsec}"
 }
 
 @OptIn(ExperimentalForeignApi::class)

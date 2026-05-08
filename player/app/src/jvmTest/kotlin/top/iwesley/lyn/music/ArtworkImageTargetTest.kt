@@ -41,6 +41,7 @@ class ArtworkImageTargetTest {
             cacheRemote = true,
             maxDecodeSizePx = ArtworkDecodeSize.Thumbnail,
             cacheVersion = 0L,
+            targetPending = false,
         )
 
         assertEquals(cachedFile.absolutePath, resolved.target)
