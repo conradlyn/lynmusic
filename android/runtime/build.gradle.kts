@@ -26,6 +26,8 @@ kotlin {
 }
 
 dependencies {
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar"))))
+
     api(project(":cast:api"))
     implementation(project(":cast:upnp:android"))
     api(project(":shared:core"))
@@ -43,7 +45,6 @@ dependencies {
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.extractor)
     implementation(libs.androidx.media3.session)
-    implementation(project(":media3-ffmpeg-decoder-aar"))
     implementation(libs.androidx.room.runtime)
     implementation(libs.ktor.client.okhttp)
     implementation(libs.ktor.server.core)
