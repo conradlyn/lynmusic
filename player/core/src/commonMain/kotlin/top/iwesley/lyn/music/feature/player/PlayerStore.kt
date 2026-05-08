@@ -49,6 +49,7 @@ import top.iwesley.lyn.music.core.model.parseLyricsShareImportedFontHash
 import top.iwesley.lyn.music.core.model.parseNavidromeCoverLocator
 import top.iwesley.lyn.music.core.model.parseNavidromeSongLocator
 import top.iwesley.lyn.music.core.model.trackArtworkCacheKey
+import top.iwesley.lyn.music.core.model.warn
 import top.iwesley.lyn.music.core.mvi.BaseStore
 import top.iwesley.lyn.music.data.repository.LyricsRepository
 import top.iwesley.lyn.music.data.repository.PlaybackRepository
@@ -373,11 +374,20 @@ class PlayerStore(
     }
 
     private suspend fun playTracks(tracks: List<Track>, startIndex: Int) {
+        logger.warn(PLAYER_LOG_TAG) {
+            "store-play-tracks size=${tracks.size} startIndex=$startIndex " +
+                "target=${tracks.getOrNull(startIndex)?.id.orEmpty()} " +
+                "castStatus=${state.value.castState.status} selectedCast=${state.value.castState.selectedDeviceId.orEmpty()}"
+        }
         if (!hasRemoteCastRoute()) {
             playbackRepository.playTracks(tracks, startIndex)
             return
         }
         if (tracks.isEmpty()) return
+        logger.warn(PLAYER_LOG_TAG) {
+            "store-play-tracks-cast-branch pause-local-before-cast " +
+                "castStatus=${state.value.castState.status} selectedCast=${state.value.castState.selectedDeviceId.orEmpty()}"
+        }
         playbackRepository.pause()
         val preparedSnapshot = playbackRepository.prepareExternalPlaybackQueue(tracks, startIndex) ?: return
         applyPlaybackSnapshot(preparedSnapshot)
@@ -438,6 +448,10 @@ class PlayerStore(
     private suspend fun playQueueIndex(index: Int) {
         val snapshot = state.value.snapshot
         if (index !in snapshot.queue.indices) return
+        logger.warn(PLAYER_LOG_TAG) {
+            "store-play-queue-index index=$index current=${snapshot.currentIndex} target=${snapshot.queue.getOrNull(index)?.id.orEmpty()} " +
+                "snapshotPlaying=${snapshot.isPlaying} castStatus=${state.value.castState.status}"
+        }
         if (isRemoteCastActive()) {
             castQueueIndex(index, closeQueue = true)
             return
@@ -451,6 +465,10 @@ class PlayerStore(
     }
 
     private suspend fun togglePlayPause() {
+        logger.warn(PLAYER_LOG_TAG) {
+            "store-toggle-play-pause snapshotPlaying=${state.value.snapshot.isPlaying} " +
+                "castStatus=${state.value.castState.status}"
+        }
         if (!isRemoteCastActive()) {
             playbackRepository.togglePlayPause()
             return

@@ -4,9 +4,10 @@ import top.iwesley.lyn.music.core.model.PlaybackGatewayState
 
 fun PlaybackGatewayState.resetForTrackSwitch(
     volumeOverride: Float = volume,
+    isPlayingOverride: Boolean = false,
 ): PlaybackGatewayState {
     return copy(
-        isPlaying = false,
+        isPlaying = isPlayingOverride,
         positionMs = 0L,
         durationMs = 0L,
         canSeek = false,

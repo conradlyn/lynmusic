@@ -102,9 +102,11 @@ fun buildPlayerAppComponent(
     sharedGraph: SharedGraph,
     playerRuntimeServices: PlayerRuntimeServices,
 ): LynMusicAppComponent {
-    val playbackRepository = DefaultPlaybackRepository(
+    val playbackRepository = playerRuntimeServices.playbackRepository ?: DefaultPlaybackRepository(
         database = sharedGraph.database,
-        gateway = playerRuntimeServices.playbackGateway,
+        gateway = requireNotNull(playerRuntimeServices.playbackGateway) {
+            "PlayerRuntimeServices must provide playbackGateway or playbackRepository"
+        },
         playbackPreferencesStore = playerRuntimeServices.playbackPreferencesStore,
         scope = sharedGraph.scope,
         systemPlaybackControlsPlatformService = playerRuntimeServices.systemPlaybackControlsPlatformService,

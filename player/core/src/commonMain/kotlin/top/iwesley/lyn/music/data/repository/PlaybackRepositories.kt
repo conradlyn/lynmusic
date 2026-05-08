@@ -96,6 +96,7 @@ class DefaultPlaybackRepository(
     private var playbackStatsSession: PlaybackStatsSession? = null
     private var loggedArtworkTrackId: String? = null
     private var loggedDisplayArtworkLocator: String? = null
+    private var lastGatewayStateLogKey: String? = null
 
     override val snapshot: StateFlow<PlaybackSnapshot> = mutableSnapshot.asStateFlow()
 
@@ -174,6 +175,24 @@ class DefaultPlaybackRepository(
         }
         scope.launch {
             gateway.state.collect { gatewayState ->
+                val beforeSnapshot = mutableSnapshot.value
+                val gatewayStateLogKey = listOf(
+                    beforeSnapshot.currentTrack?.id.orEmpty(),
+                    gatewayState.isPlaying,
+                    gatewayState.canSeek,
+                    gatewayState.completionCount,
+                    gatewayState.errorMessage.orEmpty(),
+                ).joinToString("|")
+                if (gatewayStateLogKey != lastGatewayStateLogKey) {
+                    lastGatewayStateLogKey = gatewayStateLogKey
+                    logger.debug(PLAYBACK_LOG_TAG) {
+                        "repository-gateway-state track=${beforeSnapshot.currentTrack?.id.orEmpty()} " +
+                            "snapshotPlaying=${beforeSnapshot.isPlaying} gatewayPlaying=${gatewayState.isPlaying} " +
+                            "position=${gatewayState.positionMs} duration=${gatewayState.durationMs} " +
+                            "canSeek=${gatewayState.canSeek} completion=${gatewayState.completionCount} " +
+                            "error=${gatewayState.errorMessage.orEmpty()}"
+                    }
+                }
                 val completionChanged = gatewayState.completionCount > observedCompletionCount
                 observedCompletionCount = gatewayState.completionCount
                 mutableSnapshot.update {
@@ -234,6 +253,11 @@ class DefaultPlaybackRepository(
         var loadRequest: PlaybackLoadRequest? = null
         playbackCommandMutex.withLock {
             if (tracks.isEmpty()) return@withLock
+            logger.warn(PLAYBACK_LOG_TAG) {
+                "repository-play-tracks size=${tracks.size} startIndex=$startIndex " +
+                    "target=${tracks.getOrNull(startIndex)?.id.orEmpty()} current=${mutableSnapshot.value.currentTrack?.id.orEmpty()} " +
+                    "snapshotPlaying=${mutableSnapshot.value.isPlaying}"
+            }
             updatePlaybackStats(mutableSnapshot.value)
             val currentSnapshot = mutableSnapshot.value
             val nextSnapshot = buildQueueSnapshot(
@@ -280,6 +304,11 @@ class DefaultPlaybackRepository(
 
     override suspend fun playQueueIndex(index: Int) {
         val loadRequest = playbackCommandMutex.withLock {
+            logger.warn(PLAYBACK_LOG_TAG) {
+                "repository-play-queue-index index=$index current=${mutableSnapshot.value.currentIndex} " +
+                    "target=${mutableSnapshot.value.queue.getOrNull(index)?.id.orEmpty()} " +
+                    "snapshotPlaying=${mutableSnapshot.value.isPlaying}"
+            }
             loadIndexLocked(index, playWhenReady = true)
         }
         loadRequest?.let {
@@ -291,6 +320,10 @@ class DefaultPlaybackRepository(
     override suspend fun togglePlayPause() {
         playbackCommandMutex.withLock {
             if (mutableSnapshot.value.currentTrack == null) return
+            logger.warn(PLAYBACK_LOG_TAG) {
+                "repository-toggle-play-pause track=${mutableSnapshot.value.currentTrack?.id.orEmpty()} " +
+                    "snapshotPlaying=${mutableSnapshot.value.isPlaying}"
+            }
             if (mutableSnapshot.value.isPlaying) {
                 gateway.pause()
             } else {
@@ -398,6 +431,10 @@ class DefaultPlaybackRepository(
     private suspend fun pauseCurrentTrack() {
         playbackCommandMutex.withLock {
             if (mutableSnapshot.value.currentTrack == null) return
+            logger.warn(PLAYBACK_LOG_TAG) {
+                "repository-pause-current track=${mutableSnapshot.value.currentTrack?.id.orEmpty()} " +
+                    "snapshotPlaying=${mutableSnapshot.value.isPlaying} position=${mutableSnapshot.value.positionMs}"
+            }
             gateway.pause()
         }
     }
@@ -785,7 +822,8 @@ class DefaultPlaybackRepository(
 }
 
 data class PlayerRuntimeServices(
-    val playbackGateway: PlaybackGateway,
+    val playbackGateway: PlaybackGateway? = null,
+    val playbackRepository: PlaybackRepository? = null,
     val playbackPreferencesStore: PlaybackPreferencesStore,
     val castGateway: CastGateway = UnsupportedCastGateway,
     val castMediaUrlResolver: CastMediaUrlResolver = UnsupportedCastMediaUrlResolver,

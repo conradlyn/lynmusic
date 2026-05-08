@@ -265,16 +265,7 @@ fun createAndroidRuntimeGraph(
     return AndroidRuntimeGraph(
         sharedGraph = sharedGraph,
         playerRuntimeServices = PlayerRuntimeServices(
-            playbackGateway = AndroidPlaybackGateway(
-                context = activity.applicationContext,
-                database = database,
-                secureCredentialStore = secureStore,
-                playbackPreferencesStore = appPreferencesStore,
-                playbackDecoderPreferencesStore = appPreferencesStore,
-                navidromeAudioQualityPreferencesStore = appPreferencesStore,
-                networkConnectionTypeProvider = networkConnectionTypeProvider,
-                logger = logger,
-            ),
+            playbackRepository = AndroidServiceBackedPlaybackRepository(activity.applicationContext),
             playbackPreferencesStore = appPreferencesStore,
             castGateway = AndroidUpnpCastGateway(
                 context = activity.applicationContext,
@@ -307,10 +298,6 @@ fun createAndroidRuntimeGraph(
             lyricsSharePlatformService = AndroidLyricsSharePlatformService(activity, lyricsShareFontLibraryPlatformService),
             lyricsShareFontLibraryPlatformService = lyricsShareFontLibraryPlatformService,
             lyricsShareFontPreferencesStore = appPreferencesStore,
-            systemPlaybackControlsPlatformService = createAndroidSystemPlaybackControlsPlatformService(
-                context = activity.applicationContext,
-                artworkCacheStore = artworkCacheStore,
-            ),
         ),
     )
 }
@@ -523,6 +510,28 @@ internal class AndroidAppPreferencesStore(
     private val mutableSelectedLyricsShareFontKey = MutableStateFlow(
         preferences.getString(KEY_LYRICS_SHARE_FONT_KEY, null)?.trim()?.takeIf { it.isNotBlank() },
     )
+    private val preferenceChangeListener =
+        SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            when (key) {
+                KEY_ANDROID_EXTENSION_DECODER_ENABLED -> {
+                    mutableUseAndroidExtensionDecoder.value = readUseAndroidExtensionDecoder()
+                }
+
+                KEY_NAVIDROME_WIFI_AUDIO_QUALITY -> {
+                    mutableNavidromeWifiAudioQuality.value =
+                        readNavidromeAudioQuality(KEY_NAVIDROME_WIFI_AUDIO_QUALITY, NavidromeAudioQuality.Original)
+                }
+
+                KEY_NAVIDROME_MOBILE_AUDIO_QUALITY -> {
+                    mutableNavidromeMobileAudioQuality.value =
+                        readNavidromeAudioQuality(KEY_NAVIDROME_MOBILE_AUDIO_QUALITY, NavidromeAudioQuality.Kbps192)
+                }
+            }
+        }
+
+    init {
+        preferences.registerOnSharedPreferenceChangeListener(preferenceChangeListener)
+    }
 
     override val useSambaCache: StateFlow<Boolean> = mutableUseSambaCache.asStateFlow()
     override val playbackVolume: StateFlow<Float> = mutablePlaybackVolume.asStateFlow()
@@ -642,6 +651,13 @@ internal class AndroidAppPreferencesStore(
 
     private fun readPlaybackVolume(): Float {
         return normalizePlaybackVolume(preferences.getFloat(KEY_PLAYBACK_VOLUME, DEFAULT_PLAYBACK_VOLUME))
+    }
+
+    private fun readUseAndroidExtensionDecoder(): Boolean {
+        return preferences.getBoolean(
+            KEY_ANDROID_EXTENSION_DECODER_ENABLED,
+            DEFAULT_ANDROID_EXTENSION_DECODER_ENABLED,
+        )
     }
 
     private fun readSelectedTheme(): AppThemeId {
@@ -1608,6 +1624,13 @@ internal class AndroidPlaybackGateway(
     private var progressTickerRunning = false
     private var currentRemoteLogTag: String? = null
     private var currentRemoteLabel: String? = null
+    private var pendingLoadPlayWhenReady = false
+    private var lastPublishedPlaybackLogKey: String? = null
+
+    internal val currentPlayer: ExoPlayer
+        get() = player
+
+    internal var onPlayerRecreated: ((ExoPlayer) -> Unit)? = null
 
     init {
         logger.info(SAMBA_LOG_TAG) {
@@ -1631,6 +1654,12 @@ internal class AndroidPlaybackGateway(
 
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
+            logger.info(PLAYBACK_LOG_TAG) {
+                "player-is-playing-changed isPlaying=$isPlaying ${playerDebugSummary()}"
+            }
+            if (isPlaying) {
+                pendingLoadPlayWhenReady = false
+            }
             publishPlayerState()
             if (isPlaying) {
                 ensureProgressTicker()
@@ -1638,7 +1667,11 @@ internal class AndroidPlaybackGateway(
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
+            logger.info(PLAYBACK_LOG_TAG) {
+                "player-playback-state-changed playbackState=$playbackState ${playerDebugSummary()}"
+            }
             if (playbackState == Player.STATE_ENDED) {
+                pendingLoadPlayWhenReady = false
                 mutableState.update {
                     it.copy(
                         isPlaying = false,
@@ -1655,6 +1688,13 @@ internal class AndroidPlaybackGateway(
             }
         }
 
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            logger.warn(PLAYBACK_LOG_TAG) {
+                "player-play-when-ready-changed playWhenReady=$playWhenReady reason=$reason ${playerDebugSummary()}"
+            }
+            publishPlayerState()
+        }
+
         private fun Throwable.messageChain(): String {
             return generateSequence(this) { it.cause }
                 .map { throwable ->
@@ -1667,6 +1707,7 @@ internal class AndroidPlaybackGateway(
         }
 
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+            pendingLoadPlayWhenReady = false
             logger.error(PLAYBACK_LOG_TAG, error) {
                 "play-failed locator=${currentRemoteLabel.orEmpty()}"
             }
@@ -1747,89 +1788,109 @@ internal class AndroidPlaybackGateway(
             }
             return
         }
-        stopAndResetForTrackSwitch(loadToken)
-        val offlineTarget = resolveAndroidOfflinePlaybackTarget(database, track)
-        val isNavidromeTrack = parseNavidromeSongLocator(track.mediaLocator) != null
-        val webDavTarget = if (offlineTarget == null) resolveAndroidWebDavPlaybackTarget(
-            database = database,
-            secureCredentialStore = secureCredentialStore,
-            locator = track.mediaLocator,
-            logger = logger,
-        ) else null
-        val sambaTarget = if (
-            offlineTarget == null &&
-            webDavTarget == null &&
-            shouldUseAndroidSambaDirectPlayback(track.mediaLocator, playbackPreferencesStore.useSambaCache.value)
-        ) {
-            resolveAndroidSambaPlaybackTarget(
+        stopAndResetForTrackSwitch(loadToken, playWhenReady)
+        try {
+            val offlineTarget = resolveAndroidOfflinePlaybackTarget(database, track)
+            val isNavidromeTrack = parseNavidromeSongLocator(track.mediaLocator) != null
+            val webDavTarget = if (offlineTarget == null) resolveAndroidWebDavPlaybackTarget(
                 database = database,
                 secureCredentialStore = secureCredentialStore,
-                track = track,
+                locator = track.mediaLocator,
                 logger = logger,
-            )
-        } else {
-            null
-        }
-        val navidrome = if (offlineTarget == null && webDavTarget == null && sambaTarget == null) {
-            parseNavidromeSongLocator(track.mediaLocator)
-        } else {
-            null
-        }
-        val navidromeAudioQuality = when {
-            offlineTarget != null && isNavidromeTrack -> offlineTarget.quality
-            navidrome != null -> resolveNavidromeAudioQualityForCurrentNetwork(
-                preferencesStore = navidromeAudioQualityPreferencesStore,
-                networkConnectionTypeProvider = networkConnectionTypeProvider,
-            )
-            else -> null
-        }
-        val resolvedUri = if (offlineTarget != null) {
-            Uri.fromFile(offlineTarget.file)
-        } else if (webDavTarget == null && sambaTarget == null) {
-            resolveLocator(track.mediaLocator, navidromeAudioQuality)
-        } else {
-            null
-        }
-        if (!loadToken.isCurrent()) {
-            logger.debug(PLAYBACK_LOG_TAG) {
-                "load-discarded-stale request=${loadToken.requestId} track=${track.id} before-prepare"
+            ) else null
+            val sambaTarget = if (
+                offlineTarget == null &&
+                webDavTarget == null &&
+                shouldUseAndroidSambaDirectPlayback(track.mediaLocator, playbackPreferencesStore.useSambaCache.value)
+            ) {
+                resolveAndroidSambaPlaybackTarget(
+                    database = database,
+                    secureCredentialStore = secureCredentialStore,
+                    track = track,
+                    logger = logger,
+                )
+            } else {
+                null
             }
-            return
-        }
-        onPlayerThread {
             if (!loadToken.isCurrent()) {
                 logger.debug(PLAYBACK_LOG_TAG) {
-                    "load-discarded-stale request=${loadToken.requestId} track=${track.id} on-player-thread"
+                    "load-discarded-stale request=${loadToken.requestId} track=${track.id} before-prepare"
                 }
-                return@onPlayerThread
+                return
             }
-            if (webDavTarget != null) {
-                currentRemoteLogTag = "WebDav"
-                currentRemoteLabel = webDavTarget.requestUrl
-                player.setMediaSource(webDavTarget.mediaSource)
-            } else if (sambaTarget != null) {
-                currentRemoteLogTag = SAMBA_LOG_TAG
-                currentRemoteLabel = sambaTarget.sourceReference
-                player.setMediaSource(sambaTarget.mediaSource)
+            val navidrome = if (offlineTarget == null && webDavTarget == null && sambaTarget == null) {
+                parseNavidromeSongLocator(track.mediaLocator)
             } else {
-                currentRemoteLogTag = if (navidrome != null) "Navidrome" else null
-                currentRemoteLabel = if (navidrome != null) track.mediaLocator else null
-                player.setMediaItem(MediaItem.fromUri(checkNotNull(resolvedUri)))
+                null
             }
-            mutableState.update {
-                it.copy(currentNavidromeAudioQuality = navidromeAudioQuality)
+            val navidromeAudioQuality = when {
+                offlineTarget != null && isNavidromeTrack -> offlineTarget.quality
+                navidrome != null -> resolveNavidromeAudioQualityForCurrentNetwork(
+                    preferencesStore = navidromeAudioQualityPreferencesStore,
+                    networkConnectionTypeProvider = networkConnectionTypeProvider,
+                )
+                else -> null
             }
-            player.prepare()
-            player.seekTo(startPositionMs)
-            player.playWhenReady = playWhenReady
+            val resolvedUri = if (offlineTarget != null) {
+                Uri.fromFile(offlineTarget.file)
+            } else if (webDavTarget == null && sambaTarget == null) {
+                resolveLocator(track.mediaLocator, navidromeAudioQuality)
+            } else {
+                null
+            }
+            if (!loadToken.isCurrent()) {
+                logger.debug(PLAYBACK_LOG_TAG) {
+                    "load-discarded-stale request=${loadToken.requestId} track=${track.id} before-player-thread"
+                }
+                return
+            }
+            onPlayerThread {
+                if (!loadToken.isCurrent()) {
+                    logger.debug(PLAYBACK_LOG_TAG) {
+                        "load-discarded-stale request=${loadToken.requestId} track=${track.id} on-player-thread"
+                    }
+                    return@onPlayerThread
+                }
+                player.playWhenReady = playWhenReady
+                logger.info(PLAYBACK_LOG_TAG) {
+                    "load-player-set-play-when-ready request=${loadToken.requestId} track=${track.id} ${playerDebugSummary()}"
+                }
+                if (webDavTarget != null) {
+                    currentRemoteLogTag = "WebDav"
+                    currentRemoteLabel = webDavTarget.requestUrl
+                    player.setMediaSource(webDavTarget.mediaSource)
+                } else if (sambaTarget != null) {
+                    currentRemoteLogTag = SAMBA_LOG_TAG
+                    currentRemoteLabel = sambaTarget.sourceReference
+                    player.setMediaSource(sambaTarget.mediaSource)
+                } else {
+                    currentRemoteLogTag = if (navidrome != null) "Navidrome" else null
+                    currentRemoteLabel = if (navidrome != null) track.mediaLocator else null
+                    player.setMediaItem(MediaItem.fromUri(checkNotNull(resolvedUri)))
+                }
+                mutableState.update {
+                    it.copy(currentNavidromeAudioQuality = navidromeAudioQuality)
+                }
+                player.prepare()
+                player.seekTo(startPositionMs)
+                logger.info(PLAYBACK_LOG_TAG) {
+                    "load-player-prepared request=${loadToken.requestId} track=${track.id} ${playerDebugSummary()}"
+                }
+            }
+            logger.debug(PLAYBACK_LOG_TAG) {
+                "load-applied request=${loadToken.requestId} track=${track.id}"
+            }
+            ensureProgressTicker()
+        } catch (throwable: Throwable) {
+            clearPendingLoadPlayWhenReady(loadToken)
+            throw throwable
         }
-        logger.debug(PLAYBACK_LOG_TAG) {
-            "load-applied request=${loadToken.requestId} track=${track.id}"
-        }
-        ensureProgressTicker()
     }
 
-    private suspend fun stopAndResetForTrackSwitch(loadToken: PlaybackLoadToken) {
+    private suspend fun stopAndResetForTrackSwitch(
+        loadToken: PlaybackLoadToken,
+        playWhenReady: Boolean,
+    ) {
         onPlayerThread {
             if (!loadToken.isCurrent()) {
                 logger.debug(PLAYBACK_LOG_TAG) {
@@ -1837,15 +1898,33 @@ internal class AndroidPlaybackGateway(
                 }
                 return@onPlayerThread
             }
+            pendingLoadPlayWhenReady = playWhenReady
+            logger.warn(PLAYBACK_LOG_TAG) {
+                "load-stop-and-reset request=${loadToken.requestId} playWhenReady=$playWhenReady before ${playerDebugSummary()}"
+            }
             runCatching { player.stop() }
             player.clearMediaItems()
             currentRemoteLogTag = null
             currentRemoteLabel = null
             mutableState.update {
-                it.resetForTrackSwitch(volumeOverride = player.volume)
+                it.resetForTrackSwitch(
+                    volumeOverride = player.volume,
+                    isPlayingOverride = playWhenReady,
+                )
             }
             playerHandler.removeCallbacks(progressTicker)
             progressTickerRunning = false
+            logger.warn(PLAYBACK_LOG_TAG) {
+                "load-stop-and-reset request=${loadToken.requestId} after ${playerDebugSummary()}"
+            }
+        }
+    }
+
+    private suspend fun clearPendingLoadPlayWhenReady(loadToken: PlaybackLoadToken) {
+        onPlayerThread {
+            if (!loadToken.isCurrent() || !pendingLoadPlayWhenReady) return@onPlayerThread
+            pendingLoadPlayWhenReady = false
+            publishPlayerState()
         }
     }
 
@@ -1870,17 +1949,25 @@ internal class AndroidPlaybackGateway(
                 nextPlayer.addAnalyticsListener(analyticsListener)
             }
             playerHandler = Handler(player.applicationLooper)
+            onPlayerRecreated?.invoke(player)
         }
     }
 
     override suspend fun play() {
         onPlayerThread {
+            logger.warn(PLAYBACK_LOG_TAG) {
+                "gateway-play-request ${playerDebugSummary()}"
+            }
             player.play()
         }
     }
 
     override suspend fun pause() {
         onPlayerThread {
+            logger.warn(PLAYBACK_LOG_TAG) {
+                "gateway-pause-request ${playerDebugSummary()}"
+            }
+            pendingLoadPlayWhenReady = false
             player.pause()
         }
     }
@@ -1905,8 +1992,10 @@ internal class AndroidPlaybackGateway(
 
     override suspend fun release() {
         released = true
+        onPlayerRecreated = null
         playerHandler.removeCallbacks(progressTicker)
         onPlayerThread {
+            pendingLoadPlayWhenReady = false
             player.release()
         }
     }
@@ -2006,8 +2095,26 @@ internal class AndroidPlaybackGateway(
     private fun publishPlayerState() {
         mutableState.update {
             val duration = player.duration.takeIf { value -> value > 0 } ?: 0L
+            val nextIsPlaying = pendingLoadPlayWhenReady ||
+                player.isPlaying ||
+                (player.playWhenReady && player.playbackState == Player.STATE_BUFFERING)
+            val logKey = listOf(
+                nextIsPlaying,
+                pendingLoadPlayWhenReady,
+                player.isPlaying,
+                player.playWhenReady,
+                player.playbackState,
+                player.playbackSuppressionReason,
+                it.errorMessage,
+            ).joinToString("|")
+            if (logKey != lastPublishedPlaybackLogKey) {
+                lastPublishedPlaybackLogKey = logKey
+                logger.info(PLAYBACK_LOG_TAG) {
+                    "gateway-publish-state isPlaying=$nextIsPlaying ${playerDebugSummary()} error=${it.errorMessage.orEmpty()}"
+                }
+            }
             it.copy(
-                isPlaying = player.isPlaying || (player.playWhenReady && player.playbackState == Player.STATE_BUFFERING),
+                isPlaying = nextIsPlaying,
                 positionMs = player.currentPosition.coerceAtLeast(0L),
                 durationMs = if (duration > 0) duration else it.durationMs,
                 canSeek = player.isCurrentMediaItemSeekable,
@@ -2023,7 +2130,13 @@ internal class AndroidPlaybackGateway(
     }
 
     private fun shouldKeepTickerRunning(): Boolean {
-        return player.isPlaying || player.playbackState == Player.STATE_BUFFERING
+        return pendingLoadPlayWhenReady || player.isPlaying || player.playbackState == Player.STATE_BUFFERING
+    }
+
+    private fun playerDebugSummary(): String {
+        return "pending=$pendingLoadPlayWhenReady playerIsPlaying=${player.isPlaying} " +
+            "playerPlayWhenReady=${player.playWhenReady} playbackState=${player.playbackState} " +
+            "suppression=${player.playbackSuppressionReason} position=${player.currentPosition}"
     }
 
     @UnstableApi

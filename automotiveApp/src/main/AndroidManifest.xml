@@ -40,14 +40,6 @@
             android:exported="false"
             android:process=":crash"
             android:theme="@android:style/Theme.Material.Light.NoActionBar" />
-
-        <service
-            android:name="top.iwesley.lyn.music.platform.LynAutomotiveMediaService"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.media.browse.MediaBrowserService" />
-            </intent-filter>
-        </service>
     </application>
 
 </manifest>

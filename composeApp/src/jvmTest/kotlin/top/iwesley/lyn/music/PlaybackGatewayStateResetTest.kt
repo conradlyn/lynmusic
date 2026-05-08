@@ -44,4 +44,13 @@ class PlaybackGatewayStateResetTest {
         assertEquals(7L, reset.completionCount)
         assertNull(reset.errorMessage)
     }
+
+    @Test
+    fun `reset for track switch can preserve intended playing state`() {
+        val initial = PlaybackGatewayState(isPlaying = false)
+
+        val reset = initial.resetForTrackSwitch(isPlayingOverride = true)
+
+        assertEquals(true, reset.isPlaying)
+    }
 }
