@@ -75,6 +75,14 @@ internal class AndroidServiceBackedPlaybackRepository(
         repository().playTracks(tracks, startIndex)
     }
 
+    override suspend fun playTransientTracks(tracks: List<Track>, startIndex: Int) {
+        Log.w(
+            ANDROID_SERVICE_REPOSITORY_LOG_TAG,
+            "client-play-transient-tracks size=${tracks.size} startIndex=$startIndex target=${tracks.getOrNull(startIndex)?.id.orEmpty()}",
+        )
+        repository().playTransientTracks(tracks, startIndex)
+    }
+
     override suspend fun prepareExternalPlaybackQueue(
         tracks: List<Track>,
         startIndex: Int,
@@ -145,4 +153,3 @@ internal class AndroidServiceBackedPlaybackRepository(
 }
 
 private const val ANDROID_SERVICE_REPOSITORY_LOG_TAG = "LynMusic"
-

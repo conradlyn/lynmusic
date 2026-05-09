@@ -177,6 +177,7 @@ data class PlayerState(
 
 sealed interface PlayerIntent {
     data class PlayTracks(val tracks: List<Track>, val startIndex: Int) : PlayerIntent
+    data class PlayTransientTracks(val tracks: List<Track>, val startIndex: Int) : PlayerIntent
     data class PlayQueueIndex(val index: Int) : PlayerIntent
     data object TogglePlayPause : PlayerIntent
     data object SkipNext : PlayerIntent
@@ -306,6 +307,7 @@ class PlayerStore(
     override suspend fun handleIntent(intent: PlayerIntent) {
         when (intent) {
             is PlayerIntent.PlayTracks -> playTracks(intent.tracks, intent.startIndex)
+            is PlayerIntent.PlayTransientTracks -> playTransientTracks(intent.tracks, intent.startIndex)
             is PlayerIntent.PlayQueueIndex -> playQueueIndex(intent.index)
             PlayerIntent.TogglePlayPause -> togglePlayPause()
             PlayerIntent.SkipNext -> skipNext()
@@ -393,6 +395,20 @@ class PlayerStore(
         val preparedSnapshot = playbackRepository.prepareExternalPlaybackQueue(tracks, startIndex) ?: return
         applyPlaybackSnapshot(preparedSnapshot)
         castQueueIndex(preparedSnapshot.currentIndex, pauseLocalAfterCast = false)
+    }
+
+    private suspend fun playTransientTracks(tracks: List<Track>, startIndex: Int) {
+        logger.warn(PLAYER_LOG_TAG) {
+            "store-play-transient-tracks size=${tracks.size} startIndex=$startIndex " +
+                "target=${tracks.getOrNull(startIndex)?.id.orEmpty()} " +
+                "castStatus=${state.value.castState.status} selectedCast=${state.value.castState.selectedDeviceId.orEmpty()}"
+        }
+        if (tracks.isEmpty()) return
+        if (hasRemoteCastRoute()) {
+            stopCastForTransientPlayback()
+        }
+        playbackRepository.playTransientTracks(tracks, startIndex)
+        updateState { it.copy(isQueueVisible = false) }
     }
 
     private fun applyPlaybackSnapshot(snapshot: PlaybackSnapshot) {
@@ -794,6 +810,25 @@ class PlayerStore(
         } else {
             playbackRepository.pause()
         }
+    }
+
+    private suspend fun stopCastForTransientPlayback() {
+        isStoppingCastExplicitly = true
+        try {
+            castGateway.stopCast()
+        } finally {
+            isStoppingCastExplicitly = false
+        }
+        closeCurrentCastProxySession()
+        castResumeSession = null
+        lastAutoAdvancedEndedTrackId = null
+        updateState {
+            it.copy(
+                castQueueIndex = null,
+                castMessage = null,
+            )
+        }
+        castSessionForegroundPlatformService.stop()
     }
 
     private fun isRemoteCastActive(): Boolean {

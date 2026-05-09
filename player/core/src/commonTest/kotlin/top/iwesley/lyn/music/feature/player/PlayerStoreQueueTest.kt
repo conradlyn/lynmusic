@@ -1187,6 +1187,10 @@ private class FakeQueuePlaybackRepository(
         )
     }
 
+    override suspend fun playTransientTracks(tracks: List<Track>, startIndex: Int) {
+        playTracks(tracks, startIndex)
+    }
+
     override suspend fun prepareExternalPlaybackQueue(tracks: List<Track>, startIndex: Int): PlaybackSnapshot? {
         prepareExternalPlaybackQueueCallCount += 1
         if (tracks.isEmpty()) return null

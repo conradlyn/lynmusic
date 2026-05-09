@@ -55,6 +55,7 @@ interface PlaybackRepository {
 
     suspend fun hydratePersistedQueueIfNeeded()
     suspend fun playTracks(tracks: List<Track>, startIndex: Int)
+    suspend fun playTransientTracks(tracks: List<Track>, startIndex: Int)
     suspend fun prepareExternalPlaybackQueue(tracks: List<Track>, startIndex: Int): PlaybackSnapshot?
     suspend fun playQueueIndex(index: Int)
     suspend fun togglePlayPause()
@@ -92,6 +93,8 @@ class DefaultPlaybackRepository(
     private var latestLoadRequestId = 0L
     @Volatile
     private var hasHydratedPersistedQueue = false
+    @Volatile
+    private var currentQueueIsTransient = false
     private var observedCompletionCount = 0L
     private var playbackStatsSession: PlaybackStatsSession? = null
     private var loggedArtworkTrackId: String? = null
@@ -169,7 +172,7 @@ class DefaultPlaybackRepository(
                     )
                 }
                 if (snapshotChanged) {
-                    persistSnapshot()
+                    persistSnapshotIfPersistent()
                 }
             }
         }
@@ -225,7 +228,7 @@ class DefaultPlaybackRepository(
                 }
                 completionLoadRequest?.let {
                     loadGatewaySafely(it)
-                    persistSnapshot()
+                    persistSnapshotIfPersistent()
                 }
             }
         }
@@ -260,6 +263,7 @@ class DefaultPlaybackRepository(
             }
             updatePlaybackStats(mutableSnapshot.value)
             val currentSnapshot = mutableSnapshot.value
+            currentQueueIsTransient = false
             val nextSnapshot = buildQueueSnapshot(
                 tracks = tracks,
                 startIndex = startIndex,
@@ -280,12 +284,44 @@ class DefaultPlaybackRepository(
         }
     }
 
+    override suspend fun playTransientTracks(tracks: List<Track>, startIndex: Int) {
+        var loadRequest: PlaybackLoadRequest? = null
+        playbackCommandMutex.withLock {
+            if (tracks.isEmpty()) return@withLock
+            logger.warn(PLAYBACK_LOG_TAG) {
+                "repository-play-transient-tracks size=${tracks.size} startIndex=$startIndex " +
+                    "target=${tracks.getOrNull(startIndex)?.id.orEmpty()} current=${mutableSnapshot.value.currentTrack?.id.orEmpty()} " +
+                    "snapshotPlaying=${mutableSnapshot.value.isPlaying}"
+            }
+            updatePlaybackStats(mutableSnapshot.value)
+            val currentSnapshot = mutableSnapshot.value
+            currentQueueIsTransient = true
+            val nextSnapshot = buildQueueSnapshot(
+                tracks = tracks,
+                startIndex = startIndex,
+                currentSnapshot = currentSnapshot,
+                isPlaying = true,
+            )
+            val target = nextSnapshot.currentTrack ?: return@withLock
+            mutableSnapshot.value = nextSnapshot
+            loadRequest = createLoadRequest(
+                track = target,
+                playWhenReady = true,
+                startPositionMs = 0L,
+            )
+        }
+        loadRequest?.let {
+            loadGatewaySafely(it)
+        }
+    }
+
     override suspend fun prepareExternalPlaybackQueue(tracks: List<Track>, startIndex: Int): PlaybackSnapshot? {
         var preparedSnapshot: PlaybackSnapshot? = null
         playbackCommandMutex.withLock {
             if (tracks.isEmpty()) return@withLock
             updatePlaybackStats(mutableSnapshot.value)
             val currentSnapshot = mutableSnapshot.value
+            currentQueueIsTransient = false
             latestLoadRequestId += 1L
             val nextSnapshot = buildQueueSnapshot(
                 tracks = tracks,
@@ -313,7 +349,7 @@ class DefaultPlaybackRepository(
         }
         loadRequest?.let {
             loadGatewaySafely(it)
-            persistSnapshot()
+            persistSnapshotIfPersistent()
         }
     }
 
@@ -342,7 +378,7 @@ class DefaultPlaybackRepository(
         }
         loadRequest?.let {
             loadGatewaySafely(it)
-            persistSnapshot()
+            persistSnapshotIfPersistent()
         }
     }
 
@@ -354,7 +390,7 @@ class DefaultPlaybackRepository(
             if (snapshot.mode != PlaybackMode.REPEAT_ONE && snapshot.canSeek && snapshot.positionMs > 5_000) {
                 gateway.seekTo(0L)
                 mutableSnapshot.update { it.copy(positionMs = 0L) }
-                persistSnapshot()
+                persistSnapshotIfPersistent()
                 return@withLock
             }
             val previousIndex = when {
@@ -367,7 +403,7 @@ class DefaultPlaybackRepository(
         }
         loadRequest?.let {
             loadGatewaySafely(it)
-            persistSnapshot()
+            persistSnapshotIfPersistent()
         }
     }
 
@@ -376,7 +412,7 @@ class DefaultPlaybackRepository(
             if (!mutableSnapshot.value.canSeek) return@withLock
             gateway.seekTo(positionMs)
             mutableSnapshot.update { it.copy(positionMs = positionMs.coerceAtLeast(0L)) }
-            persistSnapshot()
+            persistSnapshotIfPersistent()
         }
     }
 
@@ -398,7 +434,7 @@ class DefaultPlaybackRepository(
                 PlaybackMode.REPEAT_ONE -> snapshot.toOrderSnapshot()
             }
             mutableSnapshot.value = nextSnapshot
-            persistSnapshot()
+            persistSnapshotIfPersistent()
         }
     }
 
@@ -721,6 +757,12 @@ class DefaultPlaybackRepository(
                 updatedAt = now(),
             ),
         )
+    }
+
+    private suspend fun persistSnapshotIfPersistent() {
+        if (!currentQueueIsTransient) {
+            persistSnapshot()
+        }
     }
 
     private fun PlaybackSnapshot.toShuffleSnapshot(): PlaybackSnapshot {

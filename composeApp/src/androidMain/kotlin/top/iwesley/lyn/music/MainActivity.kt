@@ -1,9 +1,11 @@
 package top.iwesley.lyn.music
 
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.os.Bundle
 import android.os.Build
 import android.util.DisplayMetrics
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -14,13 +16,27 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import top.iwesley.lyn.music.core.model.AppDisplayScalePreset
 import top.iwesley.lyn.music.core.model.effectiveAppDisplayDensity
+import top.iwesley.lyn.music.feature.player.PlayerIntent
+import top.iwesley.lyn.music.platform.AndroidExternalAudioOpenSupport
 import top.iwesley.lyn.music.platform.createAndroidRuntimeGraph
 import kotlin.math.min
 import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
+    private val externalAudioOpenScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var appComponent: LynMusicAppComponent? = null
+    private var pendingExternalAudioOpenIntent: Intent? = null
+    private var externalAudioOpenJob: Job? = null
+    private var externalAudioOpenRequestId = 0L
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -37,6 +53,8 @@ class MainActivity : ComponentActivity() {
                 playerRuntimeServices = runtimeGraph.playerRuntimeServices,
             )
         }
+        appComponent = appComponentResult.getOrNull()
+        handleExternalAudioOpenIntent(intent)
 
         setContent {
             val appComponent = appComponentResult.getOrNull()
@@ -51,6 +69,43 @@ class MainActivity : ComponentActivity() {
                     showDetails = false,
                 )
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleExternalAudioOpenIntent(intent)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        externalAudioOpenScope.cancel()
+    }
+
+    private fun handleExternalAudioOpenIntent(intent: Intent?) {
+        if (!AndroidExternalAudioOpenSupport.isExternalAudioOpenIntent(intent)) return
+        val component = appComponent
+        if (component == null) {
+            pendingExternalAudioOpenIntent = intent?.let(::Intent)
+            return
+        }
+        val intentSnapshot = intent?.let(::Intent) ?: pendingExternalAudioOpenIntent ?: return
+        pendingExternalAudioOpenIntent = null
+        val requestId = ++externalAudioOpenRequestId
+        externalAudioOpenJob?.cancel()
+        externalAudioOpenJob = externalAudioOpenScope.launch {
+            val tracks = AndroidExternalAudioOpenSupport.tracksFromIntent(
+                context = this@MainActivity,
+                intent = intentSnapshot,
+                logger = component.logger,
+            )
+            if (requestId != externalAudioOpenRequestId) return@launch
+            if (tracks.isEmpty()) {
+                Toast.makeText(this@MainActivity, "无法打开该音频文件。", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            component.playerStore.dispatch(PlayerIntent.PlayTransientTracks(tracks, 0))
         }
     }
 }

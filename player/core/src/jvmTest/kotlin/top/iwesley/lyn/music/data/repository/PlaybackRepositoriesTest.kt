@@ -6,6 +6,7 @@ import kotlin.io.path.absolutePathString
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -19,6 +20,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import top.iwesley.lyn.music.core.model.DEFAULT_PLAYBACK_VOLUME
+import top.iwesley.lyn.music.core.model.EXTERNAL_OPEN_SOURCE_ID
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.PlaybackAudioFormat
 import top.iwesley.lyn.music.core.model.PlaybackGateway
@@ -31,6 +33,7 @@ import top.iwesley.lyn.music.core.model.PlaybackStatsReporter
 import top.iwesley.lyn.music.core.model.SystemPlaybackControlCallbacks
 import top.iwesley.lyn.music.core.model.SystemPlaybackControlsPlatformService
 import top.iwesley.lyn.music.core.model.Track
+import top.iwesley.lyn.music.core.model.buildExternalOpenTrackId
 import top.iwesley.lyn.music.core.model.buildNavidromeSongLocator
 import top.iwesley.lyn.music.core.model.normalizePlaybackVolume
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
@@ -882,6 +885,79 @@ class PlaybackRepositoriesTest {
         } finally {
             repository.close()
             scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `transient playback loads track without persisting queue snapshot`() = runTest {
+        val database = createTestDatabase()
+        val gateway = FakePlaybackGateway()
+        val playbackPreferencesStore = FakePlaybackPreferencesStore()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = playbackPreferencesStore,
+            scope = scope,
+            hydrateImmediately = false,
+        )
+
+        try {
+            val track = sampleExternalOpenTrack("content://media/external/audio/media/42")
+            repository.playTransientTracks(listOf(track), startIndex = 0)
+            advanceUntilIdle()
+
+            assertEquals(track.id, repository.snapshot.value.currentTrack?.id)
+            assertEquals(track.mediaLocator, gateway.loadCalls.last().track.mediaLocator)
+            assertNull(database.playbackQueueSnapshotDao().get())
+        } finally {
+            repository.close()
+            scope.cancel()
+            advanceUntilIdle()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `transient playback does not replace existing persisted queue snapshot`() = runTest {
+        val database = createTestDatabase()
+        database.playbackQueueSnapshotDao().upsert(
+            PlaybackQueueSnapshotEntity(
+                queueTrackIds = "track-1",
+                orderedQueueTrackIds = "track-1",
+                currentIndex = 0,
+                positionMs = 12_000L,
+                mode = PlaybackMode.ORDER.name,
+                updatedAt = 1_000L,
+            ),
+        )
+        val gateway = FakePlaybackGateway()
+        val playbackPreferencesStore = FakePlaybackPreferencesStore()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = playbackPreferencesStore,
+            scope = scope,
+            hydrateImmediately = false,
+        )
+
+        try {
+            repository.playTransientTracks(
+                tracks = listOf(sampleExternalOpenTrack("content://media/external/audio/media/43")),
+                startIndex = 0,
+            )
+            advanceUntilIdle()
+
+            val persisted = database.playbackQueueSnapshotDao().get()
+            assertEquals("track-1", persisted?.queueTrackIds)
+            assertEquals("track-1", persisted?.orderedQueueTrackIds)
+            assertEquals(12_000L, persisted?.positionMs)
+        } finally {
+            repository.close()
+            scope.cancel()
+            advanceUntilIdle()
             database.close()
         }
     }
@@ -1780,6 +1856,18 @@ private fun sampleNavidromeTrack(
     return sampleTrack(id, "Remote Song").copy(
         sourceId = "nav-source",
         mediaLocator = buildNavidromeSongLocator("nav-source", songId),
+    )
+}
+
+private fun sampleExternalOpenTrack(locator: String): Track {
+    return Track(
+        id = buildExternalOpenTrackId(locator, 0),
+        sourceId = EXTERNAL_OPEN_SOURCE_ID,
+        title = "External Song",
+        artistName = "External Artist",
+        durationMs = 120_000L,
+        mediaLocator = locator,
+        relativePath = "External Song.mp3",
     )
 }
 
