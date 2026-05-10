@@ -24,6 +24,11 @@
                 android:resource="@xml/lyrics_share_paths" />
         </provider>
 
+        <activity
+            android:name="top.iwesley.lyn.music.platform.AndroidLocalFolderPickerActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+
         <service
             android:name="top.iwesley.lyn.music.platform.LynPlaybackMediaLibraryService"
             android:exported="true"

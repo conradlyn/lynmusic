@@ -1,6 +1,7 @@
 package top.iwesley.lyn.music.platform
 
 import android.app.AlertDialog
+import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -944,8 +945,19 @@ class AndroidLocalFolderPicker(
         ActivityResultContracts.StartActivityForResult(),
     ) {
         if (folderContinuation != null) {
-            picker.launch(null)
+            launchSafPickerOrFallback()
         }
+    }
+
+    private val fallbackPickerLauncher = activity.registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        val selection = if (result.resultCode == Activity.RESULT_OK) {
+            AndroidLocalFolderPickerActivity.selectionFromResult(result.data)
+        } else {
+            null
+        }
+        resumeFolderSelection(selection)
     }
 
     suspend fun pickLocalFolder(): LocalFolderSelection? {
@@ -977,7 +989,7 @@ class AndroidLocalFolderPicker(
                 manageAllFilesPermissionLauncher.launch(buildManageAllFilesAccessIntent(activity))
             }
             .setNegativeButton("使用 SAF") { _, _ ->
-                picker.launch(null)
+                launchSafPickerOrFallback()
             }
             .setOnCancelListener {
                 resumeFolderSelection(null)
@@ -991,12 +1003,12 @@ class AndroidLocalFolderPicker(
 
     private fun launchPickerAfterLegacyPermissionCheck() {
         if (!shouldRequestLegacyDirectLocalFileAccess(activity)) {
-            picker.launch(null)
+            launchSafPickerOrFallback()
             return
         }
         legacyPermissionContinuation = {
             if (folderContinuation != null) {
-                picker.launch(null)
+                launchSafPickerOrFallback()
             }
         }
         runCatching {
@@ -1007,8 +1019,37 @@ class AndroidLocalFolderPicker(
             }
             legacyPermissionContinuation = null
             if (folderContinuation != null) {
-                picker.launch(null)
+                launchSafPickerOrFallback()
             }
+        }
+    }
+
+    private fun launchSafPickerOrFallback() {
+        if (!canResolveOpenDocumentTree(activity)) {
+            logger.warn(LOCAL_IMPORT_LOG_TAG) {
+                "saf-tree-picker-unavailable fallback=local-folder-picker"
+            }
+            launchFallbackPicker()
+            return
+        }
+        runCatching {
+            picker.launch(null)
+        }.onFailure { throwable ->
+            logger.warn(LOCAL_IMPORT_LOG_TAG) {
+                "saf-tree-picker-launch-failed fallback=local-folder-picker reason=${throwable.message.orEmpty()}"
+            }
+            launchFallbackPicker()
+        }
+    }
+
+    private fun launchFallbackPicker() {
+        runCatching {
+            fallbackPickerLauncher.launch(AndroidLocalFolderPickerActivity.createIntent(activity))
+        }.onFailure { throwable ->
+            logger.warn(LOCAL_IMPORT_LOG_TAG) {
+                "local-folder-picker-launch-failed reason=${throwable.message.orEmpty()}"
+            }
+            resumeFolderSelection(null)
         }
     }
 

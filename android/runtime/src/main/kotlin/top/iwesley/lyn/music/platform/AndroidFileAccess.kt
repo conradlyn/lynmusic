@@ -12,6 +12,12 @@ import android.provider.Settings
 import java.io.File
 import java.net.URI
 
+internal data class AndroidStorageRoot(
+    val label: String,
+    val root: File,
+    val isRemovable: Boolean,
+)
+
 internal fun hasManageAllFilesAccess(context: Context): Boolean {
     return Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()
 }
@@ -60,6 +66,52 @@ internal fun buildManageAllFilesAccessIntent(context: Context): Intent {
     } else {
         Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
     }
+}
+
+internal fun canResolveOpenDocumentTree(context: Context): Boolean {
+    return Intent(ACTION_OPEN_DOCUMENT_TREE).resolveActivity(context.packageManager) != null
+}
+
+@Suppress("DEPRECATION")
+internal fun listAndroidStorageRoots(context: Context): List<AndroidStorageRoot> {
+    val primaryRoot = Environment.getExternalStorageDirectory()
+    val normalizedPrimary = primaryRoot.canonicalFileOrSelf()
+    val roots = linkedMapOf<String, AndroidStorageRoot>()
+
+    fun addRoot(root: File, label: String, isRemovable: Boolean) {
+        if (!root.exists() || !root.isDirectory) return
+        val normalizedRoot = root.canonicalFileOrSelf()
+        roots.putIfAbsent(
+            normalizedRoot.absolutePath,
+            AndroidStorageRoot(
+                label = label,
+                root = normalizedRoot,
+                isRemovable = isRemovable,
+            ),
+        )
+    }
+
+    addRoot(primaryRoot, label = "内置存储", isRemovable = false)
+    context.getExternalFilesDirs(null)
+        .asSequence()
+        .filterNotNull()
+        .mapNotNull(File::findStorageVolumeRoot)
+        .map(File::canonicalFileOrSelf)
+        .filterNot { root ->
+            root == normalizedPrimary ||
+                normalizedPrimary.absolutePath.startsWith(root.absolutePath + File.separator)
+        }
+        .forEach { root ->
+            addRoot(
+                root = root,
+                label = "U 盘 ${root.name}",
+                isRemovable = true,
+            )
+        }
+    return roots.values.sortedWith(
+        compareBy<AndroidStorageRoot> { it.isRemovable }
+            .thenBy { it.label.lowercase() },
+    )
 }
 
 internal fun resolveAndroidLocalTrackFile(locator: String): File? {
@@ -122,6 +174,10 @@ private fun File.findStorageVolumeRoot(): File? {
     return null
 }
 
+private fun File.canonicalFileOrSelf(): File {
+    return runCatching { canonicalFile }.getOrDefault(absoluteFile)
+}
+
 private fun hasLegacyExternalStorageReadWriteAccess(context: Context): Boolean {
     return legacyDirectLocalFileAccessPermissions().all { permission ->
         context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
@@ -131,3 +187,4 @@ private fun hasLegacyExternalStorageReadWriteAccess(context: Context): Boolean {
 private const val EXTERNAL_STORAGE_DOCUMENTS_AUTHORITY = "com.android.externalstorage.documents"
 private const val PRIMARY_VOLUME_ID = "primary"
 private const val STORAGE_ROOT_PATH = "/storage"
+private const val ACTION_OPEN_DOCUMENT_TREE = "android.intent.action.OPEN_DOCUMENT_TREE"
