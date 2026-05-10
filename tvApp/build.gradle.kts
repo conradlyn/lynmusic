@@ -1,6 +1,9 @@
+import com.android.build.gradle.internal.api.BaseVariantOutputImpl
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 val sharedVersionConfig = rootProject.readSharedVersionConfig()
+val appVersionName = sharedVersionConfig.getValue("APP_VERSION_NAME")
+val androidArtifactBaseName = "LynMusic-TV-$appVersionName"
 
 plugins {
     alias(libs.plugins.androidApplication)
@@ -18,7 +21,7 @@ android {
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionCode = sharedVersionConfig.getValue("APP_VERSION_CODE").toInt()
-        versionName = sharedVersionConfig.getValue("APP_VERSION_NAME")
+        versionName = appVersionName
     }
 
     sourceSets.getByName("main") {
@@ -36,6 +39,15 @@ android {
         }
     }
     configureLynReleaseSigning(rootProject)
+
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            isUniversalApk = true
+        }
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_21
@@ -80,5 +92,15 @@ androidComponents {
         tasks.matching { it.name == "assemble$variantName" }.configureEach {
             dependsOn("lint$variantName")
         }
+    }
+}
+
+android.applicationVariants.configureEach {
+    val hasMultipleOutputs = outputs.size > 1
+    outputs.configureEach {
+        val abiFilter = filters.find { it.filterType == "ABI" }?.identifier
+        val outputLabel = abiFilter ?: if (hasMultipleOutputs) "universal" else null
+        val outputSuffix = listOfNotNull(buildType.name, outputLabel).joinToString("-")
+        (this as BaseVariantOutputImpl).outputFileName = "$androidArtifactBaseName-$outputSuffix.apk"
     }
 }
