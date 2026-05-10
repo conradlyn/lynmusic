@@ -41,6 +41,11 @@ android {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
     }
+    lint {
+        error += setOf("NewApi")
+        abortOnError = true
+        checkDependencies = true
+    }
 }
 
 kotlin {
@@ -67,4 +72,13 @@ dependencies {
     implementation(compose.materialIconsExtended)
 
     debugImplementation(libs.compose.uiTooling)
+}
+
+androidComponents {
+    onVariants { variant ->
+        val variantName = variant.name.replaceFirstChar { it.titlecase() }
+        tasks.matching { it.name == "assemble$variantName" }.configureEach {
+            dependsOn("lint$variantName")
+        }
+    }
 }

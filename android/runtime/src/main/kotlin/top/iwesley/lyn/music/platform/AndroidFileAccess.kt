@@ -81,14 +81,13 @@ internal fun listAndroidStorageRoots(context: Context): List<AndroidStorageRoot>
     fun addRoot(root: File, label: String, isRemovable: Boolean) {
         if (!root.exists() || !root.isDirectory) return
         val normalizedRoot = root.canonicalFileOrSelf()
-        roots.putIfAbsent(
-            normalizedRoot.absolutePath,
-            AndroidStorageRoot(
+        if (!roots.containsKey(normalizedRoot.absolutePath)) {
+            roots[normalizedRoot.absolutePath] = AndroidStorageRoot(
                 label = label,
                 root = normalizedRoot,
                 isRemovable = isRemovable,
-            ),
-        )
+            )
+        }
     }
 
     addRoot(primaryRoot, label = "内置存储", isRemovable = false)

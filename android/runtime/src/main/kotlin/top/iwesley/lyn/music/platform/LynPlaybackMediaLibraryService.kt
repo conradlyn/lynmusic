@@ -19,6 +19,7 @@ import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaLibraryService.LibraryParams
 import androidx.media3.session.MediaLibraryService.MediaLibrarySession
 import androidx.media3.session.MediaSession
+import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
@@ -296,7 +297,7 @@ private class LynMediaLibrarySessionCallback(
         return runtime.future {
             runtime.item(mediaId)?.let { item ->
                 LibraryResult.ofItem(item, null)
-            } ?: LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE)
+            } ?: LibraryResult.ofError(SessionError.ERROR_BAD_VALUE)
         }
     }
 
@@ -801,6 +802,7 @@ private fun PlaybackSnapshot.toMedia3SessionMetadata(artworkVersion: Long): Medi
     return metadata.build()
 }
 
+@OptIn(UnstableApi::class)
 private data class Media3SessionPlaylist(
     val items: ImmutableList<SimpleBasePlayer.MediaItemData>,
     val currentMediaItemIndex: Int,
@@ -829,6 +831,7 @@ private data class Media3SessionWindowItemKey(
     val durationMs: Long,
 )
 
+@OptIn(UnstableApi::class)
 private fun PlaybackSnapshot.toMedia3SessionPlaylist(
     artworkVersion: Long,
 ): Media3SessionPlaylist {

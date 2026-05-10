@@ -149,10 +149,25 @@ android {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
     }
+    lint {
+        //checkOnly += setOf("NewApi")
+        error += setOf("NewApi")
+        abortOnError = true
+        checkDependencies = true
+    }
 }
 
 dependencies {
     debugImplementation(libs.compose.uiTooling)
+}
+
+androidComponents {
+    onVariants { variant ->
+        val variantName = variant.name.replaceFirstChar { it.titlecase() }
+        tasks.matching { it.name == "assemble$variantName" }.configureEach {
+            dependsOn("lint$variantName")
+        }
+    }
 }
 
 android.applicationVariants.configureEach {

@@ -19,6 +19,7 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.OptIn
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.DefaultLifecycleObserver
@@ -1647,6 +1648,7 @@ private suspend fun resolveAndroidSambaTagReadTarget(
     )
 }
 
+@UnstableApi
 internal class AndroidPlaybackGateway(
     private val context: Context,
     private val database: LynMusicDatabase,
@@ -2227,6 +2229,7 @@ private fun Tracks.selectedAudioFormat(): PlaybackAudioFormat? {
     return null
 }
 
+@OptIn(UnstableApi::class)
 private fun Format.toPlaybackAudioFormat(): PlaybackAudioFormat? {
     val bitRateBps = bitrate.takeIf { it != Format.NO_VALUE && it > 0 }
     val samplingRateHz = sampleRate.takeIf { it != Format.NO_VALUE && it > 0 }
