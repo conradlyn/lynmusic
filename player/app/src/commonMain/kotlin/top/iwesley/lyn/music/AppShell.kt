@@ -282,8 +282,17 @@ internal fun MobileShell(
     val moreTabs = remember(platform) { mobileMoreNavigationTabs(platform) }
     val isMoreSelected = selectedTab in moreTabs
     val effectivePlayerSnapshot = playerState.effectiveSnapshot
+    val keyboardController = LocalSoftwareKeyboardController.current
     var isMoreSheetVisible by rememberSaveable { mutableStateOf(false) }
     val moreSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    fun selectMobileTab(tab: AppTab) {
+        if (isMobileLibraryHubTab(selectedTab) && !isMobileLibraryHubTab(tab)) {
+            keyboardController?.hide()
+        }
+        onTabSelected(tab)
+    }
+
     Scaffold(
         bottomBar = {
             Column(
@@ -319,7 +328,7 @@ internal fun MobileShell(
                             selected = isMobilePrimaryNavigationSelected(selectedTab, tab),
                             onClick = {
                                 isMoreSheetVisible = false
-                                onTabSelected(tab)
+                                selectMobileTab(tab)
                             },
                             icon = {
                                 Icon(
@@ -392,7 +401,7 @@ internal fun MobileShell(
                 onOpenLibraryNavigationTarget = onOpenLibraryNavigationTarget,
                 onMobileEditorVisibilityChanged = onMobileEditorVisibilityChanged,
                 mobileLibraryHub = true,
-                onTabSelected = onTabSelected,
+                onTabSelected = ::selectMobileTab,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -404,7 +413,7 @@ internal fun MobileShell(
             onDismiss = { isMoreSheetVisible = false },
             onSelect = { tab ->
                 isMoreSheetVisible = false
-                onTabSelected(tab)
+                selectMobileTab(tab)
             },
             tabs = moreTabs,
         )
@@ -821,6 +830,7 @@ private fun MobileLibraryHubTab(
     val pagerState = rememberPagerState(initialPage = initialPage) { mobileLibraryHubTabs.size }
     val coroutineScope = rememberCoroutineScope()
     var isSearchMode by rememberSaveable { mutableStateOf(false) }
+    var searchBarAutoFocus by remember { mutableStateOf(false) }
     var playlistSearchQuery by rememberSaveable { mutableStateOf("") }
     var favoritesRefreshHoldActive by rememberSaveable { mutableStateOf(false) }
     var favoritesRefreshHoldKey by rememberSaveable { mutableStateOf(0) }
@@ -833,6 +843,12 @@ private fun MobileLibraryHubTab(
     val playlistsPullRefreshState = rememberPullToRefreshState()
     val activeSearchTab = mobileLibraryHubTabForPage(pagerState.currentPage)
     val activeSearchQuery = when (activeSearchTab) {
+        AppTab.Library -> libraryState.query
+        AppTab.Favorites -> favoritesState.query
+        AppTab.Playlists -> playlistSearchQuery
+        else -> ""
+    }
+    val selectedTabSearchQuery = when (selectedTab) {
         AppTab.Library -> libraryState.query
         AppTab.Favorites -> favoritesState.query
         AppTab.Playlists -> playlistSearchQuery
@@ -881,7 +897,13 @@ private fun MobileLibraryHubTab(
 
     fun exitSearchMode() {
         clearActiveSearchQuery()
+        searchBarAutoFocus = false
         isSearchMode = false
+    }
+
+    fun enterSearchMode(autoFocus: Boolean) {
+        searchBarAutoFocus = autoFocus
+        isSearchMode = true
     }
 
     fun startFavoritesRefreshHold() {
@@ -907,6 +929,11 @@ private fun MobileLibraryHubTab(
         val targetPage = mobileLibraryHubPageForTab(selectedTab)
         if (pagerState.currentPage != targetPage) {
             pagerState.scrollToPage(targetPage)
+        }
+    }
+    LaunchedEffect(selectedTab, selectedTabSearchQuery) {
+        if (isMobileLibraryHubTab(selectedTab) && !isSearchMode && selectedTabSearchQuery.isNotBlank()) {
+            enterSearchMode(autoFocus = false)
         }
     }
     LaunchedEffect(pagerState) {
@@ -941,6 +968,7 @@ private fun MobileLibraryHubTab(
             MobileLibraryHubSearchBar(
                 query = activeSearchQuery,
                 placeholder = mobileLibraryHubSearchPlaceholder(activeSearchTab),
+                autoFocus = searchBarAutoFocus,
                 onQueryChanged = ::updateActiveSearchQuery,
                 onBack = ::exitSearchMode,
                 onClearOrClose = {
@@ -1007,7 +1035,7 @@ private fun MobileLibraryHubTab(
                     if (activeSearchTab == AppTab.Playlists) {
                         onPlaylistsIntent(PlaylistsIntent.BackToList)
                     }
-                    isSearchMode = true
+                    enterSearchMode(autoFocus = true)
                 },
                 onTabClick = { index, tab ->
                     onTabSelected(tab)
@@ -1337,6 +1365,7 @@ private fun MobileLibraryHubActionsDropdownMenu(
 private fun MobileLibraryHubSearchBar(
     query: String,
     placeholder: String,
+    autoFocus: Boolean,
     onQueryChanged: (String) -> Unit,
     onBack: () -> Unit,
     onClearOrClose: () -> Unit,
@@ -1353,9 +1382,11 @@ private fun MobileLibraryHubSearchBar(
         unfocusedBorderColor = Color.Transparent,
         disabledBorderColor = Color.Transparent,
     )
-    LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
-        keyboardController?.show()
+    LaunchedEffect(autoFocus) {
+        if (autoFocus) {
+            focusRequester.requestFocus()
+            keyboardController?.show()
+        }
     }
     Row(
         modifier = modifier
