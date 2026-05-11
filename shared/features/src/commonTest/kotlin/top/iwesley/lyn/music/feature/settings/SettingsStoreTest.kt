@@ -27,6 +27,7 @@ import top.iwesley.lyn.music.core.model.AppThemeTextPalettePreferences
 import top.iwesley.lyn.music.core.model.AppThemeTokens
 import top.iwesley.lyn.music.core.model.DeviceInfoGateway
 import top.iwesley.lyn.music.core.model.DeviceInfoSnapshot
+import top.iwesley.lyn.music.core.model.DesktopLyricsPlatformService
 import top.iwesley.lyn.music.core.model.LyricsShareFontLibraryPlatformService
 import top.iwesley.lyn.music.core.model.LyricsShareFontKind
 import top.iwesley.lyn.music.core.model.LyricsShareFontOption
@@ -138,6 +139,72 @@ class SettingsStoreTest {
         assertFalse(store.state.value.importingLyricsShareFont)
         assertEquals(listOf<SettingsEffect>(SettingsEffect.LyricsShareFontsChanged), effects)
         effectJob.cancel()
+        scope.cancel()
+    }
+
+    @Test
+    fun `desktop lyrics toggle writes repository when permission is available`() = runTest {
+        val repository = FakeSettingsRepository()
+        val desktopLyricsService = FakeDesktopLyricsPlatformService(permission = true)
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(
+            repository,
+            scope,
+            desktopLyricsPlatformService = desktopLyricsService,
+        )
+
+        advanceUntilIdle()
+        store.dispatch(SettingsIntent.ShowDesktopLyricsChanged(true))
+        advanceUntilIdle()
+
+        assertTrue(repository.currentShowDesktopLyrics())
+        assertTrue(store.state.value.showDesktopLyrics)
+        assertEquals(listOf(true), desktopLyricsService.enabledCalls)
+        scope.cancel()
+    }
+
+    @Test
+    fun `desktop lyrics toggle does not save true when permission is missing`() = runTest {
+        val repository = FakeSettingsRepository()
+        val desktopLyricsService = FakeDesktopLyricsPlatformService(permission = false)
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(
+            repository,
+            scope,
+            desktopLyricsPlatformService = desktopLyricsService,
+        )
+
+        advanceUntilIdle()
+        store.dispatch(SettingsIntent.ShowDesktopLyricsChanged(true))
+        advanceUntilIdle()
+
+        assertFalse(repository.currentShowDesktopLyrics())
+        assertFalse(store.state.value.showDesktopLyrics)
+        assertEquals(1, desktopLyricsService.permissionRequests)
+        scope.cancel()
+    }
+
+    @Test
+    fun `desktop lyrics permission recheck enables pending request when permission is granted`() = runTest {
+        val repository = FakeSettingsRepository()
+        val desktopLyricsService = FakeDesktopLyricsPlatformService(permission = false)
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(
+            repository,
+            scope,
+            desktopLyricsPlatformService = desktopLyricsService,
+        )
+
+        advanceUntilIdle()
+        store.dispatch(SettingsIntent.ShowDesktopLyricsChanged(true))
+        advanceUntilIdle()
+        desktopLyricsService.permission = true
+        store.dispatch(SettingsIntent.RecheckDesktopLyricsPermission)
+        advanceUntilIdle()
+
+        assertTrue(repository.currentShowDesktopLyrics())
+        assertTrue(store.state.value.showDesktopLyrics)
+        assertEquals(listOf(true), desktopLyricsService.enabledCalls)
         scope.cancel()
     }
 
@@ -1237,6 +1304,7 @@ class SettingsStoreTest {
 private class FakeSettingsRepository(
     sources: List<LyricsSourceDefinition> = emptyList(),
     showCompactPlayerLyrics: Boolean = false,
+    showDesktopLyrics: Boolean = false,
     autoPlayOnStartup: Boolean = false,
     useAndroidExtensionDecoder: Boolean = false,
     appDisplayScalePreset: AppDisplayScalePreset = AppDisplayScalePreset.Default,
@@ -1251,6 +1319,7 @@ private class FakeSettingsRepository(
     private val mutableSources = MutableStateFlow(sources)
     private val mutableUseSambaCache = MutableStateFlow(false)
     private val mutableShowCompactPlayerLyrics = MutableStateFlow(showCompactPlayerLyrics)
+    private val mutableShowDesktopLyrics = MutableStateFlow(showDesktopLyrics)
     private val mutableAutoPlayOnStartup = MutableStateFlow(autoPlayOnStartup)
     private val mutableUseAndroidExtensionDecoder = MutableStateFlow(useAndroidExtensionDecoder)
     private val mutableAppDisplayScalePreset = MutableStateFlow(appDisplayScalePreset)
@@ -1268,6 +1337,7 @@ private class FakeSettingsRepository(
     override val lyricsSources: Flow<List<LyricsSourceDefinition>> = mutableSources.asStateFlow()
     override val useSambaCache: StateFlow<Boolean> = mutableUseSambaCache.asStateFlow()
     override val showCompactPlayerLyrics: StateFlow<Boolean> = mutableShowCompactPlayerLyrics.asStateFlow()
+    override val showDesktopLyrics: StateFlow<Boolean> = mutableShowDesktopLyrics.asStateFlow()
     override val autoPlayOnStartup: StateFlow<Boolean> = mutableAutoPlayOnStartup.asStateFlow()
     override val useAndroidExtensionDecoder: StateFlow<Boolean> =
         mutableUseAndroidExtensionDecoder.asStateFlow()
@@ -1288,6 +1358,7 @@ private class FakeSettingsRepository(
 
     fun currentSources(): List<LyricsSourceDefinition> = mutableSources.value
     fun currentShowCompactPlayerLyrics(): Boolean = mutableShowCompactPlayerLyrics.value
+    fun currentShowDesktopLyrics(): Boolean = mutableShowDesktopLyrics.value
     fun currentAutoPlayOnStartup(): Boolean = mutableAutoPlayOnStartup.value
     fun currentUseAndroidExtensionDecoder(): Boolean = mutableUseAndroidExtensionDecoder.value
     fun currentAppDisplayScalePreset(): AppDisplayScalePreset = mutableAppDisplayScalePreset.value
@@ -1306,6 +1377,10 @@ private class FakeSettingsRepository(
 
     override suspend fun setShowCompactPlayerLyrics(enabled: Boolean) {
         mutableShowCompactPlayerLyrics.value = enabled
+    }
+
+    override suspend fun setShowDesktopLyrics(enabled: Boolean) {
+        mutableShowDesktopLyrics.value = enabled
     }
 
     override suspend fun setAutoPlayOnStartup(enabled: Boolean) {
@@ -1386,6 +1461,37 @@ private class FakeVlcPathPickerPlatformService(
     var nextResult: Result<String?> = Result.success(null),
 ) : VlcPathPickerPlatformService {
     override suspend fun pickVlcDirectory(): Result<String?> = nextResult
+}
+
+private class FakeDesktopLyricsPlatformService(
+    var permission: Boolean = true,
+    override val isSupported: Boolean = true,
+    override val consumesAppLyricsUpdates: Boolean = false,
+) : DesktopLyricsPlatformService {
+    val enabledCalls = mutableListOf<Boolean>()
+    var permissionRequests = 0
+        private set
+    var hidden = false
+        private set
+
+    override fun hasOverlayPermission(): Boolean = permission
+
+    override suspend fun requestOverlayPermission(): Boolean {
+        permissionRequests += 1
+        return permission
+    }
+
+    override suspend fun setDesktopLyricsEnabled(enabled: Boolean) {
+        enabledCalls += enabled
+    }
+
+    override suspend fun updateLyrics(text: String) = Unit
+
+    override suspend fun hideLyrics() {
+        hidden = true
+    }
+
+    override suspend fun release() = Unit
 }
 
 private class FakeAppStorageGateway(

@@ -16,6 +16,7 @@ import top.iwesley.lyn.music.core.model.AppThemeTextPalettePreferences
 import top.iwesley.lyn.music.core.model.AppThemeTokens
 import top.iwesley.lyn.music.core.model.AutoPlayOnStartupPreferencesStore
 import top.iwesley.lyn.music.core.model.CompactPlayerLyricsPreferencesStore
+import top.iwesley.lyn.music.core.model.DesktopLyricsPreferencesStore
 import top.iwesley.lyn.music.core.model.DesktopVlcPreferencesStore
 import top.iwesley.lyn.music.core.model.LyricsResponseFormat
 import top.iwesley.lyn.music.core.model.LyricsSourceConfig
@@ -106,6 +107,39 @@ class SettingsRepositoryTest {
 
         assertEquals(true, preferences.showCompactPlayerLyrics.value)
         assertEquals(true, repository.showCompactPlayerLyrics.value)
+    }
+
+    @Test
+    fun `desktop lyrics preference defaults to false`() = runTest {
+        val database = createSettingsTestDatabase()
+        val preferences = FakePreferencesStore()
+        val repository = DefaultSettingsRepository(
+            database = database,
+            sambaCachePreferencesStore = preferences,
+            themePreferencesStore = preferences,
+            desktopVlcPreferencesStore = preferences,
+            desktopLyricsPreferencesStore = preferences,
+        )
+
+        assertEquals(false, repository.showDesktopLyrics.value)
+    }
+
+    @Test
+    fun `setting desktop lyrics preference writes through to preference store`() = runTest {
+        val database = createSettingsTestDatabase()
+        val preferences = FakePreferencesStore()
+        val repository = DefaultSettingsRepository(
+            database = database,
+            sambaCachePreferencesStore = preferences,
+            themePreferencesStore = preferences,
+            desktopVlcPreferencesStore = preferences,
+            desktopLyricsPreferencesStore = preferences,
+        )
+
+        repository.setShowDesktopLyrics(true)
+
+        assertEquals(true, preferences.showDesktopLyrics.value)
+        assertEquals(true, repository.showDesktopLyrics.value)
     }
 
     @Test
@@ -464,9 +498,11 @@ private fun createSettingsTestDatabase(): LynMusicDatabase {
 
 private class FakePreferencesStore : SambaCachePreferencesStore, ThemePreferencesStore, DesktopVlcPreferencesStore,
     AutoPlayOnStartupPreferencesStore,
-    CompactPlayerLyricsPreferencesStore, NavidromeAudioQualityPreferencesStore, PlaybackDecoderPreferencesStore {
+    CompactPlayerLyricsPreferencesStore, DesktopLyricsPreferencesStore, NavidromeAudioQualityPreferencesStore,
+    PlaybackDecoderPreferencesStore {
     override val useSambaCache = MutableStateFlow(true)
     override val showCompactPlayerLyrics = MutableStateFlow(false)
+    override val showDesktopLyrics = MutableStateFlow(false)
     override val autoPlayOnStartup = MutableStateFlow(false)
     override val useAndroidExtensionDecoder = MutableStateFlow(false)
     override val navidromeWifiAudioQuality = MutableStateFlow(NavidromeAudioQuality.Original)
@@ -484,6 +520,10 @@ private class FakePreferencesStore : SambaCachePreferencesStore, ThemePreference
 
     override suspend fun setShowCompactPlayerLyrics(enabled: Boolean) {
         showCompactPlayerLyrics.value = enabled
+    }
+
+    override suspend fun setShowDesktopLyrics(enabled: Boolean) {
+        showDesktopLyrics.value = enabled
     }
 
     override suspend fun setAutoPlayOnStartup(enabled: Boolean) {

@@ -15,6 +15,7 @@ import top.iwesley.lyn.music.core.model.AutoPlayOnStartupPreferencesStore
 import top.iwesley.lyn.music.core.model.AppDisplayPreferencesStore
 import top.iwesley.lyn.music.core.model.AppDisplayScalePreset
 import top.iwesley.lyn.music.core.model.CompactPlayerLyricsPreferencesStore
+import top.iwesley.lyn.music.core.model.DesktopLyricsPreferencesStore
 import top.iwesley.lyn.music.core.model.DesktopVlcPreferencesStore
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
 import top.iwesley.lyn.music.core.model.ImportIndexState
@@ -58,6 +59,7 @@ import top.iwesley.lyn.music.core.model.UnsupportedOfflineDownloadGateway
 import top.iwesley.lyn.music.core.model.UnsupportedAppDisplayPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedAutoPlayOnStartupPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedCompactPlayerLyricsPreferencesStore
+import top.iwesley.lyn.music.core.model.UnsupportedDesktopLyricsPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedNavidromeAudioQualityPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedSameNameLyricsFileGateway
 import top.iwesley.lyn.music.core.model.UnsupportedPlaybackDecoderPreferencesStore
@@ -226,6 +228,7 @@ interface SettingsRepository {
     val lyricsSources: Flow<List<LyricsSourceDefinition>>
     val useSambaCache: StateFlow<Boolean>
     val showCompactPlayerLyrics: StateFlow<Boolean>
+    val showDesktopLyrics: StateFlow<Boolean>
     val autoPlayOnStartup: StateFlow<Boolean>
     val appDisplayScalePreset: StateFlow<AppDisplayScalePreset>
     val navidromeWifiAudioQuality: StateFlow<NavidromeAudioQuality>
@@ -241,6 +244,7 @@ interface SettingsRepository {
     suspend fun ensureDefaults()
     suspend fun setUseSambaCache(enabled: Boolean)
     suspend fun setShowCompactPlayerLyrics(enabled: Boolean)
+    suspend fun setShowDesktopLyrics(enabled: Boolean)
     suspend fun setAutoPlayOnStartup(enabled: Boolean)
     suspend fun setAppDisplayScalePreset(preset: AppDisplayScalePreset)
     suspend fun setNavidromeWifiAudioQuality(quality: NavidromeAudioQuality)
@@ -994,6 +998,8 @@ class DefaultSettingsRepository(
     private val appDisplayPreferencesStore: AppDisplayPreferencesStore = UnsupportedAppDisplayPreferencesStore,
     private val compactPlayerLyricsPreferencesStore: CompactPlayerLyricsPreferencesStore =
         UnsupportedCompactPlayerLyricsPreferencesStore,
+    private val desktopLyricsPreferencesStore: DesktopLyricsPreferencesStore =
+        UnsupportedDesktopLyricsPreferencesStore,
     private val autoPlayOnStartupPreferencesStore: AutoPlayOnStartupPreferencesStore =
         UnsupportedAutoPlayOnStartupPreferencesStore,
     private val navidromeAudioQualityPreferencesStore: NavidromeAudioQualityPreferencesStore =
@@ -1011,6 +1017,8 @@ class DefaultSettingsRepository(
     override val useSambaCache: StateFlow<Boolean> = sambaCachePreferencesStore.useSambaCache
     override val showCompactPlayerLyrics: StateFlow<Boolean> =
         compactPlayerLyricsPreferencesStore.showCompactPlayerLyrics
+    override val showDesktopLyrics: StateFlow<Boolean> =
+        desktopLyricsPreferencesStore.showDesktopLyrics
     override val autoPlayOnStartup: StateFlow<Boolean> =
         autoPlayOnStartupPreferencesStore.autoPlayOnStartup
     override val appDisplayScalePreset: StateFlow<AppDisplayScalePreset> =
@@ -1055,6 +1063,10 @@ class DefaultSettingsRepository(
 
     override suspend fun setShowCompactPlayerLyrics(enabled: Boolean) {
         compactPlayerLyricsPreferencesStore.setShowCompactPlayerLyrics(enabled)
+    }
+
+    override suspend fun setShowDesktopLyrics(enabled: Boolean) {
+        desktopLyricsPreferencesStore.setShowDesktopLyrics(enabled)
     }
 
     override suspend fun setAutoPlayOnStartup(enabled: Boolean) {

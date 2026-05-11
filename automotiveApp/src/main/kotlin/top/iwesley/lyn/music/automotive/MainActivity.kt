@@ -31,6 +31,7 @@ import top.iwesley.lyn.music.buildPlayerAppComponent
 import top.iwesley.lyn.music.core.model.AppDisplayScalePreset
 import top.iwesley.lyn.music.core.model.effectiveAppDisplayDensity
 import top.iwesley.lyn.music.feature.player.PlayerIntent
+import top.iwesley.lyn.music.feature.settings.SettingsIntent
 import top.iwesley.lyn.music.platform.AndroidExternalAudioOpenSupport
 import top.iwesley.lyn.music.platform.createAndroidRuntimeGraph
 import kotlin.math.roundToInt
@@ -76,6 +77,11 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleExternalAudioOpenIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        appComponent?.settingsStore?.dispatch(SettingsIntent.RecheckDesktopLyricsPermission)
     }
 
     override fun onDestroy() {

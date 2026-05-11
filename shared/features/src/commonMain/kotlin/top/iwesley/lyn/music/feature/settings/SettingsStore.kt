@@ -14,6 +14,7 @@ import top.iwesley.lyn.music.core.model.AppThemeTextPalettePreferences
 import top.iwesley.lyn.music.core.model.AppThemeTokens
 import top.iwesley.lyn.music.core.model.DeviceInfoGateway
 import top.iwesley.lyn.music.core.model.DeviceInfoSnapshot
+import top.iwesley.lyn.music.core.model.DesktopLyricsPlatformService
 import top.iwesley.lyn.music.core.model.LyricsShareFontLibraryPlatformService
 import top.iwesley.lyn.music.core.model.LyricsShareFontOption
 import top.iwesley.lyn.music.core.model.LyricsShareFontPreferencesStore
@@ -24,6 +25,7 @@ import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.RequestMethod
 import top.iwesley.lyn.music.core.model.UnsupportedAppStorageGateway
 import top.iwesley.lyn.music.core.model.UnsupportedDeviceInfoGateway
+import top.iwesley.lyn.music.core.model.UnsupportedDesktopLyricsPlatformService
 import top.iwesley.lyn.music.core.model.UnsupportedLyricsShareFontLibraryPlatformService
 import top.iwesley.lyn.music.core.model.UnsupportedLyricsShareFontPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedVlcPathPickerPlatformService
@@ -57,6 +59,7 @@ data class SettingsState(
     val sources: List<LyricsSourceDefinition> = emptyList(),
     val useSambaCache: Boolean = false,
     val showCompactPlayerLyrics: Boolean = false,
+    val showDesktopLyrics: Boolean = false,
     val autoPlayOnStartup: Boolean = false,
     val appDisplayScalePreset: AppDisplayScalePreset = AppDisplayScalePreset.Default,
     val navidromeWifiAudioQuality: NavidromeAudioQuality = NavidromeAudioQuality.Original,
@@ -103,6 +106,8 @@ data class SettingsState(
 sealed interface SettingsIntent {
     data class UseSambaCacheChanged(val value: Boolean) : SettingsIntent
     data class ShowCompactPlayerLyricsChanged(val value: Boolean) : SettingsIntent
+    data class ShowDesktopLyricsChanged(val value: Boolean) : SettingsIntent
+    data object RecheckDesktopLyricsPermission : SettingsIntent
     data class AutoPlayOnStartupChanged(val value: Boolean) : SettingsIntent
     data class AppDisplayScalePresetChanged(val value: AppDisplayScalePreset) : SettingsIntent
     data class NavidromeWifiAudioQualityChanged(val value: NavidromeAudioQuality) : SettingsIntent
@@ -165,6 +170,8 @@ class SettingsStore(
     private val lyricsShareFontPreferencesStore: LyricsShareFontPreferencesStore =
         UnsupportedLyricsShareFontPreferencesStore,
     private val vlcPathPickerPlatformService: VlcPathPickerPlatformService = UnsupportedVlcPathPickerPlatformService,
+    private val desktopLyricsPlatformService: DesktopLyricsPlatformService =
+        UnsupportedDesktopLyricsPlatformService,
 ) : BaseStore<SettingsState, SettingsIntent, SettingsEffect>(
     initialState = SettingsState(
         supportsLyricsShareFontImport =
@@ -172,6 +179,8 @@ class SettingsStore(
     ),
     scope = scope,
 ) {
+    private var desktopLyricsPermissionRequestPending = false
+
     init {
         scope.launch {
             repository.lyricsSources.collect { sources ->
@@ -208,6 +217,30 @@ class SettingsStore(
         scope.launch {
             repository.showCompactPlayerLyrics.collect { enabled ->
                 updateState { state -> state.copy(showCompactPlayerLyrics = enabled) }
+            }
+        }
+        scope.launch {
+            repository.showDesktopLyrics.collect { enabled ->
+                val wasEnabled = state.value.showDesktopLyrics
+                if (enabled && !desktopLyricsPlatformService.hasOverlayPermission()) {
+                    repository.setShowDesktopLyrics(false)
+                    desktopLyricsPlatformService.setDesktopLyricsEnabled(false)
+                    desktopLyricsPlatformService.hideLyrics()
+                    updateState {
+                        it.copy(
+                            showDesktopLyrics = false,
+                            message = "桌面歌词悬浮窗权限已关闭。",
+                        )
+                    }
+                } else {
+                    if (enabled) {
+                        desktopLyricsPlatformService.setDesktopLyricsEnabled(true)
+                    } else if (wasEnabled) {
+                        desktopLyricsPlatformService.setDesktopLyricsEnabled(false)
+                        desktopLyricsPlatformService.hideLyrics()
+                    }
+                    updateState { state -> state.copy(showDesktopLyrics = enabled) }
+                }
             }
         }
         scope.launch {
@@ -281,6 +314,14 @@ class SettingsStore(
             is SettingsIntent.ShowCompactPlayerLyricsChanged -> {
                 repository.setShowCompactPlayerLyrics(intent.value)
                 updateState { it.copy(showCompactPlayerLyrics = intent.value) }
+            }
+
+            is SettingsIntent.ShowDesktopLyricsChanged -> {
+                setShowDesktopLyrics(intent.value)
+            }
+
+            SettingsIntent.RecheckDesktopLyricsPermission -> {
+                recheckDesktopLyricsPermission()
             }
 
             is SettingsIntent.AutoPlayOnStartupChanged -> {
@@ -688,6 +729,79 @@ class SettingsStore(
             }
 
             SettingsIntent.ClearMessage -> updateState { it.copy(message = null) }
+        }
+    }
+
+    private suspend fun setShowDesktopLyrics(enabled: Boolean) {
+        if (!desktopLyricsPlatformService.isSupported) {
+            repository.setShowDesktopLyrics(false)
+            desktopLyricsPlatformService.setDesktopLyricsEnabled(false)
+            desktopLyricsPlatformService.hideLyrics()
+            updateState {
+                it.copy(
+                    showDesktopLyrics = false,
+                    message = "当前平台暂不支持桌面歌词。",
+                )
+            }
+            return
+        }
+        if (!enabled) {
+            desktopLyricsPermissionRequestPending = false
+            repository.setShowDesktopLyrics(false)
+            desktopLyricsPlatformService.setDesktopLyricsEnabled(false)
+            desktopLyricsPlatformService.hideLyrics()
+            updateState { it.copy(showDesktopLyrics = false) }
+            return
+        }
+        if (!desktopLyricsPlatformService.hasOverlayPermission()) {
+            desktopLyricsPermissionRequestPending = true
+            repository.setShowDesktopLyrics(false)
+            updateState {
+                it.copy(
+                    showDesktopLyrics = false,
+                    message = "请授权悬浮窗权限后开启桌面歌词。",
+                )
+            }
+            val granted = desktopLyricsPlatformService.requestOverlayPermission()
+            if (!granted) return
+        }
+        desktopLyricsPermissionRequestPending = false
+        repository.setShowDesktopLyrics(true)
+        updateState {
+            it.copy(
+                showDesktopLyrics = true,
+                message = null,
+            )
+        }
+    }
+
+    private suspend fun recheckDesktopLyricsPermission() {
+        if (!desktopLyricsPlatformService.isSupported) return
+        val hasPermission = desktopLyricsPlatformService.hasOverlayPermission()
+        when {
+            desktopLyricsPermissionRequestPending && hasPermission -> {
+                desktopLyricsPermissionRequestPending = false
+                repository.setShowDesktopLyrics(true)
+                updateState {
+                    it.copy(
+                        showDesktopLyrics = true,
+                        message = "桌面歌词已开启。",
+                    )
+                }
+            }
+
+            state.value.showDesktopLyrics && !hasPermission -> {
+                desktopLyricsPermissionRequestPending = false
+                repository.setShowDesktopLyrics(false)
+                desktopLyricsPlatformService.setDesktopLyricsEnabled(false)
+                desktopLyricsPlatformService.hideLyrics()
+                updateState {
+                    it.copy(
+                        showDesktopLyrics = false,
+                        message = "桌面歌词悬浮窗权限已关闭。",
+                    )
+                }
+            }
         }
     }
 

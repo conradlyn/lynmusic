@@ -646,6 +646,7 @@ private fun GeneralSettingsPane(
     val showAppDisplayScaleSetting =
         currentPlatformDescriptor.capabilities.supportsAppDisplayScaleAdjustment
     val showCompactPlayerLyricsSetting = isMobilePlatform
+    val showDesktopLyricsSetting = currentPlatformDescriptor.capabilities.supportsDesktopLyrics
     val showNavidromeAudioQualitySetting = isMobilePlatform || currentPlatformDescriptor.isAndroidPlatform()
     val showAndroidExtensionDecoderSetting =
         currentPlatformDescriptor.capabilities.supportsAndroidExtensionDecoder
@@ -698,6 +699,40 @@ private fun GeneralSettingsPane(
                     },
                     colors = SwitchDefaults.colors(),
                 )
+            }
+        }
+        if (showDesktopLyricsSetting) {
+            MainShellElevatedCard(shape = RoundedCornerShape(28.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = "桌面歌词",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = "在系统悬浮窗中显示当前歌词，离开应用后仍可查看。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = shellColors.secondaryText,
+                        )
+                    }
+                    Switch(
+                        checked = state.showDesktopLyrics,
+                        onCheckedChange = { enabled ->
+                            onSettingsIntent(SettingsIntent.ShowDesktopLyricsChanged(enabled))
+                        },
+                        colors = SwitchDefaults.colors(),
+                    )
+                }
             }
         }
         if (showDesktopVlcSettings) {

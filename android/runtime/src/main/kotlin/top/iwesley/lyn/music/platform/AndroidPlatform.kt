@@ -68,6 +68,7 @@ import top.iwesley.lyn.music.core.model.AudioTagSnapshot
 import top.iwesley.lyn.music.core.model.CompactPlayerLyricsPreferencesStore
 import top.iwesley.lyn.music.core.model.DEFAULT_ANDROID_EXTENSION_DECODER_ENABLED
 import top.iwesley.lyn.music.core.model.DEFAULT_SAMBA_PORT
+import top.iwesley.lyn.music.core.model.DesktopLyricsPreferencesStore
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
 import top.iwesley.lyn.music.core.model.GlobalDiagnosticLogger
 import top.iwesley.lyn.music.core.model.ImportScanFailure
@@ -213,9 +214,11 @@ fun createAndroidRuntimeGraph(
             supportsSystemMediaControls = true,
             supportsAppDisplayScaleAdjustment = true,
             supportsAndroidExtensionDecoder = true,
+            supportsDesktopLyrics = true,
             supportsPlaybackBackgroundArtworkBlur = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S,
         ),
     )
+    val desktopLyricsPlatformService = AndroidDesktopLyricsPlatformService(activity.applicationContext)
     val sharedGraph = buildSharedGraph(
         platform = platform,
         database = database,
@@ -226,6 +229,7 @@ fun createAndroidRuntimeGraph(
             themePreferencesStore = appPreferencesStore,
             appDisplayPreferencesStore = appPreferencesStore,
             compactPlayerLyricsPreferencesStore = appPreferencesStore,
+            desktopLyricsPreferencesStore = appPreferencesStore,
             autoPlayOnStartupPreferencesStore = appPreferencesStore,
             navidromeAudioQualityPreferencesStore = appPreferencesStore,
             playbackDecoderPreferencesStore = appPreferencesStore,
@@ -262,6 +266,7 @@ fun createAndroidRuntimeGraph(
                 activity = activity,
                 dateKeyProvider = AndroidDailyRecommendationDateKeyProvider,
             ),
+            desktopLyricsPlatformService = desktopLyricsPlatformService,
             logger = logger,
         ),
     )
@@ -466,7 +471,7 @@ internal class AndroidCredentialStore(
 internal class AndroidAppPreferencesStore(
     context: Context,
 ) : PlaybackPreferencesStore, SambaCachePreferencesStore, ThemePreferencesStore, AppDisplayPreferencesStore,
-    CompactPlayerLyricsPreferencesStore, NavidromeAudioQualityPreferencesStore, LibrarySourceFilterPreferencesStore,
+    CompactPlayerLyricsPreferencesStore, DesktopLyricsPreferencesStore, NavidromeAudioQualityPreferencesStore, LibrarySourceFilterPreferencesStore,
     LyricsShareFontPreferencesStore, PlaybackDecoderPreferencesStore {
     private val preferences: SharedPreferences =
         context.getSharedPreferences("lynmusic.settings", Context.MODE_PRIVATE)
@@ -476,6 +481,9 @@ internal class AndroidAppPreferencesStore(
     private val mutablePlaybackVolume = MutableStateFlow(readPlaybackVolume())
     private val mutableShowCompactPlayerLyrics = MutableStateFlow(
         preferences.getBoolean(KEY_SHOW_COMPACT_PLAYER_LYRICS, false),
+    )
+    private val mutableShowDesktopLyrics = MutableStateFlow(
+        preferences.getBoolean(KEY_SHOW_DESKTOP_LYRICS, false),
     )
     private val mutableAutoPlayOnStartup = MutableStateFlow(
         preferences.getBoolean(KEY_AUTO_PLAY_ON_STARTUP, false),
@@ -520,6 +528,10 @@ internal class AndroidAppPreferencesStore(
                     mutableUseAndroidExtensionDecoder.value = readUseAndroidExtensionDecoder()
                 }
 
+                KEY_SHOW_DESKTOP_LYRICS -> {
+                    mutableShowDesktopLyrics.value = preferences.getBoolean(KEY_SHOW_DESKTOP_LYRICS, false)
+                }
+
                 KEY_NAVIDROME_WIFI_AUDIO_QUALITY -> {
                     mutableNavidromeWifiAudioQuality.value =
                         readNavidromeAudioQuality(KEY_NAVIDROME_WIFI_AUDIO_QUALITY, NavidromeAudioQuality.Original)
@@ -539,6 +551,7 @@ internal class AndroidAppPreferencesStore(
     override val useSambaCache: StateFlow<Boolean> = mutableUseSambaCache.asStateFlow()
     override val playbackVolume: StateFlow<Float> = mutablePlaybackVolume.asStateFlow()
     override val showCompactPlayerLyrics: StateFlow<Boolean> = mutableShowCompactPlayerLyrics.asStateFlow()
+    override val showDesktopLyrics: StateFlow<Boolean> = mutableShowDesktopLyrics.asStateFlow()
     override val autoPlayOnStartup: StateFlow<Boolean> = mutableAutoPlayOnStartup.asStateFlow()
     override val useAndroidExtensionDecoder: StateFlow<Boolean> =
         mutableUseAndroidExtensionDecoder.asStateFlow()
@@ -570,6 +583,11 @@ internal class AndroidAppPreferencesStore(
     override suspend fun setShowCompactPlayerLyrics(enabled: Boolean) {
         preferences.edit().putBoolean(KEY_SHOW_COMPACT_PLAYER_LYRICS, enabled).apply()
         mutableShowCompactPlayerLyrics.value = enabled
+    }
+
+    override suspend fun setShowDesktopLyrics(enabled: Boolean) {
+        preferences.edit().putBoolean(KEY_SHOW_DESKTOP_LYRICS, enabled).apply()
+        mutableShowDesktopLyrics.value = enabled
     }
 
     override suspend fun setAutoPlayOnStartup(enabled: Boolean) {
@@ -733,7 +751,7 @@ internal class AndroidNetworkConnectionTypeProvider(
     }
 }
 
-private class AndroidAudioTagGateway(
+internal class AndroidAudioTagGateway(
     private val context: Context,
     private val database: LynMusicDatabase,
     private val secureCredentialStore: SecureCredentialStore,
@@ -835,7 +853,7 @@ private class AndroidAudioTagGateway(
     }
 }
 
-private class AndroidSameNameLyricsFileGateway(
+internal class AndroidSameNameLyricsFileGateway(
     private val context: Context,
     private val database: LynMusicDatabase,
     private val secureCredentialStore: SecureCredentialStore,
@@ -2391,6 +2409,7 @@ private const val CREDENTIAL_LOG_TAG = "CredentialStore"
 private const val KEY_USE_SAMBA_CACHE = "use_samba_cache"
 private const val KEY_PLAYBACK_VOLUME = "playback_volume"
 private const val KEY_SHOW_COMPACT_PLAYER_LYRICS = "show_compact_player_lyrics"
+private const val KEY_SHOW_DESKTOP_LYRICS = "show_desktop_lyrics"
 private const val KEY_AUTO_PLAY_ON_STARTUP = "auto_play_on_startup"
 private const val KEY_ANDROID_EXTENSION_DECODER_ENABLED = "android_extension_decoder_enabled"
 private const val KEY_APP_DISPLAY_SCALE_PRESET = "app_display_scale_preset"

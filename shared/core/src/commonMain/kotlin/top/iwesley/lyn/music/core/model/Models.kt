@@ -416,6 +416,7 @@ data class PlatformCapabilities(
     val supportsSystemMediaControls: Boolean,
     val supportsAppDisplayScaleAdjustment: Boolean = false,
     val supportsAndroidExtensionDecoder: Boolean = false,
+    val supportsDesktopLyrics: Boolean = false,
     val supportsPlaybackBackgroundArtworkBlur: Boolean = true,
 )
 

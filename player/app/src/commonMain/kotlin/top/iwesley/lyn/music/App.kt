@@ -30,6 +30,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -38,6 +39,7 @@ import top.iwesley.lyn.music.cast.CastNotificationPermissionRequester
 import top.iwesley.lyn.music.core.model.AppDisplayScalePreset
 import top.iwesley.lyn.music.core.model.AppTab
 import top.iwesley.lyn.music.core.model.ArtworkCacheStore
+import top.iwesley.lyn.music.core.model.DesktopLyricsPlatformService
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
 import top.iwesley.lyn.music.core.model.PlatformDescriptor
 import top.iwesley.lyn.music.core.model.PlaylistKind
@@ -56,6 +58,7 @@ import top.iwesley.lyn.music.feature.offline.OfflineDownloadIntent
 import top.iwesley.lyn.music.feature.offline.OfflineDownloadStore
 import top.iwesley.lyn.music.feature.player.PlayerIntent
 import top.iwesley.lyn.music.feature.player.PlayerStore
+import top.iwesley.lyn.music.feature.player.resolveDesktopLyricsOverlayText
 import top.iwesley.lyn.music.feature.playlists.PlaylistsIntent
 import top.iwesley.lyn.music.feature.playlists.PlaylistsStore
 import top.iwesley.lyn.music.feature.settings.SettingsEffect
@@ -83,6 +86,7 @@ class LynMusicAppComponent(
     val appDisplayScalePreset: StateFlow<AppDisplayScalePreset>,
     val castBackgroundRunSettingsOpener: CastBackgroundRunSettingsOpener,
     val castNotificationPermissionRequester: CastNotificationPermissionRequester,
+    val desktopLyricsPlatformService: DesktopLyricsPlatformService,
     private val scope: CoroutineScope,
     private val onDispose: suspend () -> Unit,
 ) {
@@ -114,6 +118,24 @@ fun buildPlayerAppComponent(
         playbackStatsReporter = sharedGraph.playbackStatsReporter,
         hydrateImmediately = false,
     )
+    val playerStore = PlayerStore(
+        playbackRepository = playbackRepository,
+        lyricsRepository = sharedGraph.lyricsRepository,
+        storeScope = sharedGraph.scope,
+        castGateway = playerRuntimeServices.castGateway,
+        castMediaUrlResolver = playerRuntimeServices.castMediaUrlResolver,
+        castSessionForegroundPlatformService = playerRuntimeServices.castSessionForegroundPlatformService,
+        lyricsSharePlatformService = playerRuntimeServices.lyricsSharePlatformService,
+        lyricsShareFontLibraryPlatformService = playerRuntimeServices.lyricsShareFontLibraryPlatformService,
+        lyricsShareFontPreferencesStore = playerRuntimeServices.lyricsShareFontPreferencesStore,
+        artworkCacheStore = sharedGraph.artworkCacheStore,
+        logger = sharedGraph.logger,
+    )
+    sharedGraph.scope.launchDesktopLyricsSync(
+        settingsStore = sharedGraph.settingsStore,
+        playerStore = playerStore,
+        desktopLyricsPlatformService = sharedGraph.desktopLyricsPlatformService,
+    )
     return LynMusicAppComponent(
         platform = sharedGraph.platform,
         logger = sharedGraph.logger,
@@ -124,33 +146,66 @@ fun buildPlayerAppComponent(
         musicTagsStore = sharedGraph.musicTagsStore,
         importStore = sharedGraph.importStore,
         offlineDownloadStore = sharedGraph.offlineDownloadStore,
-        playerStore = PlayerStore(
-            playbackRepository = playbackRepository,
-            lyricsRepository = sharedGraph.lyricsRepository,
-            storeScope = sharedGraph.scope,
-            castGateway = playerRuntimeServices.castGateway,
-            castMediaUrlResolver = playerRuntimeServices.castMediaUrlResolver,
-            castSessionForegroundPlatformService = playerRuntimeServices.castSessionForegroundPlatformService,
-            lyricsSharePlatformService = playerRuntimeServices.lyricsSharePlatformService,
-            lyricsShareFontLibraryPlatformService = playerRuntimeServices.lyricsShareFontLibraryPlatformService,
-            lyricsShareFontPreferencesStore = playerRuntimeServices.lyricsShareFontPreferencesStore,
-            artworkCacheStore = sharedGraph.artworkCacheStore,
-            logger = sharedGraph.logger,
-        ),
+        playerStore = playerStore,
         settingsStore = sharedGraph.settingsStore,
         lyricsRepository = sharedGraph.lyricsRepository,
         artworkCacheStore = sharedGraph.artworkCacheStore,
         appDisplayScalePreset = sharedGraph.appDisplayScalePreset,
         castBackgroundRunSettingsOpener = playerRuntimeServices.castBackgroundRunSettingsOpener,
         castNotificationPermissionRequester = playerRuntimeServices.castNotificationPermissionRequester,
+        desktopLyricsPlatformService = sharedGraph.desktopLyricsPlatformService,
         scope = sharedGraph.scope,
         onDispose = {
             playerRuntimeServices.castSessionForegroundPlatformService.close()
             playerRuntimeServices.castGateway.release()
             playerRuntimeServices.castMediaUrlResolver.release()
+            sharedGraph.desktopLyricsPlatformService.release()
             playbackRepository.close()
         },
     )
+}
+
+private fun CoroutineScope.launchDesktopLyricsSync(
+    settingsStore: SettingsStore,
+    playerStore: PlayerStore,
+    desktopLyricsPlatformService: DesktopLyricsPlatformService,
+) {
+    if (!desktopLyricsPlatformService.isSupported || !desktopLyricsPlatformService.consumesAppLyricsUpdates) return
+    launch {
+        var lastEnabled = false
+        var lastText: String? = null
+        combine(settingsStore.state, playerStore.state) { settings, player -> settings to player }
+            .collect { (settings, player) ->
+                val enabled = settings.showDesktopLyrics && desktopLyricsPlatformService.hasOverlayPermission()
+                if (!enabled) {
+                    if (lastEnabled || lastText != null) {
+                        desktopLyricsPlatformService.setDesktopLyricsEnabled(false)
+                        desktopLyricsPlatformService.hideLyrics()
+                    }
+                    lastEnabled = false
+                    lastText = null
+                    return@collect
+                }
+                if (!lastEnabled) {
+                    desktopLyricsPlatformService.setDesktopLyricsEnabled(true)
+                    lastEnabled = true
+                }
+                val text = resolveDesktopLyricsOverlayText(
+                    lyrics = player.lyrics,
+                    highlightedLineIndex = player.highlightedLineIndex,
+                    isLyricsLoading = player.isLyricsLoading,
+                )
+                if (text == null) {
+                    if (lastText != null) {
+                        desktopLyricsPlatformService.hideLyrics()
+                    }
+                    lastText = null
+                } else if (text != lastText) {
+                    desktopLyricsPlatformService.updateLyrics(text)
+                    lastText = text
+                }
+            }
+    }
 }
 
 @Composable

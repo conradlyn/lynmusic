@@ -65,6 +65,12 @@ interface CompactPlayerLyricsPreferencesStore {
     suspend fun setShowCompactPlayerLyrics(enabled: Boolean)
 }
 
+interface DesktopLyricsPreferencesStore {
+    val showDesktopLyrics: StateFlow<Boolean>
+
+    suspend fun setShowDesktopLyrics(enabled: Boolean)
+}
+
 interface AutoPlayOnStartupPreferencesStore {
     val autoPlayOnStartup: StateFlow<Boolean>
 
@@ -104,6 +110,16 @@ object UnsupportedCompactPlayerLyricsPreferencesStore : CompactPlayerLyricsPrefe
 
     override suspend fun setShowCompactPlayerLyrics(enabled: Boolean) {
         mutableShowCompactPlayerLyrics.value = enabled
+    }
+}
+
+object UnsupportedDesktopLyricsPreferencesStore : DesktopLyricsPreferencesStore {
+    private val mutableShowDesktopLyrics = MutableStateFlow(false)
+
+    override val showDesktopLyrics: StateFlow<Boolean> = mutableShowDesktopLyrics
+
+    override suspend fun setShowDesktopLyrics(enabled: Boolean) {
+        mutableShowDesktopLyrics.value = enabled
     }
 }
 

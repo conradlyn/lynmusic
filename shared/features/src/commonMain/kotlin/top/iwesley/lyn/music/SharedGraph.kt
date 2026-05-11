@@ -13,6 +13,8 @@ import top.iwesley.lyn.music.core.model.AppDisplayScalePreset
 import top.iwesley.lyn.music.core.model.AudioTagGateway
 import top.iwesley.lyn.music.core.model.AudioTagEditorPlatformService
 import top.iwesley.lyn.music.core.model.CompactPlayerLyricsPreferencesStore
+import top.iwesley.lyn.music.core.model.DesktopLyricsPlatformService
+import top.iwesley.lyn.music.core.model.DesktopLyricsPreferencesStore
 import top.iwesley.lyn.music.core.model.DesktopVlcPreferencesStore
 import top.iwesley.lyn.music.core.model.DeviceInfoGateway
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
@@ -38,6 +40,8 @@ import top.iwesley.lyn.music.core.model.UnsupportedAudioTagGateway
 import top.iwesley.lyn.music.core.model.UnsupportedAppDisplayPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedAutoPlayOnStartupPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedCompactPlayerLyricsPreferencesStore
+import top.iwesley.lyn.music.core.model.UnsupportedDesktopLyricsPlatformService
+import top.iwesley.lyn.music.core.model.UnsupportedDesktopLyricsPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedDesktopVlcPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedDeviceInfoGateway
 import top.iwesley.lyn.music.core.model.UnsupportedLyricsShareFontLibraryPlatformService
@@ -87,6 +91,8 @@ data class SharedRuntimeServices(
     val appDisplayPreferencesStore: AppDisplayPreferencesStore = UnsupportedAppDisplayPreferencesStore,
     val compactPlayerLyricsPreferencesStore: CompactPlayerLyricsPreferencesStore =
         UnsupportedCompactPlayerLyricsPreferencesStore,
+    val desktopLyricsPreferencesStore: DesktopLyricsPreferencesStore =
+        UnsupportedDesktopLyricsPreferencesStore,
     val autoPlayOnStartupPreferencesStore: AutoPlayOnStartupPreferencesStore =
         UnsupportedAutoPlayOnStartupPreferencesStore,
     val navidromeAudioQualityPreferencesStore: NavidromeAudioQualityPreferencesStore =
@@ -115,6 +121,7 @@ data class SharedRuntimeServices(
     val sameNameLyricsFileGateway: SameNameLyricsFileGateway = UnsupportedSameNameLyricsFileGateway,
     val audioTagEditorPlatformService: AudioTagEditorPlatformService = UnsupportedAudioTagEditorPlatformService,
     val vlcPathPickerPlatformService: VlcPathPickerPlatformService = UnsupportedVlcPathPickerPlatformService,
+    val desktopLyricsPlatformService: DesktopLyricsPlatformService = UnsupportedDesktopLyricsPlatformService,
     val logger: DiagnosticLogger = NoopDiagnosticLogger,
 )
 
@@ -134,6 +141,7 @@ class SharedGraph(
     val playbackStatsReporter: PlaybackStatsReporter,
     val audioTagGateway: AudioTagGateway,
     val appDisplayScalePreset: kotlinx.coroutines.flow.StateFlow<AppDisplayScalePreset>,
+    val desktopLyricsPlatformService: DesktopLyricsPlatformService,
     val logger: DiagnosticLogger,
     val scope: CoroutineScope,
 )
@@ -163,6 +171,7 @@ fun buildSharedGraph(
         desktopVlcPreferencesStore = runtimeServices.desktopVlcPreferencesStore,
         appDisplayPreferencesStore = runtimeServices.appDisplayPreferencesStore,
         compactPlayerLyricsPreferencesStore = runtimeServices.compactPlayerLyricsPreferencesStore,
+        desktopLyricsPreferencesStore = runtimeServices.desktopLyricsPreferencesStore,
         autoPlayOnStartupPreferencesStore = runtimeServices.autoPlayOnStartupPreferencesStore,
         navidromeAudioQualityPreferencesStore = runtimeServices.navidromeAudioQualityPreferencesStore,
         playbackDecoderPreferencesStore = runtimeServices.playbackDecoderPreferencesStore,
@@ -294,12 +303,14 @@ fun buildSharedGraph(
             lyricsShareFontLibraryPlatformService = runtimeServices.lyricsShareFontLibraryPlatformService,
             lyricsShareFontPreferencesStore = runtimeServices.lyricsShareFontPreferencesStore,
             vlcPathPickerPlatformService = runtimeServices.vlcPathPickerPlatformService,
+            desktopLyricsPlatformService = runtimeServices.desktopLyricsPlatformService,
         ),
         lyricsRepository = lyricsRepository,
         artworkCacheStore = runtimeServices.artworkCacheStore,
         playbackStatsReporter = playbackStatsReporter,
         audioTagGateway = runtimeServices.audioTagGateway,
         appDisplayScalePreset = runtimeServices.appDisplayPreferencesStore.appDisplayScalePreset,
+        desktopLyricsPlatformService = runtimeServices.desktopLyricsPlatformService,
         logger = runtimeServices.logger,
         scope = scope,
     )
