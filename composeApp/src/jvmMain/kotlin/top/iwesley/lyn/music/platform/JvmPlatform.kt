@@ -39,6 +39,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import top.iwesley.lyn.music.SharedRuntimeServices
 import top.iwesley.lyn.music.buildPlayerAppComponent
 import top.iwesley.lyn.music.buildSharedGraph
@@ -1217,8 +1219,11 @@ internal class JvmPlaybackGateway(
     private val mutableState = MutableStateFlow(PlaybackGatewayState())
     private val scope = CoroutineScope(SupervisorJob() + runtimeDispatcher)
     private val runtimeLock = Any()
+    private val nativePlaybackMutex = Mutex()
+    private val pendingInitialSeekLock = Any()
     private var runtimeState: JvmVlcRuntimeState = JvmVlcRuntimeState.Initializing
     private var pendingLoad: PendingVlcLoad? = null
+    private var pendingInitialSeek: PendingInitialSeek? = null
     private val sambaCacheDir = File(File(System.getProperty("user.home")), ".lynmusic/cache").apply {
         mkdirs()
     }
@@ -1300,7 +1305,7 @@ internal class JvmPlaybackGateway(
             override fun mediaParsedChanged(media: Media?, newStatus: MediaParsedStatus?) {
                 super.mediaParsedChanged(media, newStatus)
                 logger.info(VLC_LOG_TAG) {
-                    "mediaParsedChanged $newStatus ${media?.info()?.duration()}"
+                    "mediaParsedChanged $newStatus"
                 }
             }
         }
@@ -1309,54 +1314,26 @@ internal class JvmPlaybackGateway(
     private fun createMediaPlayerEventListener(): MediaPlayerEventAdapter {
         return object : MediaPlayerEventAdapter() {
             override fun mediaPlayerReady(mediaPlayer: MediaPlayer?) {
-                val activePlayer = mediaPlayer ?: return
                 val track = currentTrackForMetadata
                 val playbackTarget = currentPlaybackTarget ?: return
-                val parseAccepted = activePlayer.media().parsing().parse(3_000)
-                val parseStatus = activePlayer.media().parsing().status()
-                val info = activePlayer.media().info()
-                val metaData = activePlayer.media().meta().asMetaData()
                 mutableState.update {
                     it.copy(
-                        durationMs = info.duration().coerceAtLeast(0L),
-                        canSeek = activePlayer.status().isSeekable(),
-                        metadataTitle = resolveJvmVlcMetadataFallback(
-                            primaryValue = track?.title,
-                            vlcValue = sanitizeJvmVlcMetadataTitle(metaData.value(Meta.TITLE)),
-                            previousValue = it.metadataTitle,
-                        ),
-                        metadataArtistName = resolveJvmVlcMetadataFallback(
-                            primaryValue = track?.artistName,
-                            vlcValue = metaData.value(Meta.ARTIST)
-                                .ifBlank { metaData.value(Meta.ALBUM_ARTIST) },
-                            previousValue = it.metadataArtistName,
-                        ),
-                        metadataAlbumTitle = resolveJvmVlcMetadataFallback(
-                            primaryValue = track?.albumTitle,
-                            vlcValue = metaData.value(Meta.ALBUM),
-                            previousValue = it.metadataAlbumTitle,
-                        ),
+                        metadataTitle = track?.title?.takeIf { value -> value.isNotBlank() } ?: it.metadataTitle,
+                        metadataArtistName = track?.artistName?.takeIf { value -> value.isNotBlank() } ?: it.metadataArtistName,
+                        metadataAlbumTitle = track?.albumTitle?.takeIf { value -> value.isNotBlank() } ?: it.metadataAlbumTitle,
                         errorMessage = null,
                     )
                 }
                 logger.info(VLC_LOG_TAG) {
-                    buildVlcMetadataLogMessage(
-                        track = track,
-                        playbackTarget = playbackTarget,
-                        sourceReference = currentSourceReference,
-                        parseAccepted = parseAccepted,
-                        parseStatus = formatJvmVlcParseStatus(parseStatus),
-                        durationMs = info.duration(),
-                        metaData = metaData,
-                    )
+                    "media-player-ready track=${track?.id.orEmpty()} target=$playbackTarget source=${currentSourceReference.orEmpty()}"
                 }
+                schedulePendingInitialSeek("ready")
             }
 
             override fun playing(mediaPlayer: MediaPlayer?) {
                 mutableState.update {
                     it.copy(
                         isPlaying = true,
-                        canSeek = mediaPlayer?.status()?.isSeekable() ?: it.canSeek,
                         errorMessage = null,
                     )
                 }
@@ -1391,7 +1368,6 @@ internal class JvmPlaybackGateway(
                 mutableState.update {
                     it.copy(
                         durationMs = newLength.coerceAtLeast(0L),
-                        canSeek = mediaPlayer?.status()?.isSeekable() ?: it.canSeek,
                     )
                 }
             }
@@ -1399,6 +1375,9 @@ internal class JvmPlaybackGateway(
             override fun seekableChanged(mediaPlayer: MediaPlayer?, newSeekable: Int) {
                 mutableState.update {
                     it.copy(canSeek = newSeekable != 0)
+                }
+                if (newSeekable != 0) {
+                    schedulePendingInitialSeek("seekable")
                 }
             }
 
@@ -1447,7 +1426,6 @@ internal class JvmPlaybackGateway(
                 if (!runtimeAvailable) {
                     initializedRuntime = null
                 }
-                initializedRuntime?.setVolume((mutableState.value.volume.coerceIn(0f, 1f) * 100).roundToInt())
                 pending = pendingLoad
                 pendingLoad = null
                 runtimeState = initializedRuntime?.let { JvmVlcRuntimeState.Ready(it) }
@@ -1469,6 +1447,13 @@ internal class JvmPlaybackGateway(
         }
         logger.info(VLC_LOG_TAG) {
             "native-discovery autoDetectedPath=${autoDetectedPath.orEmpty()} manualPath=${result.manualPath.orEmpty()} effectivePath=${result.effectivePath.orEmpty()}"
+        }
+        if (activeRuntime != null) {
+            nativePlaybackMutex.withLock {
+                if (isCurrentRuntime(activeRuntime)) {
+                    activeRuntime.setVolume((mutableState.value.volume.coerceIn(0f, 1f) * 100).roundToInt())
+                }
+            }
         }
         if (activeRuntime == null) {
             logger.warn(VLC_LOG_TAG) {
@@ -1514,6 +1499,12 @@ internal class JvmPlaybackGateway(
         startPositionMs: Long,
         loadToken: PlaybackLoadToken,
     ) {
+        if (!loadToken.isCurrent()) {
+            logger.debug(VLC_LOG_TAG) {
+                "load-discarded-stale request=${loadToken.requestId} track=${track.id} before-prepare"
+            }
+            return
+        }
         val pending = PendingVlcLoad(
             track = track,
             playWhenReady = playWhenReady,
@@ -1531,6 +1522,12 @@ internal class JvmPlaybackGateway(
 
             JvmVlcLoadDecision.Initializing -> handleVlcInitializingLoad(pending)
             JvmVlcLoadDecision.Unavailable -> {
+                if (!loadToken.isCurrent()) {
+                    logger.debug(VLC_LOG_TAG) {
+                        "load-discarded-stale request=${loadToken.requestId} track=${track.id} unavailable"
+                    }
+                    return
+                }
                 handleVlcUnavailable(
                     action = "load",
                     positionMs = startPositionMs,
@@ -1554,12 +1551,14 @@ internal class JvmPlaybackGateway(
         startPositionMs: Long,
         loadToken: PlaybackLoadToken,
     ) {
+        var initialSeekForLoad: PendingInitialSeek? = null
         try {
-            runCatching { runtime.stop() }
-            currentCallbackMedia = null
-            currentPlaybackTarget = null
-            currentSourceReference = null
-            currentTrackForMetadata = track
+            if (!loadToken.isCurrent()) {
+                logger.debug(VLC_LOG_TAG) {
+                    "load-discarded-stale request=${loadToken.requestId} track=${track.id} before-resolve"
+                }
+                return
+            }
             val offlineTarget = resolveJvmOfflinePlaybackPath(database, track)
             val webDavTarget = if (offlineTarget == null) resolveJvmWebDavPlaybackTarget(
                 database = database,
@@ -1610,33 +1609,83 @@ internal class JvmPlaybackGateway(
                 sambaTarget != null -> buildJvmSambaPlaybackTarget(track.id)
                 else -> sourceReference
             }
-            currentPlaybackTarget = playbackTarget
-            currentSourceReference = sourceReference
-            currentCallbackMedia = webDavTarget?.media ?: sambaTarget?.media
-            mutableState.update {
-                it.copy(
-                    isPlaying = playWhenReady,
-                    positionMs = 0L,
-                    durationMs = 0L,
-                    canSeek = false,
-                    metadataTitle = null,
-                    metadataArtistName = null,
-                    metadataAlbumTitle = null,
-                    currentNavidromeAudioQuality = currentNavidromeAudioQuality,
-                    errorMessage = null,
-                )
-            }
             val playbackMedia = when {
                 webDavTarget != null -> JvmVlcPlaybackMedia.Callback(webDavTarget.media)
                 sambaTarget != null -> JvmVlcPlaybackMedia.Callback(sambaTarget.media)
                 else -> JvmVlcPlaybackMedia.Source(actualPlaybackSource)
             }
-            val started = if (playWhenReady) {
-                runtime.start(playbackMedia)
-            } else {
-                runtime.startPaused(playbackMedia)
+            var loadSkipped = false
+            val started = nativePlaybackMutex.withLock {
+                if (!loadToken.isCurrent()) {
+                    logger.debug(VLC_LOG_TAG) {
+                        "load-discarded-stale request=${loadToken.requestId} track=${track.id} before-native"
+                    }
+                    loadSkipped = true
+                    return@withLock true
+                }
+                if (!isCurrentRuntime(runtime)) {
+                    logger.debug(VLC_LOG_TAG) {
+                        "load-discarded-released request=${loadToken.requestId} track=${track.id}"
+                    }
+                    loadSkipped = true
+                    return@withLock true
+                }
+                runCatching { runtime.stop() }
+                if (!loadToken.isCurrent()) {
+                    logger.debug(VLC_LOG_TAG) {
+                        "load-discarded-stale request=${loadToken.requestId} track=${track.id} after-stop"
+                    }
+                    loadSkipped = true
+                    return@withLock true
+                }
+                if (!isCurrentRuntime(runtime)) {
+                    logger.debug(VLC_LOG_TAG) {
+                        "load-discarded-released request=${loadToken.requestId} track=${track.id} after-stop"
+                    }
+                    loadSkipped = true
+                    return@withLock true
+                }
+                currentCallbackMedia = null
+                currentPlaybackTarget = null
+                currentSourceReference = null
+                currentTrackForMetadata = track
+                currentPlaybackTarget = playbackTarget
+                currentSourceReference = sourceReference
+                currentCallbackMedia = webDavTarget?.media ?: sambaTarget?.media
+                mutableState.update {
+                    it.copy(
+                        isPlaying = playWhenReady,
+                        positionMs = 0L,
+                        durationMs = 0L,
+                        canSeek = false,
+                        metadataTitle = null,
+                        metadataArtistName = null,
+                        metadataAlbumTitle = null,
+                        currentNavidromeAudioQuality = currentNavidromeAudioQuality,
+                        errorMessage = null,
+                    )
+                }
+                initialSeekForLoad = if (startPositionMs > 0) {
+                    PendingInitialSeek(
+                        runtime = runtime,
+                        trackId = track.id,
+                        sourceReference = sourceReference,
+                        positionMs = startPositionMs,
+                        loadToken = loadToken,
+                    )
+                } else {
+                    null
+                }
+                initialSeekForLoad?.let(::replacePendingInitialSeek) ?: clearPendingInitialSeek()
+                if (playWhenReady) {
+                    runtime.start(playbackMedia)
+                } else {
+                    runtime.startPaused(playbackMedia)
+                }
             }
+            if (loadSkipped) return
             if (!started) {
+                initialSeekForLoad?.let(::clearPendingInitialSeek)
                 logger.error(VLC_LOG_TAG) {
                     "start-failed target=$playbackTarget source=$sourceReference playWhenReady=$playWhenReady recentLogs=${recentVlcLogSummary()}"
                 }
@@ -1659,16 +1708,13 @@ internal class JvmPlaybackGateway(
                             metadataArtistName = metadata.artistName?.takeIf { value -> value.isNotBlank() } ?: it.metadataArtistName,
                             metadataAlbumTitle = metadata.albumTitle?.takeIf { value -> value.isNotBlank() } ?: it.metadataAlbumTitle,
                             durationMs = metadata.durationMs.takeIf { value -> value > 0L } ?: it.durationMs,
-                            canSeek = runtime.canSeek(),
                         )
                     }
                 }
             }
-            if (startPositionMs > 0) {
-                runtime.setTime(startPositionMs)
-            }
         } catch (throwable: Throwable) {
             if (throwable is CancellationException) throw throwable
+            initialSeekForLoad?.let(::clearPendingInitialSeek)
             logger.error(VLC_LOG_TAG, throwable) {
                 "load-failed track=${track.id} locator=${track.mediaLocator} playWhenReady=$playWhenReady startPositionMs=$startPositionMs target=${currentPlaybackTarget.orEmpty()} source=${currentSourceReference.orEmpty()}"
             }
@@ -1688,7 +1734,11 @@ internal class JvmPlaybackGateway(
 
     override suspend fun play() {
         when (val runtimeState = preparePlay()) {
-            is JvmVlcRuntimeState.Ready -> runtimeState.runtime.play()
+            is JvmVlcRuntimeState.Ready -> nativePlaybackMutex.withLock {
+                if (isCurrentRuntime(runtimeState.runtime)) {
+                    runtimeState.runtime.play()
+                }
+            }
             JvmVlcRuntimeState.Initializing -> handleVlcInitializingAction()
             JvmVlcRuntimeState.Unavailable -> handleVlcUnavailable(action = "play")
             JvmVlcRuntimeState.Released -> Unit
@@ -1697,7 +1747,11 @@ internal class JvmPlaybackGateway(
 
     override suspend fun pause() {
         when (val runtimeState = preparePause()) {
-            is JvmVlcRuntimeState.Ready -> runtimeState.runtime.pause()
+            is JvmVlcRuntimeState.Ready -> nativePlaybackMutex.withLock {
+                if (isCurrentRuntime(runtimeState.runtime)) {
+                    runtimeState.runtime.pause()
+                }
+            }
             JvmVlcRuntimeState.Initializing,
             JvmVlcRuntimeState.Unavailable,
             JvmVlcRuntimeState.Released -> mutableState.update { it.copy(isPlaying = false, errorMessage = null) }
@@ -1706,11 +1760,15 @@ internal class JvmPlaybackGateway(
 
     override suspend fun seekTo(positionMs: Long) {
         when (val runtimeState = prepareSeek(positionMs)) {
-            is JvmVlcRuntimeState.Ready -> {
+            is JvmVlcRuntimeState.Ready -> nativePlaybackMutex.withLock {
+                if (!isCurrentRuntime(runtimeState.runtime)) {
+                    return@withLock
+                }
                 if (!runtimeState.runtime.canSeek()) {
                     mutableState.update { it.copy(canSeek = false) }
-                    return
+                    return@withLock
                 }
+                clearPendingInitialSeek()
                 runtimeState.runtime.setTime(positionMs)
             }
 
@@ -1728,7 +1786,13 @@ internal class JvmPlaybackGateway(
         val runtime = synchronized(runtimeLock) {
             (runtimeState as? JvmVlcRuntimeState.Ready)?.runtime
         }
-        runtime?.setVolume((normalized * 100).roundToInt())
+        if (runtime != null) {
+            nativePlaybackMutex.withLock {
+                if (isCurrentRuntime(runtime)) {
+                    runtime.setVolume((normalized * 100).roundToInt())
+                }
+            }
+        }
         mutableState.update { it.copy(volume = normalized) }
     }
 
@@ -1743,9 +1807,89 @@ internal class JvmPlaybackGateway(
         currentCallbackMedia = null
         currentPlaybackTarget = null
         currentSourceReference = null
-        runtime?.removeLogListener(nativeLogListener)
-        runtime?.release()
+        clearPendingInitialSeek()
+        if (runtime != null) {
+            nativePlaybackMutex.withLock {
+                runtime.removeLogListener(nativeLogListener)
+                runtime.release()
+            }
+        }
         scope.cancel()
+    }
+
+    private fun isCurrentRuntime(runtime: JvmVlcPlaybackRuntime): Boolean {
+        return synchronized(runtimeLock) {
+            (runtimeState as? JvmVlcRuntimeState.Ready)?.runtime === runtime
+        }
+    }
+
+    private fun replacePendingInitialSeek(pending: PendingInitialSeek) {
+        synchronized(pendingInitialSeekLock) {
+            pendingInitialSeek = pending
+        }
+    }
+
+    private fun clearPendingInitialSeek(pending: PendingInitialSeek? = null) {
+        synchronized(pendingInitialSeekLock) {
+            if (pending == null || pendingInitialSeek === pending) {
+                pendingInitialSeek = null
+            }
+        }
+    }
+
+    private fun currentPendingInitialSeek(): PendingInitialSeek? {
+        return synchronized(pendingInitialSeekLock) { pendingInitialSeek }
+    }
+
+    private fun isPendingInitialSeekActive(pending: PendingInitialSeek): Boolean {
+        return synchronized(pendingInitialSeekLock) { pendingInitialSeek === pending }
+    }
+
+    private fun schedulePendingInitialSeek(trigger: String) {
+        val pending = currentPendingInitialSeek() ?: return
+        scope.launch {
+            applyPendingInitialSeek(pending, trigger)
+        }
+    }
+
+    private suspend fun applyPendingInitialSeek(pending: PendingInitialSeek, trigger: String) {
+        try {
+            if (!pending.loadToken.isCurrent()) {
+                clearPendingInitialSeek(pending)
+                return
+            }
+            if (!isPendingInitialSeekActive(pending)) return
+            if (currentTrackForMetadata?.id != pending.trackId || currentSourceReference != pending.sourceReference) {
+                clearPendingInitialSeek(pending)
+                return
+            }
+            nativePlaybackMutex.withLock {
+                if (!isPendingInitialSeekActive(pending)) return@withLock
+                if (!pending.loadToken.isCurrent()) {
+                    clearPendingInitialSeek(pending)
+                    return@withLock
+                }
+                if (!isCurrentRuntime(pending.runtime)) {
+                    clearPendingInitialSeek(pending)
+                    return@withLock
+                }
+                if (currentTrackForMetadata?.id != pending.trackId || currentSourceReference != pending.sourceReference) {
+                    clearPendingInitialSeek(pending)
+                    return@withLock
+                }
+                pending.runtime.setTime(pending.positionMs)
+                clearPendingInitialSeek(pending)
+                logger.debug(VLC_LOG_TAG) {
+                    "initial-seek-applied trigger=$trigger track=${pending.trackId} source=${pending.sourceReference} positionMs=${pending.positionMs}"
+                }
+            }
+        } catch (throwable: Throwable) {
+            if (throwable is CancellationException) throw throwable
+            clearPendingInitialSeek(pending)
+            logger.warn(VLC_LOG_TAG) {
+                "initial-seek-failed trigger=$trigger track=${pending.trackId} positionMs=${pending.positionMs} message=${throwable.message.orEmpty()}"
+            }
+        }
     }
 
     private fun prepareLoad(pending: PendingVlcLoad): JvmVlcLoadDecision {
@@ -1805,6 +1949,12 @@ internal class JvmPlaybackGateway(
     }
 
     private fun handleVlcInitializingLoad(pending: PendingVlcLoad) {
+        if (!pending.loadToken.isCurrent()) {
+            logger.debug(VLC_LOG_TAG) {
+                "load-discarded-stale request=${pending.loadToken.requestId} track=${pending.track.id} initializing"
+            }
+            return
+        }
         logger.info(VLC_LOG_TAG) {
             "load-pending reason=vlc-native-initializing track=${pending.track.id} playWhenReady=${pending.playWhenReady}"
         }
@@ -2013,6 +2163,14 @@ private data class PendingVlcLoad(
     val loadToken: PlaybackLoadToken,
 )
 
+private data class PendingInitialSeek(
+    val runtime: JvmVlcPlaybackRuntime,
+    val trackId: String,
+    val sourceReference: String,
+    val positionMs: Long,
+    val loadToken: PlaybackLoadToken,
+)
+
 private class LibVlcPlaybackRuntime(
     private val factory: MediaPlayerFactory,
     private val mediaPlayer: MediaPlayer,
@@ -2045,17 +2203,22 @@ private class LibVlcPlaybackRuntime(
     }
 
     override fun start(media: JvmVlcPlaybackMedia): Boolean {
-        return when (media) {
-            is JvmVlcPlaybackMedia.Source -> mediaPlayer.media().start(media.value)
-            is JvmVlcPlaybackMedia.Callback -> mediaPlayer.media().start(media.value)
-        }
+        return prepareAndPlay(media)
     }
 
     override fun startPaused(media: JvmVlcPlaybackMedia): Boolean {
-        return when (media) {
-            is JvmVlcPlaybackMedia.Source -> mediaPlayer.media().startPaused(media.value)
-            is JvmVlcPlaybackMedia.Callback -> mediaPlayer.media().startPaused(media.value)
+        return prepareAndPlay(media, VLC_START_PAUSED_OPTION)
+    }
+
+    private fun prepareAndPlay(media: JvmVlcPlaybackMedia, vararg options: String): Boolean {
+        val prepared = when (media) {
+            is JvmVlcPlaybackMedia.Source -> mediaPlayer.media().prepare(media.value, *options)
+            is JvmVlcPlaybackMedia.Callback -> mediaPlayer.media().prepare(media.value, *options)
         }
+        if (prepared) {
+            mediaPlayer.controls().play()
+        }
+        return prepared
     }
 
     override fun play() {
@@ -2267,6 +2430,7 @@ private const val LOCAL_IMPORT_LOG_TAG = "LocalImport"
 private const val VLC_LOG_TAG = "VLC"
 private const val DESKTOP_VLC_UNAVAILABLE_MESSAGE = "未检测到 VLC，请安装或在设置手动选择 VLC 路径。"
 private const val DESKTOP_VLC_INITIALIZING_MESSAGE = "正在初始化 VLC, 用户也可能没有安装 VLC 播放器..."
+private const val VLC_START_PAUSED_OPTION = "start-paused"
 
 private fun scanFailureReason(throwable: Throwable): String {
     return throwable.message?.takeIf { it.isNotBlank() }

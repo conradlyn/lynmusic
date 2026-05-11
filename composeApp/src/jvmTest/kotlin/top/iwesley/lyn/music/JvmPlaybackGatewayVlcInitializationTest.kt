@@ -2,6 +2,10 @@ package top.iwesley.lyn.music
 
 import androidx.room.Room
 import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.io.path.absolutePathString
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -11,7 +15,10 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -106,6 +113,12 @@ class JvmPlaybackGatewayVlcInitializationTest {
             waitForStartCalls(runtime)
 
             assertEquals(listOf(RuntimeStartCall("file:///music/track-1.mp3", playWhenReady = true)), runtime.startCalls)
+            assertTrue(runtime.seekCalls.isEmpty())
+            runtime.emitPlaying()
+            advanceUntilIdle()
+            assertTrue(runtime.seekCalls.isEmpty())
+            runtime.emitSeekableChanged()
+            advanceUntilIdle()
             assertEquals(listOf(2_500L), runtime.seekCalls)
             assertNull(gateway.state.value.errorMessage)
             assertEquals("/auto/vlc/lib", desktopPrefs.desktopVlcAutoDetectedPath.value)
@@ -240,6 +253,180 @@ class JvmPlaybackGatewayVlcInitializationTest {
     }
 
     @Test
+    fun `stale ready load does not touch vlc runtime`() = runTest {
+        val database = createVlcGatewayTestDatabase()
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+        val runtime = FakeVlcPlaybackRuntime()
+        val currentRequestId = AtomicLong(2L)
+        val gateway = createGateway(
+            database = database,
+            runtimeDispatcher = dispatcher,
+            runtimeInitializer = {
+                JvmVlcRuntimeInitializationResult(
+                    runtime = runtime,
+                    autoDetectedPath = "/auto/vlc/lib",
+                    manualPath = null,
+                    effectivePath = "/auto/vlc/lib",
+                )
+            },
+        )
+
+        try {
+            advanceUntilIdle()
+
+            gateway.load(
+                track = sampleVlcGatewayTrack("track-1"),
+                playWhenReady = true,
+                loadToken = PlaybackLoadToken(1L) { currentRequestId.get() == 1L },
+            )
+
+            assertEquals(0, runtime.stopCallCount)
+            assertTrue(runtime.startCalls.isEmpty())
+        } finally {
+            gateway.release()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `pending initial seek is ignored after load token becomes stale`() = runTest {
+        val database = createVlcGatewayTestDatabase()
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+        val runtime = FakeVlcPlaybackRuntime()
+        val currentRequestId = AtomicLong(1L)
+        val gateway = createGateway(
+            database = database,
+            runtimeDispatcher = dispatcher,
+            runtimeInitializer = {
+                JvmVlcRuntimeInitializationResult(
+                    runtime = runtime,
+                    autoDetectedPath = "/auto/vlc/lib",
+                    manualPath = null,
+                    effectivePath = "/auto/vlc/lib",
+                )
+            },
+        )
+
+        try {
+            advanceUntilIdle()
+
+            gateway.load(
+                track = sampleVlcGatewayTrack("track-1"),
+                playWhenReady = true,
+                startPositionMs = 2_500L,
+                loadToken = PlaybackLoadToken(1L) { currentRequestId.get() == 1L },
+            )
+
+            assertEquals(listOf(RuntimeStartCall("file:///music/track-1.mp3", playWhenReady = true)), runtime.startCalls)
+            assertTrue(runtime.seekCalls.isEmpty())
+
+            currentRequestId.set(2L)
+            runtime.emitSeekableChanged()
+            advanceUntilIdle()
+
+            assertTrue(runtime.seekCalls.isEmpty())
+        } finally {
+            gateway.release()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `load that becomes stale while stopping does not start stale media`() = runTest {
+        val database = createVlcGatewayTestDatabase()
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+        val runtime = FakeVlcPlaybackRuntime().apply {
+            blockStopCallNumber = 1
+        }
+        val currentRequestId = AtomicLong(1L)
+        val gateway = createGateway(
+            database = database,
+            runtimeDispatcher = dispatcher,
+            runtimeInitializer = {
+                JvmVlcRuntimeInitializationResult(
+                    runtime = runtime,
+                    autoDetectedPath = "/auto/vlc/lib",
+                    manualPath = null,
+                    effectivePath = "/auto/vlc/lib",
+                )
+            },
+        )
+
+        try {
+            advanceUntilIdle()
+
+            val firstLoad = async(Dispatchers.Default) {
+                gateway.load(
+                    track = sampleVlcGatewayTrack("track-1"),
+                    playWhenReady = true,
+                    loadToken = PlaybackLoadToken(1L) { currentRequestId.get() == 1L },
+                )
+            }
+            assertTrue(runtime.blockedStopEntered.await(2, TimeUnit.SECONDS))
+
+            currentRequestId.set(2L)
+            val secondLoad = async(Dispatchers.Default) {
+                gateway.load(
+                    track = sampleVlcGatewayTrack("track-2"),
+                    playWhenReady = true,
+                    loadToken = PlaybackLoadToken(2L) { currentRequestId.get() == 2L },
+                )
+            }
+            Thread.sleep(50L)
+            currentRequestId.set(3L)
+            runtime.releaseBlockedStop.countDown()
+
+            awaitAll(firstLoad, secondLoad)
+
+            assertEquals(1, runtime.stopCallCount)
+            assertTrue(runtime.startCalls.isEmpty())
+        } finally {
+            runtime.releaseBlockedStop.countDown()
+            gateway.release()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `concurrent ready loads serialize vlc runtime calls`() = runTest {
+        val database = createVlcGatewayTestDatabase()
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+        val runtime = FakeVlcPlaybackRuntime(nativeCallDelayMs = 25L)
+        val gateway = createGateway(
+            database = database,
+            runtimeDispatcher = dispatcher,
+            runtimeInitializer = {
+                JvmVlcRuntimeInitializationResult(
+                    runtime = runtime,
+                    autoDetectedPath = "/auto/vlc/lib",
+                    manualPath = null,
+                    effectivePath = "/auto/vlc/lib",
+                )
+            },
+        )
+
+        try {
+            advanceUntilIdle()
+
+            awaitAll(
+                async(Dispatchers.Default) {
+                    gateway.load(sampleVlcGatewayTrack("track-1"), playWhenReady = true)
+                },
+                async(Dispatchers.Default) {
+                    gateway.load(sampleVlcGatewayTrack("track-2"), playWhenReady = true)
+                },
+            )
+
+            assertFalse(runtime.concurrentNativeCallDetected)
+            assertEquals(2, runtime.stopCallCount)
+            assertEquals(2, runtime.startCalls.size)
+        } finally {
+            gateway.release()
+            database.close()
+        }
+    }
+
+    @Test
     fun `release before late vlc initialization result releases runtime without binding listeners`() = runTest {
         val database = createVlcGatewayTestDatabase()
         val dispatcher = StandardTestDispatcher(testScheduler)
@@ -338,14 +525,23 @@ private data class RuntimeStartCall(
 
 private class FakeVlcPlaybackRuntime(
     override val nativeLibraryPath: String? = "/auto/vlc/lib",
+    private val nativeCallDelayMs: Long = 0L,
 ) : JvmVlcPlaybackRuntime {
     val startCalls = mutableListOf<RuntimeStartCall>()
     val seekCalls = mutableListOf<Long>()
+    val blockedStopEntered = CountDownLatch(1)
+    val releaseBlockedStop = CountDownLatch(1)
+    var blockStopCallNumber: Int? = null
+    var stopCallCount = 0
     var released = false
     var logListenerCount = 0
     var mediaEventListenerCount = 0
     var mediaPlayerEventListenerCount = 0
+    @Volatile
+    var concurrentNativeCallDetected = false
     private var seekable = true
+    private val activeNativeCallCount = AtomicInteger(0)
+    private val mediaPlayerEventListeners = mutableListOf<MediaPlayerEventAdapter>()
 
     override fun addLogListener(listener: LogEventListener) {
         logListenerCount += 1
@@ -361,34 +557,69 @@ private class FakeVlcPlaybackRuntime(
 
     override fun addMediaPlayerEventListener(listener: MediaPlayerEventAdapter) {
         mediaPlayerEventListenerCount += 1
+        mediaPlayerEventListeners += listener
     }
 
-    override fun stop() = Unit
+    override fun stop() = recordNativeCall {
+        stopCallCount += 1
+        if (stopCallCount == blockStopCallNumber) {
+            blockedStopEntered.countDown()
+            releaseBlockedStop.await(2, TimeUnit.SECONDS)
+        }
+    }
 
-    override fun start(media: JvmVlcPlaybackMedia): Boolean {
+    override fun start(media: JvmVlcPlaybackMedia): Boolean = recordNativeCall {
         startCalls += RuntimeStartCall(media.sourceDescription(), playWhenReady = true)
-        return true
+        true
     }
 
-    override fun startPaused(media: JvmVlcPlaybackMedia): Boolean {
+    override fun startPaused(media: JvmVlcPlaybackMedia): Boolean = recordNativeCall {
         startCalls += RuntimeStartCall(media.sourceDescription(), playWhenReady = false)
-        return true
+        true
     }
 
-    override fun play() = Unit
+    override fun play() = recordNativeCall { Unit }
 
-    override fun pause() = Unit
+    override fun pause() = recordNativeCall { Unit }
 
-    override fun canSeek(): Boolean = seekable
+    override fun canSeek(): Boolean = recordNativeCall { seekable }
 
-    override fun setTime(positionMs: Long) {
+    override fun setTime(positionMs: Long) = recordNativeCall {
         seekCalls += positionMs
     }
 
-    override fun setVolume(volumePercent: Int) = Unit
+    override fun setVolume(volumePercent: Int) = recordNativeCall { Unit }
 
     override fun release() {
-        released = true
+        recordNativeCall {
+            released = true
+        }
+    }
+
+    fun emitPlaying() {
+        mediaPlayerEventListeners.toList().forEach { listener ->
+            listener.playing(null)
+        }
+    }
+
+    fun emitSeekableChanged(newSeekable: Int = 1) {
+        mediaPlayerEventListeners.toList().forEach { listener ->
+            listener.seekableChanged(null, newSeekable)
+        }
+    }
+
+    private fun <T> recordNativeCall(block: () -> T): T {
+        if (activeNativeCallCount.incrementAndGet() > 1) {
+            concurrentNativeCallDetected = true
+        }
+        return try {
+            if (nativeCallDelayMs > 0L) {
+                Thread.sleep(nativeCallDelayMs)
+            }
+            block()
+        } finally {
+            activeNativeCallCount.decrementAndGet()
+        }
     }
 }
 
