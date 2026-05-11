@@ -16,7 +16,15 @@ class JvmAudioImportSupportTest {
     }
 
     @Test
-    fun `jvm import classification marks extra scanned formats unsupported`() {
+    fun `jvm import classification supports wma`() {
+        assertEquals(
+            NonNavidromeAudioScanResult.IMPORT_SUPPORTED,
+            classifyJvmScannedAudioFile("good.wma"),
+        )
+    }
+
+    @Test
+    fun `jvm import classification marks other extra scanned formats unsupported`() {
         assertEquals(
             NonNavidromeAudioScanResult.IMPORT_UNSUPPORTED,
             classifyJvmScannedAudioFile("bad.ogg"),
@@ -24,10 +32,6 @@ class JvmAudioImportSupportTest {
         assertEquals(
             NonNavidromeAudioScanResult.IMPORT_UNSUPPORTED,
             classifyJvmScannedAudioFile("bad.opus"),
-        )
-        assertEquals(
-            NonNavidromeAudioScanResult.IMPORT_UNSUPPORTED,
-            classifyJvmScannedAudioFile("bad.wma"),
         )
         assertEquals(
             NonNavidromeAudioScanResult.IMPORT_UNSUPPORTED,
