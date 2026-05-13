@@ -1,8 +1,12 @@
 package top.iwesley.lyn.music.core.model
 
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
+
 interface DesktopLyricsPlatformService {
     val isSupported: Boolean
     val consumesAppLyricsUpdates: Boolean
+    val closeRequests: Flow<Unit>
 
     fun hasOverlayPermission(): Boolean
     suspend fun requestOverlayPermission(): Boolean
@@ -15,6 +19,7 @@ interface DesktopLyricsPlatformService {
 object UnsupportedDesktopLyricsPlatformService : DesktopLyricsPlatformService {
     override val isSupported: Boolean = false
     override val consumesAppLyricsUpdates: Boolean = false
+    override val closeRequests: Flow<Unit> = emptyFlow()
 
     override fun hasOverlayPermission(): Boolean = false
 

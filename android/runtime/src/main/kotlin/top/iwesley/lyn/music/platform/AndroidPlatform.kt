@@ -548,6 +548,10 @@ internal class AndroidAppPreferencesStore(
         preferences.registerOnSharedPreferenceChangeListener(preferenceChangeListener)
     }
 
+    fun close() {
+        preferences.unregisterOnSharedPreferenceChangeListener(preferenceChangeListener)
+    }
+
     override val useSambaCache: StateFlow<Boolean> = mutableUseSambaCache.asStateFlow()
     override val playbackVolume: StateFlow<Float> = mutablePlaybackVolume.asStateFlow()
     override val showCompactPlayerLyrics: StateFlow<Boolean> = mutableShowCompactPlayerLyrics.asStateFlow()

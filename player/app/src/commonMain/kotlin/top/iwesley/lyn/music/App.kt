@@ -62,6 +62,7 @@ import top.iwesley.lyn.music.feature.player.resolveDesktopLyricsOverlayText
 import top.iwesley.lyn.music.feature.playlists.PlaylistsIntent
 import top.iwesley.lyn.music.feature.playlists.PlaylistsStore
 import top.iwesley.lyn.music.feature.settings.SettingsEffect
+import top.iwesley.lyn.music.feature.settings.SettingsIntent
 import top.iwesley.lyn.music.feature.settings.SettingsStore
 import top.iwesley.lyn.music.feature.tags.MusicTagsStore
 import top.iwesley.lyn.music.ui.LynMusicTheme
@@ -170,7 +171,13 @@ private fun CoroutineScope.launchDesktopLyricsSync(
     playerStore: PlayerStore,
     desktopLyricsPlatformService: DesktopLyricsPlatformService,
 ) {
-    if (!desktopLyricsPlatformService.isSupported || !desktopLyricsPlatformService.consumesAppLyricsUpdates) return
+    if (!desktopLyricsPlatformService.isSupported) return
+    launch {
+        desktopLyricsPlatformService.closeRequests.collect {
+            settingsStore.dispatch(SettingsIntent.ShowDesktopLyricsChanged(false))
+        }
+    }
+    if (!desktopLyricsPlatformService.consumesAppLyricsUpdates) return
     launch {
         var lastEnabled = false
         var lastText: String? = null

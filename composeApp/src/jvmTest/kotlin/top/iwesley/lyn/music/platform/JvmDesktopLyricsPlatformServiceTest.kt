@@ -3,6 +3,9 @@ package top.iwesley.lyn.music.platform
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 
 class JvmDesktopLyricsPlatformServiceTest {
@@ -36,12 +39,24 @@ class JvmDesktopLyricsPlatformServiceTest {
 
         assertEquals(1, adapter.hideCalls)
     }
+
+    @Test
+    fun `close request from window is exposed as service flow`() = runTest {
+        val adapter = RecordingDesktopLyricsWindowAdapter()
+        val service = JvmDesktopLyricsPlatformService(adapter)
+        val request = async(start = CoroutineStart.UNDISPATCHED) { service.closeRequests.first() }
+
+        adapter.requestClose()
+
+        assertEquals(Unit, request.await())
+    }
 }
 
 private class RecordingDesktopLyricsWindowAdapter : JvmDesktopLyricsOverlayWindowAdapter {
     val shownTexts = mutableListOf<String>()
     var hideCalls = 0
     var releaseCalls = 0
+    private var closeRequestHandler: (() -> Unit)? = null
 
     override fun showText(text: String) {
         shownTexts += text
@@ -53,5 +68,13 @@ private class RecordingDesktopLyricsWindowAdapter : JvmDesktopLyricsOverlayWindo
 
     override fun release() {
         releaseCalls += 1
+    }
+
+    override fun setCloseRequestHandler(handler: () -> Unit) {
+        closeRequestHandler = handler
+    }
+
+    fun requestClose() {
+        closeRequestHandler?.invoke()
     }
 }

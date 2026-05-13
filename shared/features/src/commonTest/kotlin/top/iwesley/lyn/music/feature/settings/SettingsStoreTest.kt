@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -160,6 +161,28 @@ class SettingsStoreTest {
         assertTrue(repository.currentShowDesktopLyrics())
         assertTrue(store.state.value.showDesktopLyrics)
         assertEquals(listOf(true), desktopLyricsService.enabledCalls)
+        scope.cancel()
+    }
+
+    @Test
+    fun `desktop lyrics toggle off disables service and hides overlay`() = runTest {
+        val repository = FakeSettingsRepository(showDesktopLyrics = true)
+        val desktopLyricsService = FakeDesktopLyricsPlatformService(permission = true)
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(
+            repository,
+            scope,
+            desktopLyricsPlatformService = desktopLyricsService,
+        )
+
+        advanceUntilIdle()
+        store.dispatch(SettingsIntent.ShowDesktopLyricsChanged(false))
+        advanceUntilIdle()
+
+        assertFalse(repository.currentShowDesktopLyrics())
+        assertFalse(store.state.value.showDesktopLyrics)
+        assertEquals(listOf(true, false), desktopLyricsService.enabledCalls)
+        assertTrue(desktopLyricsService.hidden)
         scope.cancel()
     }
 
@@ -1468,6 +1491,7 @@ private class FakeDesktopLyricsPlatformService(
     override val isSupported: Boolean = true,
     override val consumesAppLyricsUpdates: Boolean = false,
 ) : DesktopLyricsPlatformService {
+    override val closeRequests: Flow<Unit> = emptyFlow()
     val enabledCalls = mutableListOf<Boolean>()
     var permissionRequests = 0
         private set
