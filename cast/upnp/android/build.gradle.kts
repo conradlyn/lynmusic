@@ -8,6 +8,7 @@ plugins {
 android {
     namespace = "top.iwesley.lyn.music.cast.upnp.android"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
+    ndkVersion = libs.versions.android.ndk.get()
 
     defaultConfig {
         minSdk = libs.versions.android.minSdk.get().toInt()
