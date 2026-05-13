@@ -60,6 +60,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldColors
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -1890,6 +1891,7 @@ private fun RemoteSourceEditorDialog(
     onIntent: (ImportIntent) -> Unit,
 ) {
     val shellColors = mainShellColors
+    val appDensity = LocalDensity.current
     Dialog(
         onDismissRequest = {
             if (!isWorking) {
@@ -1898,188 +1900,198 @@ private fun RemoteSourceEditorDialog(
         },
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 20.dp, vertical = 24.dp),
-        ) {
-            MainShellElevatedCard(
+        CompositionLocalProvider(LocalDensity provides appDensity) {
+            Box(
                 modifier = Modifier
-                    .align(Alignment.Center)
-                    .then(
-                        if (constrainWidth) {
-                            Modifier
-                                .fillMaxWidth(0.72f)
-                                .widthIn(max = 372.dp)
-                        } else {
-                            Modifier.fillMaxWidth()
-                        },
-                    )
-                    .fillMaxHeight(0.6f),
-                shape = RoundedCornerShape(28.dp),
+                    .fillMaxSize()
+                    .padding(horizontal = 20.dp, vertical = 24.dp),
             ) {
-                Column(
+                MainShellElevatedCard(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .padding(24.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                        .align(Alignment.Center)
+                        .then(
+                            if (constrainWidth) {
+                                Modifier
+                                    .fillMaxWidth(0.72f)
+                                    .widthIn(max = 372.dp)
+                            } else {
+                                Modifier.fillMaxWidth()
+                            },
+                        )
+                        .fillMaxHeight(0.6f),
+                    shape = RoundedCornerShape(28.dp),
                 ) {
-                    Text(
-                        when (state.type) {
-                            ImportSourceType.SAMBA -> "编辑 Samba 来源"
-                            ImportSourceType.WEBDAV -> "编辑 WebDAV 来源"
-                            ImportSourceType.NAVIDROME -> "编辑 Navidrome 来源"
-                            ImportSourceType.LOCAL_FOLDER -> "编辑来源"
-                        },
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontWeight = FontWeight.Bold,
-                    )
                     Column(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f, fill = false)
-                            .heightIn(max = 372.dp)
-                            .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                            .fillMaxSize()
+                            .padding(24.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
-                        if (state.hasStoredCredential) {
-                            Text(
-                                "已保存凭据，密码留空会继续使用当前凭据。",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        ImeAwareOutlinedTextField(
-                            value = state.label,
-                            onValueChange = { onIntent(ImportIntent.RemoteSourceLabelChanged(it)) },
-                            label = { Text("名称") },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(18.dp),
-                            colors = fieldColors,
+                        Text(
+                            when (state.type) {
+                                ImportSourceType.SAMBA -> "编辑 Samba 来源"
+                                ImportSourceType.WEBDAV -> "编辑 WebDAV 来源"
+                                ImportSourceType.NAVIDROME -> "编辑 Navidrome 来源"
+                                ImportSourceType.LOCAL_FOLDER -> "编辑来源"
+                            },
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.Bold,
                         )
-                        when (state.type) {
-                            ImportSourceType.SAMBA -> {
-                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f, fill = false)
+                                .heightIn(max = 372.dp)
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            if (state.hasStoredCredential) {
+                                Text(
+                                    "已保存凭据，密码留空会继续使用当前凭据。",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            ImeAwareOutlinedTextField(
+                                value = state.label,
+                                onValueChange = { onIntent(ImportIntent.RemoteSourceLabelChanged(it)) },
+                                label = { Text("名称") },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(18.dp),
+                                colors = fieldColors,
+                            )
+                            when (state.type) {
+                                ImportSourceType.SAMBA -> {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                        ImeAwareOutlinedTextField(
+                                            value = state.server,
+                                            onValueChange = { onIntent(ImportIntent.RemoteSourceServerChanged(it)) },
+                                            label = { Text("服务器地址") },
+                                            modifier = Modifier.weight(1f),
+                                            shape = RoundedCornerShape(18.dp),
+                                            colors = fieldColors,
+                                        )
+                                        ImeAwareOutlinedTextField(
+                                            value = state.port,
+                                            onValueChange = { onIntent(ImportIntent.RemoteSourcePortChanged(it)) },
+                                            label = { Text("端口") },
+                                            modifier = Modifier.width(140.dp),
+                                            shape = RoundedCornerShape(18.dp),
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                            colors = fieldColors,
+                                        )
+                                    }
                                     ImeAwareOutlinedTextField(
-                                        value = state.server,
-                                        onValueChange = { onIntent(ImportIntent.RemoteSourceServerChanged(it)) },
-                                        label = { Text("服务器地址") },
-                                        modifier = Modifier.weight(1f),
+                                        value = state.path,
+                                        onValueChange = { onIntent(ImportIntent.RemoteSourcePathChanged(it)) },
+                                        label = { Text("路径（Share/子目录）") },
+                                        modifier = Modifier.fillMaxWidth(),
                                         shape = RoundedCornerShape(18.dp),
-                                        colors = fieldColors,
-                                    )
-                                    ImeAwareOutlinedTextField(
-                                        value = state.port,
-                                        onValueChange = { onIntent(ImportIntent.RemoteSourcePortChanged(it)) },
-                                        label = { Text("端口") },
-                                        modifier = Modifier.width(140.dp),
-                                        shape = RoundedCornerShape(18.dp),
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                         colors = fieldColors,
                                     )
                                 }
+
+                                ImportSourceType.WEBDAV,
+                                ImportSourceType.NAVIDROME,
+                                -> {
+                                    ImeAwareOutlinedTextField(
+                                        value = state.rootUrl,
+                                        onValueChange = { onIntent(ImportIntent.RemoteSourceRootUrlChanged(it)) },
+                                        label = {
+                                            Text(if (state.type == ImportSourceType.WEBDAV) "根 URL" else "服务器地址")
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(18.dp),
+                                        colors = fieldColors,
+                                    )
+                                }
+
+                                ImportSourceType.LOCAL_FOLDER -> Unit
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 ImeAwareOutlinedTextField(
-                                    value = state.path,
-                                    onValueChange = { onIntent(ImportIntent.RemoteSourcePathChanged(it)) },
-                                    label = { Text("路径（Share/子目录）") },
-                                    modifier = Modifier.fillMaxWidth(),
+                                    value = state.username,
+                                    onValueChange = { onIntent(ImportIntent.RemoteSourceUsernameChanged(it)) },
+                                    label = { Text("用户名") },
+                                    modifier = Modifier.weight(1f),
                                     shape = RoundedCornerShape(18.dp),
                                     colors = fieldColors,
                                 )
-                            }
-
-                            ImportSourceType.WEBDAV,
-                            ImportSourceType.NAVIDROME,
-                            -> {
                                 ImeAwareOutlinedTextField(
-                                    value = state.rootUrl,
-                                    onValueChange = { onIntent(ImportIntent.RemoteSourceRootUrlChanged(it)) },
+                                    value = state.password,
+                                    onValueChange = { onIntent(ImportIntent.RemoteSourcePasswordChanged(it)) },
                                     label = {
-                                        Text(if (state.type == ImportSourceType.WEBDAV) "根 URL" else "服务器地址")
+                                        Text(if (state.hasStoredCredential) "密码（留空沿用）" else "密码")
                                     },
-                                    modifier = Modifier.fillMaxWidth(),
+                                    modifier = Modifier.weight(1f),
                                     shape = RoundedCornerShape(18.dp),
                                     colors = fieldColors,
                                 )
                             }
-
-                            ImportSourceType.LOCAL_FOLDER -> Unit
+                            if (state.type == ImportSourceType.WEBDAV) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                ) {
+                                    Text("允许自签名证书", fontWeight = FontWeight.Medium)
+                                    Switch(
+                                        checked = state.allowInsecureTls,
+                                        onCheckedChange = { onIntent(ImportIntent.RemoteSourceAllowInsecureTlsChanged(it)) },
+                                        colors = SwitchDefaults.colors(
+                                            uncheckedThumbColor = MaterialTheme.colorScheme.background,
+                                            uncheckedBorderColor = shellColors.cardBorder,
+                                        ),
+                                    )
+                                }
+                            }
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            ImeAwareOutlinedTextField(
-                                value = state.username,
-                                onValueChange = { onIntent(ImportIntent.RemoteSourceUsernameChanged(it)) },
-                                label = { Text("用户名") },
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(18.dp),
-                                colors = fieldColors,
-                            )
-                            ImeAwareOutlinedTextField(
-                                value = state.password,
-                                onValueChange = { onIntent(ImportIntent.RemoteSourcePasswordChanged(it)) },
-                                label = {
-                                    Text(if (state.hasStoredCredential) "密码（留空沿用）" else "密码")
-                                },
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(18.dp),
-                                colors = fieldColors,
-                            )
-                        }
-                        if (state.type == ImportSourceType.WEBDAV) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            TextButton(
+                                onClick = onDismiss,
+                                enabled = !isWorking,
                             ) {
-                                Text("允许自签名证书", fontWeight = FontWeight.Medium)
-                                Switch(
-                                    checked = state.allowInsecureTls,
-                                    onCheckedChange = { onIntent(ImportIntent.RemoteSourceAllowInsecureTlsChanged(it)) },
-                                    colors = SwitchDefaults.colors(
-                                        uncheckedThumbColor = MaterialTheme.colorScheme.background,
-                                        uncheckedBorderColor = shellColors.cardBorder,
-                                    ),
+                                Text("取消")
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            OutlinedButton(
+                                onClick = { onIntent(ImportIntent.TestRemoteSource) },
+                                enabled = !isWorking,
+                            ) {
+                                Text(
+                                    text = "测试连接",
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
                             }
-                        }
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        TextButton(
-                            onClick = onDismiss,
-                            enabled = !isWorking,
-                        ) {
-                            Text("取消")
-                        }
-                        Spacer(Modifier.width(12.dp))
-                        OutlinedButton(
-                            onClick = { onIntent(ImportIntent.TestRemoteSource) },
-                            enabled = !isWorking,
-                        ) {
-                            Text("测试连接")
-                        }
-                        Spacer(Modifier.width(12.dp))
-                        Button(
-                            onClick = { onIntent(ImportIntent.SaveRemoteSource) },
-                            enabled = !isWorking,
-                        ) {
-                            if (isSavingScan) {
-                                ButtonLoadingIndicator()
-                                Spacer(Modifier.width(8.dp))
+                            Spacer(Modifier.width(12.dp))
+                            Button(
+                                onClick = { onIntent(ImportIntent.SaveRemoteSource) },
+                                enabled = !isWorking,
+                            ) {
+                                if (isSavingScan) {
+                                    ButtonLoadingIndicator()
+                                    Spacer(Modifier.width(8.dp))
+                                }
+                                Text(
+                                    text = if (isSavingScan) "重扫中" else "保存并重扫",
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
                             }
-                            Text(if (isSavingScan) "重扫中" else "保存并重扫")
                         }
                     }
                 }
-            }
-            testMessage?.let { message ->
-                ToastCard(
-                    message = message,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(horizontal = 20.dp, vertical = 24.dp),
-                )
+                testMessage?.let { message ->
+                    ToastCard(
+                        message = message,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(horizontal = 20.dp, vertical = 24.dp),
+                    )
+                }
             }
         }
     }
