@@ -13,6 +13,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -25,7 +26,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import top.iwesley.lyn.music.core.model.AppDisplayScalePreset
+import top.iwesley.lyn.music.core.model.AppThemeTextPalette
 import top.iwesley.lyn.music.core.model.effectiveAppDisplayDensity
+import top.iwesley.lyn.music.core.model.resolveAppThemeTextPalette
 import top.iwesley.lyn.music.feature.player.PlayerIntent
 import top.iwesley.lyn.music.feature.settings.SettingsIntent
 import top.iwesley.lyn.music.platform.AndroidExternalAudioOpenSupport
@@ -72,6 +75,7 @@ class MainActivity : ComponentActivity() {
             if (appComponent != null) {
                 val appDisplayScalePreset by appComponent.appDisplayScalePreset.collectAsState()
                 ProvideFixedAndroidComposeDensity(appDisplayScalePreset = appDisplayScalePreset) {
+                    AndroidMainShellSystemBars(appComponent)
                     App(appComponent)
                 }
             } else {
@@ -123,6 +127,34 @@ class MainActivity : ComponentActivity() {
             }
             component.playerStore.dispatch(PlayerIntent.PlayTransientTracks(tracks, 0))
         }
+    }
+}
+
+@Composable
+private fun MainActivity.AndroidMainShellSystemBars(
+    appComponent: LynMusicAppComponent,
+) {
+    val settingsState by appComponent.settingsStore.state.collectAsState()
+    val playerState by appComponent.playerStore.state.collectAsState()
+    val textPalette = remember(settingsState.selectedTheme, settingsState.textPalettePreferences) {
+        resolveAppThemeTextPalette(
+            themeId = settingsState.selectedTheme,
+            preferences = settingsState.textPalettePreferences,
+        )
+    }
+    val useDarkSystemBarIcons = !playerState.isExpanded && textPalette == AppThemeTextPalette.Black
+
+    SideEffect {
+        val transparent = Color.TRANSPARENT
+        val systemBarStyle = if (useDarkSystemBarIcons) {
+            SystemBarStyle.light(transparent, transparent)
+        } else {
+            SystemBarStyle.dark(transparent)
+        }
+        enableEdgeToEdge(
+            statusBarStyle = systemBarStyle,
+            navigationBarStyle = systemBarStyle,
+        )
     }
 }
 
