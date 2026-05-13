@@ -69,7 +69,19 @@ internal fun buildManageAllFilesAccessIntent(context: Context): Intent {
 }
 
 internal fun canResolveOpenDocumentTree(context: Context): Boolean {
-    return Intent(ACTION_OPEN_DOCUMENT_TREE).resolveActivity(context.packageManager) != null
+    val packageName = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+        .resolveActivity(context.packageManager)
+        ?.packageName
+    return isSupportedOpenDocumentTreePackage(packageName)
+}
+
+internal fun isSupportedOpenDocumentTreePackage(packageName: String?): Boolean {
+    val normalized = packageName
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+        ?: return false
+    return !normalized.equals(FRAMEWORK_PACKAGE_STUBS_PACKAGE, ignoreCase = true) &&
+        !normalized.contains(FRAMEWORK_PACKAGE_STUBS_MARKER, ignoreCase = true)
 }
 
 @Suppress("DEPRECATION")
@@ -186,4 +198,5 @@ private fun hasLegacyExternalStorageReadWriteAccess(context: Context): Boolean {
 private const val EXTERNAL_STORAGE_DOCUMENTS_AUTHORITY = "com.android.externalstorage.documents"
 private const val PRIMARY_VOLUME_ID = "primary"
 private const val STORAGE_ROOT_PATH = "/storage"
-private const val ACTION_OPEN_DOCUMENT_TREE = "android.intent.action.OPEN_DOCUMENT_TREE"
+private const val FRAMEWORK_PACKAGE_STUBS_PACKAGE = "com.android.tv.frameworkpackagestubs"
+private const val FRAMEWORK_PACKAGE_STUBS_MARKER = "frameworkpackagestubs"
