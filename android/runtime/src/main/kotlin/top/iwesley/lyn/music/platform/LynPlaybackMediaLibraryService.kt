@@ -1,6 +1,8 @@
 package top.iwesley.lyn.music.platform
 
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.annotation.OptIn
@@ -106,6 +108,11 @@ private class LynPlaybackServiceRuntime private constructor(
         LynMediaLibrarySessionCallback(this),
     )
         .setId(PLAYBACK_SESSION_ID)
+        .apply {
+            buildSessionActivityPendingIntent(service)?.let { pendingIntent ->
+                setSessionActivity(pendingIntent)
+            }
+        }
         .setBitmapLoader(
             LynMedia3ArtworkBitmapLoader(
                 context = service.applicationContext,
@@ -129,6 +136,21 @@ private class LynPlaybackServiceRuntime private constructor(
             repository.close()
         }
         serviceScope.cancel()
+    }
+
+    private fun buildSessionActivityPendingIntent(context: Context): PendingIntent? {
+        val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+            ?: context.packageManager.getLeanbackLaunchIntentForPackage(context.packageName)
+            ?: return null
+        intent.apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        return PendingIntent.getActivity(
+            context,
+            PLAYBACK_SESSION_ACTIVITY_REQUEST_CODE,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
     }
 
     fun <T> future(block: suspend () -> T): ListenableFuture<T> {
@@ -1075,6 +1097,7 @@ private const val PLAYBACK_SESSION_ID = "lynmusic-playback"
 private const val SERVICE_PLAYBACK_LOG_TAG = "Playback"
 private const val PLAYBACK_NOTIFICATION_ID = 3107
 private const val PLAYBACK_NOTIFICATION_CHANNEL_ID = "lynmusic.playback"
+private const val PLAYBACK_SESSION_ACTIVITY_REQUEST_CODE = 3108
 private const val MAX_SEARCH_RESULTS = 50
 private const val ALBUM_KEY_SEPARATOR = "\u001F"
 private const val LYN_ARTWORK_URI_SCHEME = "lynmusic-artwork"
