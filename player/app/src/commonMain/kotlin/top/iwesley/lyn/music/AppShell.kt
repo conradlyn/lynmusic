@@ -400,6 +400,7 @@ internal fun MobileShell(
                 onLibraryNavigationHandled = onLibraryNavigationHandled,
                 onOpenLibraryNavigationTarget = onOpenLibraryNavigationTarget,
                 onMobileEditorVisibilityChanged = onMobileEditorVisibilityChanged,
+                compact = true,
                 mobileLibraryHub = true,
                 onTabSelected = ::selectMobileTab,
                 modifier = Modifier.weight(1f),
@@ -581,6 +582,7 @@ internal fun DesktopShell(
                 libraryNavigationTarget = libraryNavigationTarget,
                 onLibraryNavigationHandled = onLibraryNavigationHandled,
                 onOpenLibraryNavigationTarget = onOpenLibraryNavigationTarget,
+                compact = false,
                 mobileLibraryHub = false,
                 onTabSelected = onTabSelected,
                 modifier = Modifier.weight(1f),
@@ -714,6 +716,7 @@ private fun TabContent(
     onLibraryNavigationHandled: () -> Unit = {},
     onOpenLibraryNavigationTarget: (LibraryNavigationTarget) -> Unit,
     onMobileEditorVisibilityChanged: (Boolean) -> Unit = {},
+    compact: Boolean,
     mobileLibraryHub: Boolean,
     onTabSelected: (AppTab) -> Unit,
     modifier: Modifier = Modifier,
@@ -797,6 +800,7 @@ private fun TabContent(
             platform = platform,
             state = importState,
             onImportIntent = onImportIntent,
+            compact = compact,
             modifier = modifier,
         )
 

@@ -29,7 +29,9 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.Checklist
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.CloudSync
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
@@ -1256,6 +1258,7 @@ internal fun MainShellAssistChip(
 internal fun SourceCard(
     state: top.iwesley.lyn.music.core.model.SourceWithStatus,
     enabled: Boolean,
+    compact: Boolean,
     onEdit: (() -> Unit)?,
     onToggleEnabled: () -> Unit,
     onRescan: (() -> Unit)?,
@@ -1303,49 +1306,16 @@ internal fun SourceCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Column(
-                    horizontalAlignment = Alignment.End,
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        onEdit?.let { edit ->
-                            OutlinedButton(onClick = edit, enabled = enabled) {
-                                Icon(Icons.Rounded.Tune, null)
-                                Spacer(Modifier.width(6.dp))
-                                Text("编辑")
-                            }
-                        }
-                        if (sourceEnabled) {
-                            onRescan?.let { rescan ->
-                                OutlinedButton(onClick = rescan, enabled = enabled) {
-                                    if (isRescanning) {
-                                        ButtonLoadingIndicator()
-                                    } else {
-                                        Icon(Icons.Rounded.Sync, null)
-                                    }
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(if (isRescanning) "重扫中" else "重扫")
-                                }
-                            }
-                        }
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = onToggleEnabled, enabled = enabled) {
-                            Icon(Icons.Rounded.CloudSync, null)
-                            Spacer(Modifier.width(6.dp))
-                            Text(if (sourceEnabled) "禁用" else "启用")
-                        }
-                        OutlinedButton(
-                            onClick = onDelete,
-                            enabled = enabled,
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                        ) {
-                            Icon(Icons.Rounded.Delete, null)
-                            Spacer(Modifier.width(6.dp))
-                            Text("删除")
-                        }
-                    }
-                }
+                SourceCardActions(
+                    sourceEnabled = sourceEnabled,
+                    enabled = enabled,
+                    onEdit = onEdit,
+                    onToggleEnabled = onToggleEnabled,
+                    onRescan = onRescan,
+                    isRescanning = isRescanning,
+                    onDelete = onDelete,
+                    compact = compact,
+                )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 MainShellAssistChip(
@@ -1392,6 +1362,184 @@ internal fun SourceCard(
         }
     }
 }
+
+@Composable
+private fun SourceCardActions(
+    sourceEnabled: Boolean,
+    enabled: Boolean,
+    onEdit: (() -> Unit)?,
+    onToggleEnabled: () -> Unit,
+    onRescan: (() -> Unit)?,
+    isRescanning: Boolean,
+    onDelete: () -> Unit,
+    compact: Boolean,
+) {
+    if (compact) {
+        SourceCardCompactActions(
+            sourceEnabled = sourceEnabled,
+            enabled = enabled,
+            onEdit = onEdit,
+            onToggleEnabled = onToggleEnabled,
+            onRescan = onRescan,
+            isRescanning = isRescanning,
+            onDelete = onDelete,
+        )
+    } else {
+        SourceCardTextActions(
+            sourceEnabled = sourceEnabled,
+            enabled = enabled,
+            onEdit = onEdit,
+            onToggleEnabled = onToggleEnabled,
+            onRescan = onRescan,
+            isRescanning = isRescanning,
+            onDelete = onDelete,
+        )
+    }
+}
+
+@Composable
+private fun SourceCardTextActions(
+    sourceEnabled: Boolean,
+    enabled: Boolean,
+    onEdit: (() -> Unit)?,
+    onToggleEnabled: () -> Unit,
+    onRescan: (() -> Unit)?,
+    isRescanning: Boolean,
+    onDelete: () -> Unit,
+) {
+    Column(
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            onEdit?.let { edit ->
+                OutlinedButton(onClick = edit, enabled = enabled) {
+                    Icon(Icons.Rounded.Tune, null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("编辑")
+                }
+            }
+            if (sourceEnabled) {
+                onRescan?.let { rescan ->
+                    OutlinedButton(onClick = rescan, enabled = enabled) {
+                        if (isRescanning) {
+                            ButtonLoadingIndicator()
+                        } else {
+                            Icon(Icons.Rounded.Sync, null)
+                        }
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (isRescanning) "重扫中" else "重扫")
+                    }
+                }
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onToggleEnabled, enabled = enabled) {
+                Icon(if (sourceEnabled) Icons.Rounded.Block else Icons.Rounded.CheckCircle, null)
+                Spacer(Modifier.width(6.dp))
+                Text(if (sourceEnabled) "禁用" else "启用")
+            }
+            OutlinedButton(
+                onClick = onDelete,
+                enabled = enabled,
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+            ) {
+                Icon(Icons.Rounded.Delete, null)
+                Spacer(Modifier.width(6.dp))
+                Text("删除")
+            }
+        }
+    }
+}
+
+@Composable
+private fun SourceCardCompactActions(
+    sourceEnabled: Boolean,
+    enabled: Boolean,
+    onEdit: (() -> Unit)?,
+    onToggleEnabled: () -> Unit,
+    onRescan: (() -> Unit)?,
+    isRescanning: Boolean,
+    onDelete: () -> Unit,
+) {
+    Column(
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        if (onEdit != null || (sourceEnabled && onRescan != null)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                onEdit?.let { edit ->
+                    SourceCardIconActionButton(
+                        onClick = edit,
+                        enabled = enabled,
+                        imageVector = Icons.Rounded.Tune,
+                        contentDescription = "编辑来源",
+                    )
+                }
+                if (sourceEnabled) {
+                    onRescan?.let { rescan ->
+                        SourceCardIconActionButton(
+                            onClick = rescan,
+                            enabled = enabled,
+                            imageVector = Icons.Rounded.Sync,
+                            contentDescription = if (isRescanning) "重扫中" else "重扫来源",
+                            loading = isRescanning,
+                        )
+                    }
+                }
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            SourceCardIconActionButton(
+                onClick = onToggleEnabled,
+                enabled = enabled,
+                imageVector = if (sourceEnabled) Icons.Rounded.Block else Icons.Rounded.CheckCircle,
+                contentDescription = if (sourceEnabled) "禁用来源" else "启用来源",
+            )
+            SourceCardIconActionButton(
+                onClick = onDelete,
+                enabled = enabled,
+                imageVector = Icons.Rounded.Delete,
+                contentDescription = "删除来源",
+                tint = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SourceCardIconActionButton(
+    onClick: () -> Unit,
+    enabled: Boolean,
+    imageVector: ImageVector,
+    contentDescription: String,
+    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    loading: Boolean = false,
+) {
+    val resolvedTint = if (enabled) tint else tint.copy(alpha = 0.38f)
+    IconButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.size(SourceCardCompactActionButtonSize),
+    ) {
+        if (loading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                color = resolvedTint,
+                strokeWidth = 2.dp,
+            )
+        } else {
+            Icon(
+                imageVector = imageVector,
+                contentDescription = contentDescription,
+                tint = resolvedTint,
+                modifier = Modifier.size(24.dp),
+            )
+        }
+    }
+}
+
+private val SourceCardCompactActionButtonSize = 42.dp
 
 internal data class SourceScanSummaryPresentation(
     val summary: ImportScanSummary,

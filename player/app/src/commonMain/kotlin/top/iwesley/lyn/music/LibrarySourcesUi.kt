@@ -1439,6 +1439,7 @@ internal fun SourcesTab(
     platform: PlatformDescriptor,
     state: ImportState,
     onImportIntent: (ImportIntent) -> Unit,
+    compact: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val shellColors = mainShellColors
@@ -1837,6 +1838,7 @@ internal fun SourcesTab(
                     SourceCard(
                         state = source,
                         enabled = !state.isWorking,
+                        compact = compact,
                         onEdit = if (source.source.type == ImportSourceType.LOCAL_FOLDER) {
                             null
                         } else {
