@@ -14,7 +14,10 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +33,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -84,10 +89,15 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -785,6 +795,10 @@ private fun TvRemoteSourceCreatorDialog(
     state: ImportState,
     onIntent: (ImportIntent) -> Unit,
 ) {
+    val focusPrefix = remember(type) { "create:${type.name}" }
+    val focusChain = rememberTvDialogFocusChain(
+        focusRows = remember(focusPrefix, type) { remoteSourceDialogFocusRows(focusPrefix, type) },
+    )
     Dialog(
         onDismissRequest = { onIntent(ImportIntent.DismissRemoteSourceCreator) },
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -818,9 +832,27 @@ private fun TvRemoteSourceCreatorDialog(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     when (type) {
-                        ImportSourceType.SAMBA -> TvSambaSourceForm(state = state, onIntent = onIntent)
-                        ImportSourceType.WEBDAV -> TvWebDavSourceForm(state = state, onIntent = onIntent)
-                        ImportSourceType.NAVIDROME -> TvNavidromeSourceForm(state = state, onIntent = onIntent)
+                        ImportSourceType.SAMBA -> TvSambaSourceForm(
+                            state = state,
+                            onIntent = onIntent,
+                            focusPrefix = focusPrefix,
+                            focusChain = focusChain,
+                        )
+
+                        ImportSourceType.WEBDAV -> TvWebDavSourceForm(
+                            state = state,
+                            onIntent = onIntent,
+                            focusPrefix = focusPrefix,
+                            focusChain = focusChain,
+                        )
+
+                        ImportSourceType.NAVIDROME -> TvNavidromeSourceForm(
+                            state = state,
+                            onIntent = onIntent,
+                            focusPrefix = focusPrefix,
+                            focusChain = focusChain,
+                        )
+
                         ImportSourceType.LOCAL_FOLDER -> Unit
                     }
                 }
@@ -852,11 +884,15 @@ private fun TvRemoteSourceCreatorDialog(
                             }
                         },
                         enabled = !state.isWorking,
+                        focusKey = "$focusPrefix:test",
+                        focusChain = focusChain,
                     ) { contentColor ->
                         Text("测试", color = contentColor)
                     }
                     TvSettingsActionButton(
                         onClick = { onIntent(ImportIntent.DismissRemoteSourceCreator) },
+                        focusKey = "$focusPrefix:cancel",
+                        focusChain = focusChain,
                     ) { contentColor ->
                         Text("取消", color = contentColor)
                     }
@@ -871,6 +907,8 @@ private fun TvRemoteSourceCreatorDialog(
                         },
                         enabled = !state.isWorking,
                         style = TvSettingsActionButtonStyle.Filled,
+                        focusKey = "$focusPrefix:submit",
+                        focusChain = focusChain,
                     ) { contentColor ->
                         Text("添加并扫描", color = contentColor)
                     }
@@ -880,10 +918,45 @@ private fun TvRemoteSourceCreatorDialog(
     }
 }
 
+private fun remoteSourceDialogFocusRows(
+    prefix: String,
+    type: ImportSourceType,
+): List<List<String>> {
+    val buttons = listOf("$prefix:test", "$prefix:cancel", "$prefix:submit")
+    return when (type) {
+        ImportSourceType.SAMBA -> listOf(
+            listOf("$prefix:label"),
+            listOf("$prefix:server", "$prefix:port"),
+            listOf("$prefix:path"),
+            listOf("$prefix:username", "$prefix:password"),
+            buttons,
+        )
+
+        ImportSourceType.WEBDAV -> listOf(
+            listOf("$prefix:label"),
+            listOf("$prefix:root"),
+            listOf("$prefix:username", "$prefix:password"),
+            listOf("$prefix:tls"),
+            buttons,
+        )
+
+        ImportSourceType.NAVIDROME -> listOf(
+            listOf("$prefix:label"),
+            listOf("$prefix:root"),
+            listOf("$prefix:username", "$prefix:password"),
+            buttons,
+        )
+
+        ImportSourceType.LOCAL_FOLDER -> emptyList()
+    }
+}
+
 @Composable
 private fun TvSambaSourceForm(
     state: ImportState,
     onIntent: (ImportIntent) -> Unit,
+    focusPrefix: String,
+    focusChain: TvSettingsFocusChain,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         TvSettingsTextField(
@@ -891,6 +964,8 @@ private fun TvSambaSourceForm(
             value = state.sambaLabel,
             onValueChange = { onIntent(ImportIntent.SambaLabelChanged(it)) },
             placeholder = "Samba",
+            focusKey = "$focusPrefix:label",
+            focusChain = focusChain,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             TvSettingsTextField(
@@ -899,6 +974,8 @@ private fun TvSambaSourceForm(
                 onValueChange = { onIntent(ImportIntent.SambaServerChanged(it)) },
                 placeholder = "192.168.31.115",
                 modifier = Modifier.weight(1f),
+                focusKey = "$focusPrefix:server",
+                focusChain = focusChain,
             )
             TvSettingsTextField(
                 label = "端口",
@@ -906,6 +983,8 @@ private fun TvSambaSourceForm(
                 onValueChange = { onIntent(ImportIntent.SambaPortChanged(it)) },
                 placeholder = "445",
                 modifier = Modifier.width(140.dp),
+                focusKey = "$focusPrefix:port",
+                focusChain = focusChain,
             )
         }
         TvSettingsTextField(
@@ -913,6 +992,8 @@ private fun TvSambaSourceForm(
             value = state.sambaPath,
             onValueChange = { onIntent(ImportIntent.SambaPathChanged(it)) },
             placeholder = "共享文件/Music",
+            focusKey = "$focusPrefix:path",
+            focusChain = focusChain,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             TvSettingsTextField(
@@ -920,6 +1001,8 @@ private fun TvSambaSourceForm(
                 value = state.sambaUsername,
                 onValueChange = { onIntent(ImportIntent.SambaUsernameChanged(it)) },
                 modifier = Modifier.weight(1f),
+                focusKey = "$focusPrefix:username",
+                focusChain = focusChain,
             )
             TvSettingsTextField(
                 label = "密码",
@@ -927,6 +1010,8 @@ private fun TvSambaSourceForm(
                 onValueChange = { onIntent(ImportIntent.SambaPasswordChanged(it)) },
                 modifier = Modifier.weight(1f),
                 password = true,
+                focusKey = "$focusPrefix:password",
+                focusChain = focusChain,
             )
         }
     }
@@ -936,6 +1021,8 @@ private fun TvSambaSourceForm(
 private fun TvWebDavSourceForm(
     state: ImportState,
     onIntent: (ImportIntent) -> Unit,
+    focusPrefix: String,
+    focusChain: TvSettingsFocusChain,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         TvSettingsTextField(
@@ -943,12 +1030,16 @@ private fun TvWebDavSourceForm(
             value = state.webDavLabel,
             onValueChange = { onIntent(ImportIntent.WebDavLabelChanged(it)) },
             placeholder = "WebDAV",
+            focusKey = "$focusPrefix:label",
+            focusChain = focusChain,
         )
         TvSettingsTextField(
             label = "根地址",
             value = state.webDavRootUrl,
             onValueChange = { onIntent(ImportIntent.WebDavRootUrlChanged(it)) },
             placeholder = "http://192.168.31.115:5005/共享文件/music/",
+            focusKey = "$focusPrefix:root",
+            focusChain = focusChain,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             TvSettingsTextField(
@@ -956,6 +1047,8 @@ private fun TvWebDavSourceForm(
                 value = state.webDavUsername,
                 onValueChange = { onIntent(ImportIntent.WebDavUsernameChanged(it)) },
                 modifier = Modifier.weight(1f),
+                focusKey = "$focusPrefix:username",
+                focusChain = focusChain,
             )
             TvSettingsTextField(
                 label = "密码",
@@ -963,12 +1056,16 @@ private fun TvWebDavSourceForm(
                 onValueChange = { onIntent(ImportIntent.WebDavPasswordChanged(it)) },
                 modifier = Modifier.weight(1f),
                 password = true,
+                focusKey = "$focusPrefix:password",
+                focusChain = focusChain,
             )
         }
         TvSettingsSwitchRow(
             title = "允许不安全 TLS",
             checked = state.webDavAllowInsecureTls,
             onCheckedChange = { onIntent(ImportIntent.WebDavAllowInsecureTlsChanged(it)) },
+            focusKey = "$focusPrefix:tls",
+            focusChain = focusChain,
         )
     }
 }
@@ -977,6 +1074,8 @@ private fun TvWebDavSourceForm(
 private fun TvNavidromeSourceForm(
     state: ImportState,
     onIntent: (ImportIntent) -> Unit,
+    focusPrefix: String,
+    focusChain: TvSettingsFocusChain,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         TvSettingsTextField(
@@ -984,12 +1083,16 @@ private fun TvNavidromeSourceForm(
             value = state.navidromeLabel,
             onValueChange = { onIntent(ImportIntent.NavidromeLabelChanged(it)) },
             placeholder = "Navidrome",
+            focusKey = "$focusPrefix:label",
+            focusChain = focusChain,
         )
         TvSettingsTextField(
             label = "服务器地址",
             value = state.navidromeBaseUrl,
             onValueChange = { onIntent(ImportIntent.NavidromeBaseUrlChanged(it)) },
             placeholder = "http://192.168.31.115:32700",
+            focusKey = "$focusPrefix:root",
+            focusChain = focusChain,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             TvSettingsTextField(
@@ -997,6 +1100,8 @@ private fun TvNavidromeSourceForm(
                 value = state.navidromeUsername,
                 onValueChange = { onIntent(ImportIntent.NavidromeUsernameChanged(it)) },
                 modifier = Modifier.weight(1f),
+                focusKey = "$focusPrefix:username",
+                focusChain = focusChain,
             )
             TvSettingsTextField(
                 label = "密码",
@@ -1004,6 +1109,8 @@ private fun TvNavidromeSourceForm(
                 onValueChange = { onIntent(ImportIntent.NavidromePasswordChanged(it)) },
                 modifier = Modifier.weight(1f),
                 password = true,
+                focusKey = "$focusPrefix:password",
+                focusChain = focusChain,
             )
         }
     }
@@ -1124,6 +1231,10 @@ private fun TvRemoteSourceEditorDialog(
     state: ImportState,
     onIntent: (ImportIntent) -> Unit,
 ) {
+    val focusPrefix = remember(editor.sourceId, editor.type) { "edit:${editor.sourceId}:${editor.type.name}" }
+    val focusChain = rememberTvDialogFocusChain(
+        focusRows = remember(focusPrefix, editor.type) { remoteSourceDialogFocusRows(focusPrefix, editor.type) },
+    )
     Dialog(
         onDismissRequest = { onIntent(ImportIntent.DismissRemoteSourceEditor) },
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -1156,39 +1267,94 @@ private fun TvRemoteSourceEditorDialog(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    TvSettingsTextField("名称", editor.label, { onIntent(ImportIntent.RemoteSourceLabelChanged(it)) })
+                    TvSettingsTextField(
+                        label = "名称",
+                        value = editor.label,
+                        onValueChange = { onIntent(ImportIntent.RemoteSourceLabelChanged(it)) },
+                        focusKey = "$focusPrefix:label",
+                        focusChain = focusChain,
+                    )
                     when (editor.type) {
                         ImportSourceType.SAMBA -> {
                             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                TvSettingsTextField("服务器", editor.server, { onIntent(ImportIntent.RemoteSourceServerChanged(it)) }, modifier = Modifier.weight(1f))
-                                TvSettingsTextField("端口", editor.port, { onIntent(ImportIntent.RemoteSourcePortChanged(it)) }, "可选", Modifier.width(140.dp))
+                                TvSettingsTextField(
+                                    label = "服务器",
+                                    value = editor.server,
+                                    onValueChange = { onIntent(ImportIntent.RemoteSourceServerChanged(it)) },
+                                    modifier = Modifier.weight(1f),
+                                    focusKey = "$focusPrefix:server",
+                                    focusChain = focusChain,
+                                )
+                                TvSettingsTextField(
+                                    label = "端口",
+                                    value = editor.port,
+                                    onValueChange = { onIntent(ImportIntent.RemoteSourcePortChanged(it)) },
+                                    placeholder = "可选",
+                                    modifier = Modifier.width(140.dp),
+                                    focusKey = "$focusPrefix:port",
+                                    focusChain = focusChain,
+                                )
                             }
-                            TvSettingsTextField("路径", editor.path, { onIntent(ImportIntent.RemoteSourcePathChanged(it)) })
+                            TvSettingsTextField(
+                                label = "路径",
+                                value = editor.path,
+                                onValueChange = { onIntent(ImportIntent.RemoteSourcePathChanged(it)) },
+                                focusKey = "$focusPrefix:path",
+                                focusChain = focusChain,
+                            )
                         }
 
                         ImportSourceType.WEBDAV -> {
-                            TvSettingsTextField("根地址", editor.rootUrl, { onIntent(ImportIntent.RemoteSourceRootUrlChanged(it)) })
-                            TvSettingsSwitchRow(
-                                title = "允许不安全 TLS",
-                                checked = editor.allowInsecureTls,
-                                onCheckedChange = { onIntent(ImportIntent.RemoteSourceAllowInsecureTlsChanged(it)) },
+                            TvSettingsTextField(
+                                label = "根地址",
+                                value = editor.rootUrl,
+                                onValueChange = { onIntent(ImportIntent.RemoteSourceRootUrlChanged(it)) },
+                                focusKey = "$focusPrefix:root",
+                                focusChain = focusChain,
                             )
                         }
 
                         ImportSourceType.NAVIDROME -> {
-                            TvSettingsTextField("服务器地址", editor.rootUrl, { onIntent(ImportIntent.RemoteSourceRootUrlChanged(it)) })
+                            TvSettingsTextField(
+                                label = "服务器地址",
+                                value = editor.rootUrl,
+                                onValueChange = { onIntent(ImportIntent.RemoteSourceRootUrlChanged(it)) },
+                                focusKey = "$focusPrefix:root",
+                                focusChain = focusChain,
+                            )
                         }
 
                         ImportSourceType.LOCAL_FOLDER -> Unit
                     }
-                    TvSettingsTextField("用户名", editor.username, { onIntent(ImportIntent.RemoteSourceUsernameChanged(it)) })
-                    TvSettingsTextField(
-                        label = "密码",
-                        value = editor.password,
-                        onValueChange = { onIntent(ImportIntent.RemoteSourcePasswordChanged(it)) },
-                        placeholder = if (editor.hasStoredCredential) "留空则沿用已保存密码" else "",
-                        password = true,
-                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        TvSettingsTextField(
+                            label = "用户名",
+                            value = editor.username,
+                            onValueChange = { onIntent(ImportIntent.RemoteSourceUsernameChanged(it)) },
+                            modifier = Modifier.weight(1f),
+                            focusKey = "$focusPrefix:username",
+                            focusChain = focusChain,
+                        )
+                        TvSettingsTextField(
+                            label = "密码",
+                            value = editor.password,
+                            onValueChange = { onIntent(ImportIntent.RemoteSourcePasswordChanged(it)) },
+                            placeholder = if (editor.hasStoredCredential) "留空则沿用已保存密码" else "",
+                            modifier = Modifier.weight(1f),
+                            password = true,
+                            focusKey = "$focusPrefix:password",
+                            focusChain = focusChain,
+                        )
+                    }
+                    if (editor.type == ImportSourceType.WEBDAV) {
+                        TvSettingsSwitchRow(
+                            title = "允许不安全 TLS",
+                            checked = editor.allowInsecureTls,
+                            onCheckedChange = { onIntent(ImportIntent.RemoteSourceAllowInsecureTlsChanged(it)) },
+                            focusKey = "$focusPrefix:tls",
+                            focusChain = focusChain,
+                        )
+                    }
                 }
                 Row(
                     modifier = Modifier
@@ -1211,11 +1377,15 @@ private fun TvRemoteSourceEditorDialog(
                     TvSettingsActionButton(
                         onClick = { onIntent(ImportIntent.TestRemoteSource) },
                         enabled = !state.isWorking,
+                        focusKey = "$focusPrefix:test",
+                        focusChain = focusChain,
                     ) { contentColor ->
                         Text("测试", color = contentColor)
                     }
                     TvSettingsActionButton(
                         onClick = { onIntent(ImportIntent.DismissRemoteSourceEditor) },
+                        focusKey = "$focusPrefix:cancel",
+                        focusChain = focusChain,
                     ) { contentColor ->
                         Text("取消", color = contentColor)
                     }
@@ -1223,6 +1393,8 @@ private fun TvRemoteSourceEditorDialog(
                         onClick = { onIntent(ImportIntent.SaveRemoteSource) },
                         enabled = !state.isWorking,
                         style = TvSettingsActionButtonStyle.Filled,
+                        focusKey = "$focusPrefix:submit",
+                        focusChain = focusChain,
                     ) { contentColor ->
                         Text("保存并扫描", color = contentColor)
                     }
@@ -1715,6 +1887,33 @@ private fun rememberTvSettingsFocusChain(
     return chain
 }
 
+@Composable
+private fun rememberTvDialogFocusChain(
+    focusRows: List<List<String>>,
+): TvSettingsFocusChain {
+    val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
+    val focusKeys = remember(focusRows) { focusRows.flatten() }
+    val requesters = remember(focusKeys) {
+        focusKeys.associateWith { FocusRequester() }
+    }
+    val chain = remember(focusRows, focusKeys, requesters, listState, coroutineScope) {
+        TvSettingsFocusChain(
+            focusRows = focusRows,
+            requesters = requesters,
+            listState = listState,
+            coroutineScope = coroutineScope,
+            leftFocusRequester = null,
+            focusCoordinator = null,
+        )
+    }
+    LaunchedEffect(chain, focusKeys) {
+        withFrameNanos { }
+        focusKeys.firstOrNull()?.let(chain::requestFocus)
+    }
+    return chain
+}
+
 private class TvSettingsFocusCoordinator {
     var activeContentFocusChain: TvSettingsFocusChain? = null
     var lastContentFocusKey: String? = null
@@ -1749,8 +1948,8 @@ private class TvSettingsFocusChain(
     private val requesters: Map<String, FocusRequester>,
     private val listState: LazyListState,
     private val coroutineScope: CoroutineScope,
-    val leftFocusRequester: FocusRequester,
-    private val focusCoordinator: TvSettingsFocusCoordinator,
+    val leftFocusRequester: FocusRequester?,
+    private val focusCoordinator: TvSettingsFocusCoordinator?,
 ) {
     private val attachedKeys = mutableSetOf<String>()
     private var lastFocusedKey: String? = null
@@ -1773,21 +1972,22 @@ private class TvSettingsFocusChain(
 
     fun markFocused(key: String) {
         lastFocusedKey = key
-        focusCoordinator.markContentFocused(key)
+        focusCoordinator?.markContentFocused(key)
     }
 
     fun requestRestoreAfterAction() {
-        focusCoordinator.requestContentFocusRestore()
+        val coordinator = focusCoordinator ?: return
+        coordinator.requestContentFocusRestore()
         coroutineScope.launch {
             withFrameNanos { }
-            focusCoordinator.restoreContentFocusIfRequested()
+            coordinator.restoreContentFocusIfRequested()
         }
     }
 
     fun restoreFocus(): Boolean {
         val focusKeys = focusRows.flatten()
         val candidates = buildList {
-            val preferredKey = focusCoordinator.lastContentFocusKey ?: lastFocusedKey
+            val preferredKey = focusCoordinator?.lastContentFocusKey ?: lastFocusedKey
             preferredKey?.takeIf { it in requesters }?.let(::add)
             val rowIndex = focusRows.indexOfFirst { row -> preferredKey in row }
             if (rowIndex >= 0) {
@@ -1798,6 +1998,10 @@ private class TvSettingsFocusChain(
             focusKeys.forEach(::add)
         }.distinct()
         return candidates.any(::requestFocusSafely)
+    }
+
+    fun requestFocus(key: String): Boolean {
+        return requestFocusSafely(key)
     }
 
     fun moveFrom(
@@ -1845,7 +2049,7 @@ private class TvSettingsFocusChain(
     }
 
     fun moveLeft(): Boolean {
-        leftFocusRequester.requestFocus()
+        leftFocusRequester?.requestFocus()
         return true
     }
 
@@ -1887,7 +2091,7 @@ private fun Modifier.tvSettingsFocusTarget(
     return this
         .focusRequester(focusChain.requesterFor(key))
         .focusProperties {
-            left = focusChain.leftFocusRequester
+            focusChain.leftFocusRequester?.let { left = it }
         }
         .onFocusChanged { focusState ->
             if (focusState.isFocused) {
@@ -1955,6 +2159,7 @@ private fun TvSettingsEmptyCard(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TvSettingsTextField(
     label: String,
@@ -1966,16 +2171,84 @@ private fun TvSettingsTextField(
     focusKey: String? = null,
     focusChain: TvSettingsFocusChain? = null,
 ) {
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val imeVisible = WindowInsets.isImeVisible
+    var editing by remember { mutableStateOf(false) }
+    var imeWasVisibleDuringEditing by remember { mutableStateOf(false) }
+    var fieldValue by remember {
+        mutableStateOf(
+            TextFieldValue(
+                text = value,
+                selection = TextRange(value.length),
+            ),
+        )
+    }
+
+    fun enterEditing() {
+        imeWasVisibleDuringEditing = false
+        fieldValue = fieldValue.copy(selection = TextRange(fieldValue.text.length))
+        editing = true
+    }
+
+    fun exitEditing() {
+        imeWasVisibleDuringEditing = false
+        editing = false
+        keyboardController?.hide()
+    }
+
+    BackHandler(enabled = editing) {
+        exitEditing()
+    }
+
+    LaunchedEffect(editing) {
+        if (editing) {
+            withFrameNanos { }
+            keyboardController?.show()
+        }
+    }
+
+    LaunchedEffect(value) {
+        if (value != fieldValue.text) {
+            fieldValue = TextFieldValue(
+                text = value,
+                selection = TextRange(value.length),
+            )
+        }
+    }
+
+    LaunchedEffect(editing, imeVisible) {
+        if (!editing) {
+            imeWasVisibleDuringEditing = false
+            return@LaunchedEffect
+        }
+        if (imeVisible) {
+            imeWasVisibleDuringEditing = true
+        } else if (imeWasVisibleDuringEditing) {
+            exitEditing()
+        }
+    }
+
     val targetKey = focusKey
     val targetChain = focusChain
     val fieldModifier = if (targetKey != null && targetChain?.contains(targetKey) == true) {
-        modifier.tvSettingsTextFieldFocusTarget(targetKey, targetChain)
+        modifier.tvSettingsTextFieldFocusTarget(
+            key = targetKey,
+            focusChain = targetChain,
+            editing = editing,
+            enterEditing = ::enterEditing,
+            exitEditing = ::exitEditing,
+        )
     } else {
         modifier
     }.height(72.dp)
     OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
+        value = fieldValue,
+        onValueChange = { nextValue ->
+            fieldValue = nextValue
+            if (nextValue.text != value) {
+                onValueChange(nextValue.text)
+            }
+        },
         label = { Text(label) },
         placeholder = if (placeholder.isNotBlank()) {
             { Text(placeholder) }
@@ -1983,7 +2256,15 @@ private fun TvSettingsTextField(
             null
         },
         singleLine = true,
-        visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
+        readOnly = !editing,
+        visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
+        keyboardOptions = KeyboardOptions(
+            imeAction = ImeAction.Done,
+            showKeyboardOnFocus = false,
+        ),
+        keyboardActions = KeyboardActions(
+            onDone = { exitEditing() },
+        ),
         modifier = fieldModifier,
     )
 }
@@ -1992,6 +2273,9 @@ private fun TvSettingsTextField(
 private fun Modifier.tvSettingsTextFieldFocusTarget(
     key: String,
     focusChain: TvSettingsFocusChain,
+    editing: Boolean,
+    enterEditing: () -> Unit,
+    exitEditing: () -> Unit,
 ): Modifier {
     DisposableEffect(focusChain, key) {
         focusChain.attach(key)
@@ -2000,20 +2284,59 @@ private fun Modifier.tvSettingsTextFieldFocusTarget(
     return this
         .focusRequester(focusChain.requesterFor(key))
         .focusProperties {
-            left = focusChain.leftFocusRequester
+            focusChain.leftFocusRequester?.let { left = it }
         }
         .onFocusChanged { focusState ->
             if (focusState.isFocused) {
                 focusChain.markFocused(key)
+            } else {
+                exitEditing()
             }
         }
         .onPreviewKeyEvent { event ->
             if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
             when (event.key) {
-                Key.DirectionUp -> focusChain.moveFrom(key, direction = -1, allowScrollFallback = false)
-                Key.DirectionDown -> focusChain.moveFrom(key, direction = 1, allowScrollFallback = false)
-                Key.DirectionLeft -> focusChain.moveHorizontal(key, direction = -1)
-                Key.DirectionRight -> focusChain.moveHorizontal(key, direction = 1)
+                Key.DirectionCenter,
+                Key.Enter,
+                Key.NumPadEnter,
+                -> {
+                    if (editing) {
+                        exitEditing()
+                    } else {
+                        enterEditing()
+                    }
+                    true
+                }
+
+                Key.Back,
+                Key.Escape,
+                -> if (editing) {
+                    exitEditing()
+                    true
+                } else {
+                    false
+                }
+
+                Key.DirectionUp -> {
+                    exitEditing()
+                    focusChain.moveFrom(key, direction = -1, allowScrollFallback = false)
+                }
+
+                Key.DirectionDown -> {
+                    exitEditing()
+                    focusChain.moveFrom(key, direction = 1, allowScrollFallback = false)
+                }
+
+                Key.DirectionLeft -> {
+                    exitEditing()
+                    focusChain.moveHorizontal(key, direction = -1)
+                }
+
+                Key.DirectionRight -> {
+                    exitEditing()
+                    focusChain.moveHorizontal(key, direction = 1)
+                }
+
                 else -> false
             }
         }

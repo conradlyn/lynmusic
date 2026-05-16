@@ -60,6 +60,7 @@
             android:name=".TvSettingsActivity"
             android:exported="false"
             android:launchMode="singleTop"
+            android:windowSoftInputMode="stateAlwaysHidden|adjustNothing"
             android:theme="@android:style/Theme.Material.Light.NoActionBar" />
         <activity
             android:name=".CrashReportActivity"
