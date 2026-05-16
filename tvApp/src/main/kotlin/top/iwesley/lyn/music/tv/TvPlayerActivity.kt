@@ -6,6 +6,7 @@ import android.content.pm.ActivityInfo
 import android.os.Build
 import android.os.Bundle
 import android.util.DisplayMetrics
+import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -177,6 +178,35 @@ private fun TvPlayerApp(
 
     val playerState by component.playerStore.state.collectAsState()
     val favoritesState by component.favoritesStore.state.collectAsState()
+    val playbackToastRawMessage = playerState.message?.takeIf { it.isNotBlank() }
+    val playbackToastTrackId = playerState.snapshot.currentTrack?.id
+    val isPlaybackErrorToast = playbackToastRawMessage == playerState.snapshot.errorMessage
+    var playbackToastMessage by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(playbackToastTrackId, playbackToastRawMessage, isPlaybackErrorToast) {
+        if (playbackToastRawMessage == null) {
+            playbackToastMessage = null
+            return@LaunchedEffect
+        }
+        val displayMessage = if (isPlaybackErrorToast) {
+            formatTvPlaybackErrorToast(playbackToastRawMessage)
+        } else {
+            playbackToastRawMessage
+        }
+        playbackToastMessage = displayMessage
+        Log.w(
+            TV_PLAYER_LOG_TAG,
+            "tv-player-toast track=${playbackToastTrackId.orEmpty()} playbackError=$isPlaybackErrorToast " +
+                "message=${playbackToastRawMessage.take(TV_PLAYER_LOG_MESSAGE_LIMIT)}",
+        )
+        kotlinx.coroutines.delay(TV_PLAYER_TOAST_DURATION_MS)
+        if (playbackToastMessage == displayMessage) {
+            playbackToastMessage = null
+        }
+        if (playerState.message == playbackToastRawMessage) {
+            component.playerStore.dispatch(PlayerIntent.ClearMessage)
+        }
+    }
 
     LaunchedEffect(component) {
         component.playerStore.startHydration()
@@ -192,6 +222,7 @@ private fun TvPlayerApp(
             onToggleFavorite = { track ->
                 component.favoritesStore.dispatch(FavoritesIntent.ToggleFavorite(track))
             },
+            toastMessage = playbackToastMessage,
             onBack = onBack,
         )
     }
@@ -204,6 +235,7 @@ private fun TvPlayerScreen(
     artworkCacheStore: ArtworkCacheStore,
     onPlayerIntent: (PlayerIntent) -> Unit,
     onToggleFavorite: (Track) -> Unit,
+    toastMessage: String?,
     onBack: () -> Unit,
 ) {
     BackHandler(onBack = onBack)
@@ -294,6 +326,13 @@ private fun TvPlayerScreen(
             queueButtonFocusRequester = queueButtonFocusRequester,
             onPlayerIntent = onPlayerIntent,
             modifier = Modifier.fillMaxSize(),
+        )
+        TvPlayerToast(
+            message = toastMessage,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth(0.58f)
+                .padding(bottom = 128.dp),
         )
     }
 }
@@ -976,6 +1015,36 @@ private fun TvPlayerMessagePanel(
 }
 
 @Composable
+private fun TvPlayerToast(
+    message: String?,
+    modifier: Modifier = Modifier,
+) {
+    AnimatedVisibility(
+        visible = !message.isNullOrBlank(),
+        modifier = modifier,
+        enter = fadeIn(animationSpec = tween(durationMillis = 140)),
+        exit = fadeOut(animationSpec = tween(durationMillis = 180)),
+    ) {
+        Box(
+            modifier = Modifier
+                .clip(TvPlayerToastShape)
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.96f))
+                .padding(horizontal = 22.dp, vertical = 14.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = message.orEmpty(),
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
 private fun TvPlayerUnavailableScreen(
     message: String,
     onBack: () -> Unit,
@@ -1009,6 +1078,24 @@ private fun TvPlayerUnavailableScreen(
             )
         }
     }
+}
+
+private fun formatTvPlaybackErrorToast(message: String): String {
+    val normalized = message.trim()
+    if (normalized.isBlank()) return "播放失败。"
+    return normalized
+//    if (normalized.startsWith("播放失败")) {
+//        return normalized.take(TV_PLAYER_TOAST_DETAIL_LIMIT)
+//    }
+//    return when {
+//        normalized.contains("FileNotFoundException", ignoreCase = true) ||
+//            normalized.contains("ENOENT", ignoreCase = true) ->
+//            "播放失败：文件不存在或无法访问。"
+//        normalized.contains("Permission denied", ignoreCase = true) ||
+//            normalized.contains("EACCES", ignoreCase = true) ->
+//            "播放失败：没有读取该文件的权限。"
+//        else -> "播放失败：${normalized.lineSequence().first().take(TV_PLAYER_TOAST_DETAIL_LIMIT)}"
+//    }
 }
 
 @Composable
@@ -1118,4 +1205,9 @@ private val TvPlayerPanelShape = RoundedCornerShape(22.dp)
 private val TvPlayerArtworkShape = RoundedCornerShape(0.dp)
 private val TvPlayerQueuePanelShape = RoundedCornerShape(topStart = 28.dp, bottomStart = 28.dp)
 private val TvPlayerQueueRowShape = RoundedCornerShape(16.dp)
+private val TvPlayerToastShape = RoundedCornerShape(12.dp)
 private const val TV_PLAYER_SEEK_STEP_MS = 10_000L
+private const val TV_PLAYER_TOAST_DURATION_MS = 3_000L
+private const val TV_PLAYER_TOAST_DETAIL_LIMIT = 96
+private const val TV_PLAYER_LOG_MESSAGE_LIMIT = 240
+private const val TV_PLAYER_LOG_TAG = "LynMusic"

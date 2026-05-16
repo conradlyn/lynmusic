@@ -1972,7 +1972,13 @@ internal class AndroidPlaybackGateway(
                 "play-failed locator=${currentRemoteLabel.orEmpty()}"
             }
             val detail = error.messageChain()
-            mutableState.update { it.copy(canSeek = false, errorMessage = detail.ifBlank { "播放器出错" }) }
+            mutableState.update {
+                it.copy(
+                    canSeek = false,
+                    errorMessage = detail.ifBlank { "播放器出错" },
+                    errorRevision = it.errorRevision + 1L,
+                )
+            }
         }
 
         override fun onPositionDiscontinuity(

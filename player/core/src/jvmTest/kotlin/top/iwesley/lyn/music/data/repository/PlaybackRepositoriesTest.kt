@@ -1454,6 +1454,58 @@ class PlaybackRepositoriesTest {
     }
 
     @Test
+    fun `switching tracks ignores stale gateway error from previous track`() = runTest {
+        val database = createTestDatabase()
+        val gateway = BlockingPlaybackGateway()
+        val playbackPreferencesStore = FakePlaybackPreferencesStore()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = playbackPreferencesStore,
+            scope = scope,
+        )
+
+        try {
+            advanceUntilIdle()
+            repository.playTracks(sampleTracks(), startIndex = 0)
+            advanceUntilIdle()
+            gateway.updateState {
+                it.copy(
+                    isPlaying = false,
+                    errorMessage = "track-1 failed",
+                    errorRevision = it.errorRevision + 1L,
+                )
+            }
+            advanceUntilIdle()
+
+            assertEquals("track-1", repository.snapshot.value.currentTrack?.id)
+            assertEquals("track-1 failed", repository.snapshot.value.errorMessage)
+
+            val loadGate = CompletableDeferred<Unit>()
+            gateway.nextLoadGate = loadGate
+            val switchJob = launch {
+                repository.playTracks(sampleTracks(), startIndex = 1)
+            }
+            advanceUntilIdle()
+
+            assertEquals("track-2", repository.snapshot.value.currentTrack?.id)
+            assertNull(repository.snapshot.value.errorMessage)
+
+            loadGate.complete(Unit)
+            advanceUntilIdle()
+            switchJob.cancel()
+
+            assertEquals("track-2", repository.snapshot.value.currentTrack?.id)
+            assertNull(repository.snapshot.value.errorMessage)
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
     fun `restore queue surfaces gateway load failure without throwing`() = runTest {
         val database = createTestDatabase()
         database.trackDao().upsertAll(
@@ -1809,6 +1861,7 @@ private class RepeatingErrorPlaybackGateway(
     }
 
     override suspend fun release() = Unit
+
 }
 
 private fun createTestDatabase(): LynMusicDatabase {
@@ -2068,6 +2121,10 @@ private class BlockingPlaybackGateway : PlaybackGateway {
     }
 
     override suspend fun release() = Unit
+
+    fun updateState(transform: (PlaybackGatewayState) -> PlaybackGatewayState) {
+        mutableState.value = transform(mutableState.value)
+    }
 }
 
 private class FakeSystemPlaybackControlsPlatformService : SystemPlaybackControlsPlatformService {

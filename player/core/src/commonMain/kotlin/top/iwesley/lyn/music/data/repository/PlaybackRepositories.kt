@@ -32,6 +32,7 @@ import top.iwesley.lyn.music.core.model.LyricsShareFontPreferencesStore
 import top.iwesley.lyn.music.core.model.NoopDiagnosticLogger
 import top.iwesley.lyn.music.core.model.NoopPlaybackStatsReporter
 import top.iwesley.lyn.music.core.model.PlaybackGateway
+import top.iwesley.lyn.music.core.model.PlaybackGatewayState
 import top.iwesley.lyn.music.core.model.PlaybackLoadToken
 import top.iwesley.lyn.music.core.model.PlaybackMode
 import top.iwesley.lyn.music.core.model.PlaybackPreferencesStore
@@ -102,6 +103,8 @@ class DefaultPlaybackRepository(
     private var loggedArtworkTrackId: String? = null
     private var loggedDisplayArtworkLocator: String? = null
     private var lastGatewayStateLogKey: String? = null
+    private var ignoredGatewayErrorRevision: Long? = null
+    private var ignoredGatewayErrorMessage: String? = null
 
     override val snapshot: StateFlow<PlaybackSnapshot> = mutableSnapshot.asStateFlow()
 
@@ -200,6 +203,7 @@ class DefaultPlaybackRepository(
                 }
                 val completionChanged = gatewayState.completionCount > observedCompletionCount
                 observedCompletionCount = gatewayState.completionCount
+                val gatewayError = resolveGatewayError(gatewayState)
                 mutableSnapshot.update {
                     it.copy(
                         isPlaying = gatewayState.isPlaying,
@@ -217,7 +221,10 @@ class DefaultPlaybackRepository(
                         metadataArtworkLocator = it.metadataArtworkLocator,
                         currentNavidromeAudioQuality = gatewayState.currentNavidromeAudioQuality,
                         currentPlaybackAudioFormat = gatewayState.currentPlaybackAudioFormat,
-                        errorMessage = gatewayState.errorMessage,
+                        errorMessage = when (gatewayError) {
+                            GatewayErrorResolution.Ignore -> it.errorMessage
+                            is GatewayErrorResolution.Apply -> gatewayError.message
+                        },
                     )
                 }
                 updatePlaybackStats(mutableSnapshot.value)
@@ -266,6 +273,7 @@ class DefaultPlaybackRepository(
             updatePlaybackStats(mutableSnapshot.value)
             val currentSnapshot = mutableSnapshot.value
             currentQueueIsTransient = false
+            ignoreCurrentGatewayErrorForNextTrack()
             val nextSnapshot = buildQueueSnapshot(
                 tracks = tracks,
                 startIndex = startIndex,
@@ -298,6 +306,7 @@ class DefaultPlaybackRepository(
             updatePlaybackStats(mutableSnapshot.value)
             val currentSnapshot = mutableSnapshot.value
             currentQueueIsTransient = true
+            ignoreCurrentGatewayErrorForNextTrack()
             val nextSnapshot = buildQueueSnapshot(
                 tracks = tracks,
                 startIndex = startIndex,
@@ -325,6 +334,7 @@ class DefaultPlaybackRepository(
             val currentSnapshot = mutableSnapshot.value
             currentQueueIsTransient = false
             latestLoadRequestId += 1L
+            ignoreCurrentGatewayErrorForNextTrack()
             val nextSnapshot = buildQueueSnapshot(
                 tracks = tracks,
                 startIndex = startIndex,
@@ -512,6 +522,7 @@ class DefaultPlaybackRepository(
         val queue = mutableSnapshot.value.queue
         val target = queue.getOrNull(index) ?: return null
         updatePlaybackStats(mutableSnapshot.value)
+        ignoreCurrentGatewayErrorForNextTrack()
         mutableSnapshot.update {
             it.copy(
                 currentIndex = index,
@@ -657,6 +668,44 @@ class DefaultPlaybackRepository(
                 )
             }
         }
+    }
+
+    private fun ignoreCurrentGatewayErrorForNextTrack() {
+        val gatewayState = gateway.state.value
+        val message = gatewayState.errorMessage?.takeIf { it.isNotBlank() } ?: return
+        ignoredGatewayErrorMessage = message
+        ignoredGatewayErrorRevision = gatewayState.errorRevision.takeIf { it > 0L }
+    }
+
+    private fun resolveGatewayError(gatewayState: PlaybackGatewayState): GatewayErrorResolution {
+        val message = gatewayState.errorMessage?.takeIf { it.isNotBlank() }
+        if (message == null) {
+            clearIgnoredGatewayError()
+            return GatewayErrorResolution.Apply(null)
+        }
+        val ignoredRevision = ignoredGatewayErrorRevision
+        if (ignoredRevision != null) {
+            if (gatewayState.errorRevision <= ignoredRevision) {
+                return GatewayErrorResolution.Ignore
+            }
+            clearIgnoredGatewayError()
+            return GatewayErrorResolution.Apply(message)
+        }
+        if (message == ignoredGatewayErrorMessage) {
+            return GatewayErrorResolution.Ignore
+        }
+        clearIgnoredGatewayError()
+        return GatewayErrorResolution.Apply(message)
+    }
+
+    private fun clearIgnoredGatewayError() {
+        ignoredGatewayErrorRevision = null
+        ignoredGatewayErrorMessage = null
+    }
+
+    private sealed interface GatewayErrorResolution {
+        data object Ignore : GatewayErrorResolution
+        data class Apply(val message: String?) : GatewayErrorResolution
     }
 
     private fun updatePlaybackStats(snapshot: PlaybackSnapshot) {
