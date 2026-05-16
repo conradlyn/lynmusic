@@ -79,30 +79,76 @@ class ImportSourceRepositoryTest {
     }
 
     @Test
-    fun `import local folder rejects duplicate name even when path differs`() = runTest {
+    fun `import local folder allows duplicate name when path differs`() = runTest {
         val database = createImportTestDatabase()
         database.importSourceDao().upsert(
+            importSourceEntity(
+                id = "local-1",
+                type = ImportSourceType.LOCAL_FOLDER,
+                label = " 下载目录 ",
+                rootReference = "folder://downloads",
+            ),
+        )
+        val gateway = RecordingImportSourceGateway(
+            nextLocalFolderSelection = LocalFolderSelection(
+                label = "下载目录",
+                persistentReference = "folder://new-downloads",
+            ),
+        )
+        val repository = createRepository(
+            database = database,
+            gateway = gateway,
+        )
+
+        val result = repository.importLocalFolder()
+
+        assertTrue(result.isSuccess)
+        val sources = database.importSourceDao().getAll()
+        assertEquals(2, sources.size)
+        val imported = assertNotNull(sources.firstOrNull { it.rootReference == "folder://new-downloads" })
+        assertEquals("下载目录", imported.label)
+        assertEquals(1, gateway.localFolderScanCount)
+    }
+
+    @Test
+    fun `import local folder allows name matching remote sources`() = runTest {
+        val database = createImportTestDatabase()
+        listOf(
+            importSourceEntity(
+                id = "smb-1",
+                type = ImportSourceType.SAMBA,
+                label = "下载目录",
+                rootReference = "Media/Music",
+            ),
             importSourceEntity(
                 id = "dav-1",
                 type = ImportSourceType.WEBDAV,
                 label = " 下载目录 ",
                 rootReference = "https://dav.example.com/music",
             ),
-        )
-        val repository = createRepository(
-            database = database,
-            gateway = RecordingImportSourceGateway(
-                nextLocalFolderSelection = LocalFolderSelection(
-                    label = "下载目录",
-                    persistentReference = "folder://new-downloads",
-                ),
+            importSourceEntity(
+                id = "nav-1",
+                type = ImportSourceType.NAVIDROME,
+                label = "下载目录",
+                rootReference = "https://nav.example.com",
+            ),
+        ).forEach { database.importSourceDao().upsert(it) }
+        val gateway = RecordingImportSourceGateway(
+            nextLocalFolderSelection = LocalFolderSelection(
+                label = "下载目录",
+                persistentReference = "folder://downloads",
             ),
         )
+        val repository = createRepository(database = database, gateway = gateway)
 
         val result = repository.importLocalFolder()
 
-        assertEquals("音乐源名称已存在。", result.exceptionOrNull()?.message)
-        assertEquals(1, database.importSourceDao().getAll().size)
+        assertTrue(result.isSuccess)
+        val sources = database.importSourceDao().getAll()
+        assertEquals(4, sources.size)
+        val imported = assertNotNull(sources.firstOrNull { it.type == ImportSourceType.LOCAL_FOLDER.name })
+        assertEquals("下载目录", imported.label)
+        assertEquals(1, gateway.localFolderScanCount)
     }
 
     @Test

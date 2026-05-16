@@ -342,10 +342,7 @@ class RoomImportSourceRepository(
 
     override suspend fun importSelectedLocalFolder(selection: LocalFolderSelection): Result<ImportScanSummary> {
         return runCatching {
-            validateImportSourceCreation(
-                label = selection.label,
-                localFolderRootReference = selection.persistentReference,
-            )
+            validateLocalFolderImportSourceCreation(rootReference = selection.persistentReference)
             val sourceId = newId("local")
             val source = ImportSource(
                 id = sourceId,
@@ -924,13 +921,16 @@ class RoomImportSourceRepository(
 
     private suspend fun validateImportSourceCreation(
         label: String,
-        localFolderRootReference: String? = null,
     ) {
         val existing = database.importSourceDao().getAll()
         if (hasImportSourceNameConflict(name = label, existing = existing)) {
             error("音乐源名称已存在。")
         }
-        if (localFolderRootReference != null && hasLocalFolderPathConflict(rootReference = localFolderRootReference, existing = existing)) {
+    }
+
+    private suspend fun validateLocalFolderImportSourceCreation(rootReference: String) {
+        val existing = database.importSourceDao().getAll()
+        if (hasLocalFolderPathConflict(rootReference = rootReference, existing = existing)) {
             error("该本地文件夹已导入。")
         }
     }
