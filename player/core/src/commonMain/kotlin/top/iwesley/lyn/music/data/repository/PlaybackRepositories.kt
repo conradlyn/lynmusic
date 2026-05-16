@@ -25,6 +25,7 @@ import top.iwesley.lyn.music.cast.UnsupportedCastMediaUrlResolver
 import top.iwesley.lyn.music.cast.UnsupportedCastNotificationPermissionRequester
 import top.iwesley.lyn.music.cast.UnsupportedCastSessionForegroundPlatformService
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
+import top.iwesley.lyn.music.core.model.EqualizerPlatformService
 import top.iwesley.lyn.music.core.model.LyricsShareFontLibraryPlatformService
 import top.iwesley.lyn.music.core.model.LyricsSharePlatformService
 import top.iwesley.lyn.music.core.model.LyricsShareFontPreferencesStore
@@ -39,6 +40,7 @@ import top.iwesley.lyn.music.core.model.PlaybackStatsReporter
 import top.iwesley.lyn.music.core.model.SystemPlaybackControlCallbacks
 import top.iwesley.lyn.music.core.model.SystemPlaybackControlsPlatformService
 import top.iwesley.lyn.music.core.model.Track
+import top.iwesley.lyn.music.core.model.UnsupportedEqualizerPlatformService
 import top.iwesley.lyn.music.core.model.UnsupportedLyricsShareFontLibraryPlatformService
 import top.iwesley.lyn.music.core.model.UnsupportedLyricsShareFontPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedLyricsSharePlatformService
@@ -867,6 +869,7 @@ data class PlayerRuntimeServices(
     val playbackGateway: PlaybackGateway? = null,
     val playbackRepository: PlaybackRepository? = null,
     val playbackPreferencesStore: PlaybackPreferencesStore,
+    val equalizerPlatformService: EqualizerPlatformService = UnsupportedEqualizerPlatformService,
     val castGateway: CastGateway = UnsupportedCastGateway,
     val castMediaUrlResolver: CastMediaUrlResolver = UnsupportedCastMediaUrlResolver,
     val castBackgroundRunSettingsOpener: CastBackgroundRunSettingsOpener =

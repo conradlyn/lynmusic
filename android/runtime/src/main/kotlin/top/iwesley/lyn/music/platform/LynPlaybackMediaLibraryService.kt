@@ -246,6 +246,7 @@ private class LynPlaybackServiceRuntime private constructor(
                 database = database,
                 secureCredentialStore = secureStore,
                 playbackPreferencesStore = preferencesStore,
+                equalizerPreferencesStore = preferencesStore,
                 playbackDecoderPreferencesStore = preferencesStore,
                 navidromeAudioQualityPreferencesStore = preferencesStore,
                 networkConnectionTypeProvider = networkConnectionTypeProvider,

@@ -41,6 +41,7 @@ import top.iwesley.lyn.music.core.model.AppTab
 import top.iwesley.lyn.music.core.model.ArtworkCacheStore
 import top.iwesley.lyn.music.core.model.DesktopLyricsPlatformService
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
+import top.iwesley.lyn.music.core.model.EqualizerPlatformService
 import top.iwesley.lyn.music.core.model.PlatformDescriptor
 import top.iwesley.lyn.music.core.model.PlaylistKind
 import top.iwesley.lyn.music.core.model.Track
@@ -88,6 +89,7 @@ class LynMusicAppComponent(
     val castBackgroundRunSettingsOpener: CastBackgroundRunSettingsOpener,
     val castNotificationPermissionRequester: CastNotificationPermissionRequester,
     val desktopLyricsPlatformService: DesktopLyricsPlatformService,
+    val equalizerPlatformService: EqualizerPlatformService,
     private val scope: CoroutineScope,
     private val onDispose: suspend () -> Unit,
 ) {
@@ -155,6 +157,7 @@ fun buildPlayerAppComponent(
         castBackgroundRunSettingsOpener = playerRuntimeServices.castBackgroundRunSettingsOpener,
         castNotificationPermissionRequester = playerRuntimeServices.castNotificationPermissionRequester,
         desktopLyricsPlatformService = sharedGraph.desktopLyricsPlatformService,
+        equalizerPlatformService = playerRuntimeServices.equalizerPlatformService,
         scope = sharedGraph.scope,
         onDispose = {
             playerRuntimeServices.castSessionForegroundPlatformService.close()
@@ -451,6 +454,9 @@ fun App(
                             logger = component.logger,
                             state = playerState,
                             showCompactPlayerLyrics = settingsState.showCompactPlayerLyrics,
+                            showEqualizerEntry = component.platform.capabilities.supportsEqualizer &&
+                                component.equalizerPlatformService.isSupported,
+                            onOpenEqualizer = component.equalizerPlatformService::openEqualizer,
                             lyricsShareThemeTokens = shellThemeTokens,
                             lyricsShareTextPalette = shellTextPalette,
                             onPlayerIntent = onPlayerIntent,

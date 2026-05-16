@@ -164,6 +164,8 @@ internal fun PlayerDrawerHost(
     logger: DiagnosticLogger,
     state: PlayerState,
     showCompactPlayerLyrics: Boolean,
+    showEqualizerEntry: Boolean,
+    onOpenEqualizer: () -> Unit,
     lyricsShareThemeTokens: AppThemeTokens,
     lyricsShareTextPalette: AppThemeTextPalette,
     onPlayerIntent: (PlayerIntent) -> Unit,
@@ -211,6 +213,8 @@ internal fun PlayerDrawerHost(
                 logger = logger,
                 state = state,
                 showCompactPlayerLyrics = showCompactPlayerLyrics,
+                showEqualizerEntry = showEqualizerEntry,
+                onOpenEqualizer = onOpenEqualizer,
                 lyricsShareThemeTokens = lyricsShareThemeTokens,
                 lyricsShareTextPalette = lyricsShareTextPalette,
                 onPlayerIntent = onPlayerIntent,
@@ -1124,6 +1128,8 @@ private fun PlayerOverlay(
     logger: DiagnosticLogger,
     state: PlayerState,
     showCompactPlayerLyrics: Boolean,
+    showEqualizerEntry: Boolean,
+    onOpenEqualizer: () -> Unit,
     lyricsShareThemeTokens: AppThemeTokens,
     lyricsShareTextPalette: AppThemeTextPalette,
     onPlayerIntent: (PlayerIntent) -> Unit,
@@ -1259,6 +1265,10 @@ private fun PlayerOverlay(
             val wide = layoutProfile.isExpandedLayout
             val isPureMode = wide && isPureModeRequested
             val useTapToRevealLyrics = layoutProfile.isCompactLayout
+            val showPhoneEqualizerEntry = showEqualizerEntry &&
+                platform.name == ANDROID_PLATFORM_NAME &&
+                layoutProfile.isPortrait &&
+                !wide
             val useAutomotiveLandscapePlayer =
                 shouldUseAutomotiveLandscapePlayerOverlay(layoutProfile)
             LaunchedEffect(wide) {
@@ -1461,6 +1471,8 @@ private fun PlayerOverlay(
                             track = track,
                             mobilePlayback = mobilePlayback,
                             wide = wide,
+                            showEqualizerEntry = showPhoneEqualizerEntry,
+                            onOpenEqualizer = onOpenEqualizer,
                             isFavorite = isFavorite,
                             onToggleFavorite = onToggleFavorite,
                             onOpenAddToPlaylist = onOpenAddToPlaylist,
@@ -1715,6 +1727,8 @@ private fun PlayerBottomControls(
     track: Track,
     mobilePlayback: Boolean,
     wide: Boolean,
+    showEqualizerEntry: Boolean,
+    onOpenEqualizer: () -> Unit,
     isFavorite: Boolean,
     onToggleFavorite: () -> Unit,
     onOpenAddToPlaylist: () -> Unit,
@@ -1929,6 +1943,11 @@ private fun PlayerBottomControls(
                 onOpenCast = {
                     isMoreSheetVisible = false
                     onPlayerIntent(PlayerIntent.OpenCastSheet)
+                },
+                showEqualizerEntry = showEqualizerEntry,
+                onOpenEqualizer = {
+                    isMoreSheetVisible = false
+                    onOpenEqualizer()
                 },
             )
         }
@@ -2194,6 +2213,8 @@ private fun CompactPlayerMoreSheet(
     onOpenSleepTimer: () -> Unit,
     onOpenCast: () -> Unit,
     onOpenLibraryNavigationTarget: (LibraryNavigationTarget) -> Unit,
+    showEqualizerEntry: Boolean,
+    onOpenEqualizer: () -> Unit,
 ) {
     val shellColors = mainShellColors
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -2271,6 +2292,15 @@ private fun CompactPlayerMoreSheet(
                         enabled = true,
                         clickable = false,
                         onClick = {},
+                    )
+                }
+                if (showEqualizerEntry) {
+                    CompactPlayerMoreSheetRow(
+                        icon = Icons.Rounded.GraphicEq,
+                        title = "均衡器",
+                        value = "音效调节",
+                        enabled = true,
+                        onClick = onOpenEqualizer,
                     )
                 }
                 CompactPlayerMoreSheetRow(

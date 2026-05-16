@@ -215,6 +215,7 @@ fun createAndroidRuntimeGraph(
             supportsAppDisplayScaleAdjustment = true,
             supportsAndroidExtensionDecoder = true,
             supportsDesktopLyrics = true,
+            supportsEqualizer = platformName.supportsAndroidEqualizer(),
             supportsPlaybackBackgroundArtworkBlur = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S,
         ),
     )
@@ -275,6 +276,14 @@ fun createAndroidRuntimeGraph(
         playerRuntimeServices = PlayerRuntimeServices(
             playbackRepository = AndroidServiceBackedPlaybackRepository(activity.applicationContext),
             playbackPreferencesStore = appPreferencesStore,
+            equalizerPlatformService = if (platformName.supportsAndroidEqualizer()) {
+                AndroidEqualizerPlatformService(
+                    context = activity.applicationContext,
+                    platformName = platformName,
+                )
+            } else {
+                top.iwesley.lyn.music.core.model.UnsupportedEqualizerPlatformService
+            },
             castGateway = AndroidUpnpCastGateway(
                 context = activity.applicationContext,
                 logger = logger,
@@ -314,6 +323,11 @@ private object AndroidDailyRecommendationDateKeyProvider : DailyRecommendationDa
     override fun currentDateKey(): String {
         return SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
     }
+}
+
+private fun String.supportsAndroidEqualizer(): Boolean {
+    return this == ANDROID_EQUALIZER_PHONE_PLATFORM_NAME ||
+        this == ANDROID_EQUALIZER_AUTOMOTIVE_PLATFORM_NAME
 }
 
 private class AndroidDailyRecommendationDateChangeNotifier(
@@ -472,7 +486,7 @@ internal class AndroidAppPreferencesStore(
     context: Context,
 ) : PlaybackPreferencesStore, SambaCachePreferencesStore, ThemePreferencesStore, AppDisplayPreferencesStore,
     CompactPlayerLyricsPreferencesStore, DesktopLyricsPreferencesStore, NavidromeAudioQualityPreferencesStore, LibrarySourceFilterPreferencesStore,
-    LyricsShareFontPreferencesStore, PlaybackDecoderPreferencesStore {
+    LyricsShareFontPreferencesStore, PlaybackDecoderPreferencesStore, AndroidEqualizerPreferencesStore {
     private val preferences: SharedPreferences =
         context.getSharedPreferences("lynmusic.settings", Context.MODE_PRIVATE)
     private val mutableUseSambaCache = MutableStateFlow(
@@ -493,6 +507,15 @@ internal class AndroidAppPreferencesStore(
             KEY_ANDROID_EXTENSION_DECODER_ENABLED,
             DEFAULT_ANDROID_EXTENSION_DECODER_ENABLED,
         ),
+    )
+    private val mutableEqualizerEnabled = MutableStateFlow(
+        preferences.getBoolean(KEY_EQUALIZER_ENABLED, false),
+    )
+    private val mutableEqualizerPresetName = MutableStateFlow(
+        preferences.getString(KEY_EQUALIZER_PRESET_NAME, null)?.takeIf { it.isNotBlank() },
+    )
+    private val mutableEqualizerBandLevels = MutableStateFlow(
+        decodeAndroidEqualizerBandLevels(preferences.getString(KEY_EQUALIZER_BAND_LEVELS, null)),
     )
     private val mutableAppDisplayScalePreset = MutableStateFlow(
         readAppDisplayScalePreset(),
@@ -528,6 +551,20 @@ internal class AndroidAppPreferencesStore(
                     mutableUseAndroidExtensionDecoder.value = readUseAndroidExtensionDecoder()
                 }
 
+                KEY_EQUALIZER_ENABLED -> {
+                    mutableEqualizerEnabled.value = preferences.getBoolean(KEY_EQUALIZER_ENABLED, false)
+                }
+
+                KEY_EQUALIZER_PRESET_NAME -> {
+                    mutableEqualizerPresetName.value =
+                        preferences.getString(KEY_EQUALIZER_PRESET_NAME, null)?.takeIf { it.isNotBlank() }
+                }
+
+                KEY_EQUALIZER_BAND_LEVELS -> {
+                    mutableEqualizerBandLevels.value =
+                        decodeAndroidEqualizerBandLevels(preferences.getString(KEY_EQUALIZER_BAND_LEVELS, null))
+                }
+
                 KEY_SHOW_DESKTOP_LYRICS -> {
                     mutableShowDesktopLyrics.value = preferences.getBoolean(KEY_SHOW_DESKTOP_LYRICS, false)
                 }
@@ -559,6 +596,9 @@ internal class AndroidAppPreferencesStore(
     override val autoPlayOnStartup: StateFlow<Boolean> = mutableAutoPlayOnStartup.asStateFlow()
     override val useAndroidExtensionDecoder: StateFlow<Boolean> =
         mutableUseAndroidExtensionDecoder.asStateFlow()
+    override val equalizerEnabled: StateFlow<Boolean> = mutableEqualizerEnabled.asStateFlow()
+    override val equalizerPresetName: StateFlow<String?> = mutableEqualizerPresetName.asStateFlow()
+    override val equalizerBandLevels: StateFlow<Map<Int, Int>> = mutableEqualizerBandLevels.asStateFlow()
     override val appDisplayScalePreset: StateFlow<AppDisplayScalePreset> = mutableAppDisplayScalePreset.asStateFlow()
     override val navidromeWifiAudioQuality: StateFlow<NavidromeAudioQuality> =
         mutableNavidromeWifiAudioQuality.asStateFlow()
@@ -602,6 +642,27 @@ internal class AndroidAppPreferencesStore(
     override suspend fun setUseAndroidExtensionDecoder(enabled: Boolean) {
         preferences.edit().putBoolean(KEY_ANDROID_EXTENSION_DECODER_ENABLED, enabled).apply()
         mutableUseAndroidExtensionDecoder.value = enabled
+    }
+
+    override suspend fun setEqualizerEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean(KEY_EQUALIZER_ENABLED, enabled).apply()
+        mutableEqualizerEnabled.value = enabled
+    }
+
+    override suspend fun setEqualizerPresetName(name: String?) {
+        val normalizedName = name?.trim()?.takeIf { it.isNotBlank() }
+        preferences.edit().putString(KEY_EQUALIZER_PRESET_NAME, normalizedName).apply()
+        mutableEqualizerPresetName.value = normalizedName
+    }
+
+    override suspend fun setEqualizerBandLevels(levels: Map<Int, Int>) {
+        val sanitizedLevels = levels
+            .filterKeys { it > 0 }
+            .mapValues { (_, level) -> level.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()) }
+        preferences.edit()
+            .putString(KEY_EQUALIZER_BAND_LEVELS, encodeAndroidEqualizerBandLevels(sanitizedLevels))
+            .apply()
+        mutableEqualizerBandLevels.value = sanitizedLevels
     }
 
     override suspend fun setAppDisplayScalePreset(preset: AppDisplayScalePreset) {
@@ -1676,6 +1737,7 @@ internal class AndroidPlaybackGateway(
     private val database: LynMusicDatabase,
     private val secureCredentialStore: SecureCredentialStore,
     private val playbackPreferencesStore: PlaybackPreferencesStore,
+    private val equalizerPreferencesStore: AndroidEqualizerPreferencesStore,
     private val playbackDecoderPreferencesStore: PlaybackDecoderPreferencesStore,
     private val navidromeAudioQualityPreferencesStore: NavidromeAudioQualityPreferencesStore,
     private val networkConnectionTypeProvider: NetworkConnectionTypeProvider,
@@ -1685,6 +1747,10 @@ internal class AndroidPlaybackGateway(
         playbackDecoderPreferencesStore.useAndroidExtensionDecoder.value
     private var player = createPlayer(activeAndroidExtensionDecoderEnabled)
     private var playerHandler = Handler(player.applicationLooper)
+    private val equalizerController = AndroidEqualizerController(
+        preferencesStore = equalizerPreferencesStore,
+        logger = logger,
+    )
     private val mutableState = MutableStateFlow(PlaybackGatewayState())
     private var released = false
     private var progressTickerRunning = false
@@ -1828,6 +1894,7 @@ internal class AndroidPlaybackGateway(
         player.addListener(playerListener)
 
         player.addAnalyticsListener(analyticsListener)
+        equalizerController.attachPlayer(player)
 
     }
 
@@ -2014,6 +2081,7 @@ internal class AndroidPlaybackGateway(
                 nextPlayer.addListener(playerListener)
                 nextPlayer.addAnalyticsListener(analyticsListener)
             }
+            equalizerController.attachPlayer(player)
             playerHandler = Handler(player.applicationLooper)
             onPlayerRecreated?.invoke(player)
         }
@@ -2059,6 +2127,7 @@ internal class AndroidPlaybackGateway(
     override suspend fun release() {
         released = true
         onPlayerRecreated = null
+        equalizerController.release()
         playerHandler.removeCallbacks(progressTicker)
         onPlayerThread {
             pendingLoadPlayWhenReady = false
