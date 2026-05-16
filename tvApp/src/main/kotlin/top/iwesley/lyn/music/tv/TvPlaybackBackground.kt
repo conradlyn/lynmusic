@@ -2,6 +2,7 @@ package top.iwesley.lyn.music.tv
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.os.Build
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -56,7 +57,7 @@ internal fun TvPlaybackArtworkBackground(
     )
 
     Box(modifier = modifier.background(baseColor)) {
-        if (!artworkModel.isNullOrBlank()) {
+        if (shouldRenderTvPlaybackBackgroundArtwork(artworkModel)) {
             Image(
                 painter = rememberAsyncImagePainter(model = artworkModel),
                 contentDescription = null,
@@ -114,6 +115,10 @@ internal fun TvPlaybackArtworkBackground(
             )
         }
     }
+}
+
+private fun shouldRenderTvPlaybackBackgroundArtwork(artworkModel: String?): Boolean {
+    return Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !artworkModel.isNullOrBlank()
 }
 
 @Composable
