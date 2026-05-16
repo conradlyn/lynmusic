@@ -148,6 +148,48 @@ class DefaultLyricsRepositoryWorkflowTest {
     }
 
     @Test
+    fun `manual workflow search candidates prefer artwork for score ties`() = runTest {
+        val database = createTestDatabase()
+        database.workflowLyricsSourceConfigDao().upsert(
+            WorkflowLyricsSourceConfigEntity(
+                id = "workflow-oiapi",
+                name = "Workflow OIAPI",
+                priority = 80,
+                enabled = true,
+                rawJson = WORKFLOW_JSON,
+            ),
+        )
+        val httpClient = WorkflowHttpClient(
+            mapOf(
+                "https://oiapi.net/api/QQMusicLyric?keyword=Rain&page=1&limit=10&type=json" to Result.success(
+                    LyricsHttpResponse(statusCode = 200, body = SEARCH_JSON_TIE_COVER),
+                ),
+            ),
+        )
+        val repository = DefaultLyricsRepository(
+            database = database,
+            httpClient = httpClient,
+            secureCredentialStore = EmptySecureCredentialStore,
+            logger = NoopDiagnosticLogger,
+        )
+        val track = Track(
+            id = "track-tie-cover",
+            sourceId = "local-1",
+            title = "Rain",
+            artistName = "Jay",
+            albumTitle = "Album 1",
+            durationMs = 181_000L,
+            mediaLocator = "file:///music/rain.mp3",
+            relativePath = "rain.mp3",
+        )
+
+        val candidates = repository.searchWorkflowSongCandidates(track)
+
+        assertEquals(listOf("12", "11"), candidates.map { it.id })
+        assertEquals("https://img.test/rain-covered.jpg", candidates.first().imageUrl)
+    }
+
+    @Test
     fun `auto workflow artwork does not cache or display when album cache exists`() = runTest {
         val database = createTestDatabase()
         database.workflowLyricsSourceConfigDao().upsert(
@@ -1066,6 +1108,28 @@ private const val SEARCH_JSON_WITH_FALLBACK = """
       "album": "Album 2",
       "duration": 181,
       "image": "https://img.test/fallback.jpg"
+    }
+  ]
+}
+"""
+
+private const val SEARCH_JSON_TIE_COVER = """
+{
+  "data": [
+    {
+      "id": 11,
+      "name": "Rain",
+      "singer": ["Jay"],
+      "album": "Album 1",
+      "duration": 181
+    },
+    {
+      "id": 12,
+      "name": "Rain",
+      "singer": ["Jay"],
+      "album": "Album 1",
+      "duration": 181,
+      "image": "https://img.test/rain-covered.jpg"
     }
   ]
 }

@@ -356,6 +356,62 @@ class DefaultLyricsRepositoryManualSearchTest {
     }
 
     @Test
+    fun `manual search direct candidates prefer artwork for score ties`() = runTest {
+        val database = createTestDatabase()
+        database.lyricsSourceConfigDao().upsert(
+            lyricsSourceConfig(
+                id = "source-many",
+                name = "多候选源",
+                priority = 20,
+                urlTemplate = "https://lyrics.example/many",
+                responseFormat = LyricsResponseFormat.JSON,
+                extractor = "json-map:lyrics=plainLyrics,title=trackName,artist=artistName,album=albumName,durationSeconds=duration,id=id,coverUrl=cover",
+            ),
+        )
+        val httpClient = FakeLyricsHttpClient(
+            mapOf(
+                "https://lyrics.example/many" to Result.success(
+                    LyricsHttpResponse(
+                        statusCode = 200,
+                        body = """
+                            [
+                              {
+                                "id": "plain",
+                                "trackName": "原始标题",
+                                "artistName": "原始歌手",
+                                "albumName": "原始专辑",
+                                "duration": 123.0,
+                                "plainLyrics": "无封面歌词"
+                              },
+                              {
+                                "id": "covered",
+                                "trackName": "原始标题",
+                                "artistName": "原始歌手",
+                                "albumName": "原始专辑",
+                                "duration": 123.0,
+                                "cover": "https://img.example.com/covered.jpg",
+                                "plainLyrics": "有封面歌词"
+                              }
+                            ]
+                        """.trimIndent(),
+                    ),
+                ),
+            ),
+        )
+        val repository = DefaultLyricsRepository(
+            database = database,
+            httpClient = httpClient,
+            secureCredentialStore = EmptySecureCredentialStore,
+            logger = NoopDiagnosticLogger,
+        )
+
+        val candidates = repository.searchLyricsCandidates(sampleTrack(), includeTrackProvidedCandidate = false)
+
+        assertEquals(listOf("covered", "plain"), candidates.map { it.itemId })
+        assertEquals("https://img.example.com/covered.jpg", candidates.first().artworkLocator)
+    }
+
+    @Test
     fun `manual search still returns external candidates when realtime tag reading fails`() = runTest {
         val database = createTestDatabase()
         database.lyricsSourceConfigDao().upsert(

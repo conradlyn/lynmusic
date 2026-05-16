@@ -3,6 +3,7 @@ package top.iwesley.lyn.music.domain
 import kotlin.math.abs
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.WorkflowSelectionConfig
+import top.iwesley.lyn.music.core.model.normalizeArtworkLocator
 
 internal val DEFAULT_DIRECT_LYRICS_SELECTION = WorkflowSelectionConfig()
 internal const val AUTO_DIRECT_LYRICS_SYNCED_BONUS = 0.03
@@ -56,7 +57,15 @@ internal fun rankDirectLyricsCandidates(
                 originalIndex = index,
             )
         }
-        .sortedWith(compareByDescending<ScoredDirectLyricsCandidate> { it.score }.thenBy { it.originalIndex })
+        .sortedWith(
+            compareByDescending<ScoredDirectLyricsCandidate> { it.score }
+                .thenByDescending { lyricsArtworkTieBreakScore(it.candidate.artworkLocator) }
+                .thenBy { it.originalIndex },
+        )
+}
+
+internal fun lyricsArtworkTieBreakScore(locator: String?): Int {
+    return if (normalizeArtworkLocator(locator).orEmpty().trim().isNotBlank()) 1 else 0
 }
 
 internal fun normalizedArtistSimilarity(expected: String, actual: String): Double {

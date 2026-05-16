@@ -41,6 +41,48 @@ class LyricsCandidateRankingTest {
     }
 
     @Test
+    fun `direct candidate ranking prefers artwork for score ties`() {
+        val ranked = rankDirectLyricsCandidates(
+            track = sampleTrack(),
+            candidates = listOf(
+                parsedCandidate(itemId = "plain", title = "Blue", artistName = "Artist A", albumTitle = "Album A", durationSeconds = 215),
+                parsedCandidate(
+                    itemId = "covered",
+                    title = "Blue",
+                    artistName = "Artist A",
+                    albumTitle = "Album A",
+                    durationSeconds = 215,
+                    artworkLocator = "https://img.example.com/blue.jpg",
+                ),
+            ),
+        )
+
+        assertEquals(listOf("covered", "plain"), ranked.map { it.candidate.itemId })
+        assertEquals(ranked.first().score, ranked[1].score)
+    }
+
+    @Test
+    fun `direct candidate artwork does not override a lower score`() {
+        val ranked = rankDirectLyricsCandidates(
+            track = sampleTrack(),
+            candidates = listOf(
+                parsedCandidate(itemId = "exact", title = "Blue", artistName = "Artist A", albumTitle = "Album A", durationSeconds = 215),
+                parsedCandidate(
+                    itemId = "covered-low",
+                    title = "Glue",
+                    artistName = "Artist A",
+                    albumTitle = "Album A",
+                    durationSeconds = 215,
+                    artworkLocator = "https://img.example.com/glue.jpg",
+                ),
+            ),
+        )
+
+        assertEquals("exact", ranked.first().candidate.itemId)
+        assertTrue(ranked.first().score > ranked[1].score)
+    }
+
+    @Test
     fun `direct candidate ranking ignores synced status without bonus`() {
         val ranked = rankDirectLyricsCandidates(
             track = sampleTrack(),
@@ -334,6 +376,7 @@ private fun parsedCandidate(
     artistName: String? = null,
     albumTitle: String? = null,
     durationSeconds: Int? = null,
+    artworkLocator: String? = null,
     synced: Boolean = false,
 ): ParsedLyricsPayload {
     val lines = if (synced) parseLrc("[00:01.00]line") else parsePlainText("line")
@@ -348,5 +391,6 @@ private fun parsedCandidate(
         artistName = artistName,
         albumTitle = albumTitle,
         durationSeconds = durationSeconds,
+        artworkLocator = artworkLocator,
     )
 }

@@ -377,20 +377,35 @@ fun rankWorkflowSongCandidates(
     track: Track,
     candidates: List<WorkflowSongCandidate>,
     selection: WorkflowSelectionConfig,
+    enforceMinScore: Boolean = true,
 ): List<WorkflowSongCandidate> {
     return candidates
         .take(selection.maxCandidates.coerceAtLeast(1))
-        .map {
-            it to scoreWorkflowSongCandidate(
-                track = track,
-                candidate = it,
-                selection = selection,
+        .mapIndexed { index, candidate ->
+            ScoredWorkflowSongCandidate(
+                candidate = candidate,
+                score = scoreWorkflowSongCandidate(
+                    track = track,
+                    candidate = candidate,
+                    selection = selection,
+                ),
+                originalIndex = index,
             )
         }
-        .filter { (_, score) -> score >= selection.minScore }
-        .sortedByDescending { it.second }
-        .map { it.first }
+        .filter { !enforceMinScore || it.score >= selection.minScore }
+        .sortedWith(
+            compareByDescending<ScoredWorkflowSongCandidate> { it.score }
+                .thenByDescending { lyricsArtworkTieBreakScore(it.candidate.imageUrl) }
+                .thenBy { it.originalIndex },
+        )
+        .map { it.candidate }
 }
+
+private data class ScoredWorkflowSongCandidate(
+    val candidate: WorkflowSongCandidate,
+    val score: Double,
+    val originalIndex: Int,
+)
 
 private fun JsonObject.toWorkflowSearchConfig(): WorkflowSearchConfig {
     ensureAllowedKeys(this, SEARCH_KEYS, "workflow.search")

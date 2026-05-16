@@ -104,6 +104,52 @@ class WorkflowLyricsEngineTest {
     }
 
     @Test
+    fun `workflow ranking prefers artwork for score ties`() {
+        val ranked = rankWorkflowSongCandidates(
+            track = workflowTrack(),
+            candidates = listOf(
+                workflowCandidate(id = "plain"),
+                workflowCandidate(id = "covered", imageUrl = "https://img.example.com/blue.jpg"),
+            ),
+            selection = WorkflowSelectionConfig(minScore = 0.0),
+        )
+
+        assertEquals(listOf("covered", "plain"), ranked.map { it.id })
+    }
+
+    @Test
+    fun `workflow ranking keeps original order for ties with same artwork state`() {
+        val ranked = rankWorkflowSongCandidates(
+            track = workflowTrack(),
+            candidates = listOf(
+                workflowCandidate(id = "first"),
+                workflowCandidate(id = "second"),
+            ),
+            selection = WorkflowSelectionConfig(minScore = 0.0),
+        )
+
+        assertEquals(listOf("first", "second"), ranked.map { it.id })
+    }
+
+    @Test
+    fun `workflow candidate artwork does not override a lower score`() {
+        val ranked = rankWorkflowSongCandidates(
+            track = workflowTrack(),
+            candidates = listOf(
+                workflowCandidate(id = "exact"),
+                workflowCandidate(id = "covered-low", title = "Glue", imageUrl = "https://img.example.com/glue.jpg"),
+            ),
+            selection = WorkflowSelectionConfig(minScore = 0.0),
+        )
+
+        assertEquals("exact", ranked.first().id)
+        assertTrue(
+            scoreWorkflowSongCandidate(workflowTrack(), ranked.first(), WorkflowSelectionConfig(minScore = 0.0)) >
+                scoreWorkflowSongCandidate(workflowTrack(), ranked[1], WorkflowSelectionConfig(minScore = 0.0)),
+        )
+    }
+
+    @Test
     fun `workflow scoring applies title containment score`() {
         val score = scoreWorkflowSongCandidate(
             track = workflowTrack(title = "硬币", albumTitle = null),
@@ -195,6 +241,7 @@ private fun workflowCandidate(
     title: String = "Blue",
     artists: List<String> = listOf("Artist A"),
     album: String? = "Album A",
+    imageUrl: String? = null,
 ): WorkflowSongCandidate {
     return WorkflowSongCandidate(
         sourceId = "workflow-source",
@@ -204,6 +251,7 @@ private fun workflowCandidate(
         artists = artists,
         album = album,
         durationSeconds = 215,
+        imageUrl = imageUrl,
     )
 }
 

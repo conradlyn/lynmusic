@@ -114,6 +114,7 @@ import top.iwesley.lyn.music.domain.parsePlainText
 import top.iwesley.lyn.music.domain.parseLrc
 import top.iwesley.lyn.music.domain.DEFAULT_DIRECT_LYRICS_SELECTION
 import top.iwesley.lyn.music.domain.AUTO_DIRECT_LYRICS_SYNCED_BONUS
+import top.iwesley.lyn.music.domain.lyricsArtworkTieBreakScore
 import top.iwesley.lyn.music.domain.rankDirectLyricsCandidates
 import top.iwesley.lyn.music.domain.rankWorkflowSongCandidates
 import top.iwesley.lyn.music.domain.rewriteWorkflowLyricsSourceEnabled
@@ -1570,7 +1571,11 @@ class DefaultLyricsRepository(
                 )
             }
         }
-            .sortedWith(compareByDescending<ScoredManualDirectLyricsCandidate> { it.score }.thenBy { it.originalIndex })
+            .sortedWith(
+                compareByDescending<ScoredManualDirectLyricsCandidate> { it.score }
+                    .thenByDescending { lyricsArtworkTieBreakScore(it.candidate.artworkLocator) }
+                    .thenBy { it.originalIndex },
+            )
 
         if (rankedDirectCandidates.isNotEmpty()) {
             logger.debug(LYRICS_LOG_TAG) {
@@ -1594,7 +1599,12 @@ class DefaultLyricsRepository(
             return emptyList()
         }
         val candidates = configs.flatMap { config ->
-            searchWorkflowCandidates(track, config, requestType = "manual")
+            rankWorkflowSongCandidates(
+                track = track,
+                candidates = searchWorkflowCandidates(track, config, requestType = "manual"),
+                selection = config.selection,
+                enforceMinScore = false,
+            )
         }
         if (candidates.isNotEmpty()) {
             logger.debug(LYRICS_LOG_TAG) {
