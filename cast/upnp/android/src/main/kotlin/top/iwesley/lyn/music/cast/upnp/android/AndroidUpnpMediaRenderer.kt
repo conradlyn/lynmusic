@@ -2,6 +2,7 @@ package top.iwesley.lyn.music.cast.upnp.android
 
 import android.content.Context
 import android.net.wifi.WifiManager
+import android.os.Build
 import java.util.UUID
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
 import top.iwesley.lyn.music.core.model.NoopDiagnosticLogger
@@ -10,7 +11,7 @@ import top.iwesley.lyn.music.core.model.info
 
 class AndroidUpnpMediaRenderer(
     context: Context,
-    private val friendlyName: String = DEFAULT_RENDERER_FRIENDLY_NAME,
+    private val friendlyName: String = DEFAULT_RENDERER_FRIENDLY_NAME + " " + Build.MODEL,
     private val callback: UpnpMediaRendererCallback,
     private val logger: DiagnosticLogger = NoopDiagnosticLogger,
 ) {
