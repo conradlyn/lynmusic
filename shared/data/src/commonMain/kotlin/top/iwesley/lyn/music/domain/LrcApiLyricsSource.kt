@@ -8,6 +8,7 @@ import top.iwesley.lyn.music.core.model.RequestMethod
 const val MANAGED_LRCAPI_SOURCE_ID = "managed-lrcapi"
 const val MANAGED_LRCAPI_SOURCE_NAME = "LrcAPI"
 const val MANAGED_LRCAPI_SOURCE_PRIORITY = 110
+const val DEFAULT_LRCAPI_URL = "https://api.lrc.cx/jsonapi"
 const val LRCAPI_QUERY_TEMPLATE = "title={title}&artist={artist}"
 const val LRCAPI_JSON_MAP_EXTRACTOR = "json-map:lyrics=lyrics|lrc,title=title,artist=artist,album=album,durationSeconds=duration,id=id,coverUrl=cover"
 

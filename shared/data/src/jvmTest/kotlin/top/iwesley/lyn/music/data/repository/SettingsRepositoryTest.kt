@@ -34,6 +34,9 @@ import top.iwesley.lyn.music.data.db.LyricsSourceConfigEntity
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
 import top.iwesley.lyn.music.data.db.WorkflowLyricsSourceConfigEntity
 import top.iwesley.lyn.music.data.db.buildLynMusicDatabase
+import top.iwesley.lyn.music.domain.DEFAULT_LRCAPI_URL
+import top.iwesley.lyn.music.domain.MANAGED_LRCAPI_SOURCE_ID
+import top.iwesley.lyn.music.domain.MANAGED_LRCAPI_SOURCE_NAME
 import top.iwesley.lyn.music.domain.PRESET_OIAPI_QQMUSIC_SOURCE_ID
 import top.iwesley.lyn.music.domain.PRESET_OIAPI_QQMUSIC_SOURCE_NAME
 import top.iwesley.lyn.music.domain.PRESET_OIAPI_QQMUSIC_SOURCE_PRIORITY
@@ -277,14 +280,14 @@ class SettingsRepositoryTest {
         repository.ensureDefaults()
 
         val saved = database.lyricsSourceConfigDao().getAll()
-        assertEquals(1, saved.size)
-        assertEquals("lrclib", saved.single().id)
-        assertEquals("LRCLIB", saved.single().name)
-        assertEquals("https://lrclib.net/api/search", saved.single().urlTemplate)
-        assertEquals("track_name={title}&artist_name={artist}", saved.single().queryTemplate)
-        assertEquals(LRCLIB_JSON_MAP_EXTRACTOR, saved.single().extractor)
-        assertEquals(100, saved.single().priority)
-        assertEquals(true, saved.single().enabled)
+        assertEquals(listOf("lrclib", MANAGED_LRCAPI_SOURCE_ID), saved.map { it.id }.sorted())
+        val lrclib = saved.single { it.id == "lrclib" }
+        assertEquals("LRCLIB", lrclib.name)
+        assertEquals("https://lrclib.net/api/search", lrclib.urlTemplate)
+        assertEquals("track_name={title}&artist_name={artist}", lrclib.queryTemplate)
+        assertEquals(LRCLIB_JSON_MAP_EXTRACTOR, lrclib.extractor)
+        assertEquals(100, lrclib.priority)
+        assertEquals(true, lrclib.enabled)
     }
 
     @Test
@@ -297,8 +300,13 @@ class SettingsRepositoryTest {
 
         val direct = database.lyricsSourceConfigDao().getAll()
         val workflows = database.workflowLyricsSourceConfigDao().getAll()
-        assertEquals(1, direct.size)
-        assertEquals("lrclib", direct.single().id)
+        assertEquals(listOf("lrclib", MANAGED_LRCAPI_SOURCE_ID), direct.map { it.id }.sorted())
+        val lrcApi = direct.single { it.id == MANAGED_LRCAPI_SOURCE_ID }
+        assertEquals(MANAGED_LRCAPI_SOURCE_NAME, lrcApi.name)
+        assertEquals(DEFAULT_LRCAPI_URL, lrcApi.urlTemplate)
+        assertEquals(110, lrcApi.priority)
+        assertEquals(true, lrcApi.enabled)
+        assertEquals("lrclib", direct.single { it.id == "lrclib" }.id)
         assertEquals(1, workflows.size)
         assertEquals(PRESET_OIAPI_QQMUSIC_SOURCE_ID, workflows.single().id)
         assertEquals(PRESET_OIAPI_QQMUSIC_SOURCE_NAME, workflows.single().name)
@@ -306,6 +314,72 @@ class SettingsRepositoryTest {
         assertEquals(true, workflows.single().enabled)
         assertEquals(true, workflows.single().rawJson.contains("https://oiapi.net/api/QQMusicLyric"))
         assertEquals(true, workflows.single().rawJson.contains("\"minScore\": 0.9"))
+    }
+
+    @Test
+    fun `ensure defaults adds lrcapi to existing direct sources`() = runTest {
+        val database = createSettingsTestDatabase()
+        database.lyricsSourceConfigDao().upsert(directEntity(id = "custom-direct", name = "Custom Direct"))
+        val preferences = FakePreferencesStore()
+        val repository = DefaultSettingsRepository(database, preferences, preferences, preferences)
+
+        repository.ensureDefaults()
+
+        val direct = database.lyricsSourceConfigDao().getAll()
+        assertEquals(true, direct.any { it.id == "custom-direct" })
+        assertEquals(false, direct.any { it.id == "lrclib" })
+        val lrcApi = direct.single { it.id == MANAGED_LRCAPI_SOURCE_ID }
+        assertEquals(DEFAULT_LRCAPI_URL, lrcApi.urlTemplate)
+        assertEquals(MANAGED_LRCAPI_SOURCE_NAME, lrcApi.name)
+    }
+
+    @Test
+    fun `ensure defaults keeps existing custom lrcapi source`() = runTest {
+        val database = createSettingsTestDatabase()
+        database.lyricsSourceConfigDao().upsert(
+            directEntity(id = MANAGED_LRCAPI_SOURCE_ID, name = MANAGED_LRCAPI_SOURCE_NAME).copy(
+                urlTemplate = "https://lyrics.example/custom-lrcapi",
+                priority = 9,
+                enabled = false,
+            ),
+        )
+        val preferences = FakePreferencesStore()
+        val repository = DefaultSettingsRepository(database, preferences, preferences, preferences)
+
+        repository.ensureDefaults()
+
+        val lrcApi = database.lyricsSourceConfigDao().getAll().single { it.id == MANAGED_LRCAPI_SOURCE_ID }
+        assertEquals("https://lyrics.example/custom-lrcapi", lrcApi.urlTemplate)
+        assertEquals(9, lrcApi.priority)
+        assertEquals(false, lrcApi.enabled)
+    }
+
+    @Test
+    fun `ensure defaults skips lrcapi when another source already uses its name`() = runTest {
+        val database = createSettingsTestDatabase()
+        database.lyricsSourceConfigDao().upsert(directEntity(id = "custom-lrcapi", name = " LrcAPI "))
+        val preferences = FakePreferencesStore()
+        val repository = DefaultSettingsRepository(database, preferences, preferences, preferences)
+
+        repository.ensureDefaults()
+
+        val direct = database.lyricsSourceConfigDao().getAll()
+        assertEquals(false, direct.any { it.id == MANAGED_LRCAPI_SOURCE_ID })
+        assertEquals(true, direct.any { it.id == "custom-lrcapi" })
+    }
+
+    @Test
+    fun `ensure defaults skips lrcapi when workflow source already uses its name`() = runTest {
+        val database = createSettingsTestDatabase()
+        database.workflowLyricsSourceConfigDao().upsert(workflowEntity(id = "wf-lrcapi", name = " LrcAPI "))
+        val preferences = FakePreferencesStore()
+        val repository = DefaultSettingsRepository(database, preferences, preferences, preferences)
+
+        repository.ensureDefaults()
+
+        val direct = database.lyricsSourceConfigDao().getAll()
+        assertEquals(false, direct.any { it.id == MANAGED_LRCAPI_SOURCE_ID })
+        assertEquals(true, database.workflowLyricsSourceConfigDao().getAll().any { it.id == "wf-lrcapi" })
     }
 
     @Test

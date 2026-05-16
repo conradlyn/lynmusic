@@ -37,6 +37,7 @@ import top.iwesley.lyn.music.core.model.withThemePalette
 import top.iwesley.lyn.music.core.mvi.BaseStore
 import top.iwesley.lyn.music.data.repository.LRCLIB_JSON_MAP_EXTRACTOR
 import top.iwesley.lyn.music.data.repository.SettingsRepository
+import top.iwesley.lyn.music.domain.DEFAULT_LRCAPI_URL
 import top.iwesley.lyn.music.domain.MANAGED_LRCAPI_SOURCE_ID
 import top.iwesley.lyn.music.domain.MANAGED_MUSICMATCH_SOURCE_ID
 import top.iwesley.lyn.music.domain.buildManagedLrcApiConfig
@@ -596,14 +597,17 @@ class SettingsStore(
             }
 
             SettingsIntent.ClearLrcApi -> {
-                if (state.value.hasLrcApiSource) {
-                    repository.deleteLyricsSource(MANAGED_LRCAPI_SOURCE_ID)
+                val saved = runCatching {
+                    repository.saveLyricsSource(buildManagedLrcApiConfig(DEFAULT_LRCAPI_URL))
                 }
-                updateState {
-                    it.copy(
-                        lrcApiUrl = "",
-                        hasLrcApiSource = false,
-                        message = "LrcAPI 已清除。",
+                updateState { currentState ->
+                    currentState.copy(
+                        lrcApiUrl = if (saved.isSuccess) DEFAULT_LRCAPI_URL else currentState.lrcApiUrl,
+                        hasLrcApiSource = if (saved.isSuccess) true else currentState.hasLrcApiSource,
+                        message = saved.fold(
+                            onSuccess = { "LrcAPI 已恢复默认。" },
+                            onFailure = { error -> error.message ?: "LrcAPI 恢复默认失败。" },
+                        ),
                     )
                 }
             }

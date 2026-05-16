@@ -50,6 +50,7 @@ import top.iwesley.lyn.music.core.model.deriveAppThemePalette
 import top.iwesley.lyn.music.core.model.resolveAppThemeTextPalette
 import top.iwesley.lyn.music.core.model.withThemePalette
 import top.iwesley.lyn.music.data.repository.SettingsRepository
+import top.iwesley.lyn.music.domain.DEFAULT_LRCAPI_URL
 import top.iwesley.lyn.music.domain.MANAGED_LRCAPI_SOURCE_ID
 import top.iwesley.lyn.music.domain.buildManagedLrcApiConfig
 import top.iwesley.lyn.music.domain.MANAGED_MUSICMATCH_SOURCE_ID
@@ -1054,8 +1055,8 @@ class SettingsStoreTest {
     }
 
     @Test
-    fun `clearing lrcapi removes managed direct source`() = runTest {
-        val repository = FakeSettingsRepository(listOf(sampleLrcApiSource()))
+    fun `clearing lrcapi restores default managed direct source`() = runTest {
+        val repository = FakeSettingsRepository(listOf(sampleLrcApiSource(urlTemplate = "https://lyrics.example/jsonapi")))
         val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
         val store = SettingsStore(repository, scope)
 
@@ -1064,9 +1065,15 @@ class SettingsStoreTest {
         advanceUntilIdle()
 
         val state = store.state.value
-        assertEquals("", state.lrcApiUrl)
-        assertEquals(false, state.hasLrcApiSource)
-        assertEquals(emptyList(), repository.currentSources())
+        val managed = repository.currentSources()
+            .filterIsInstance<LyricsSourceConfig>()
+            .single()
+        assertEquals(DEFAULT_LRCAPI_URL, state.lrcApiUrl)
+        assertEquals(true, state.hasLrcApiSource)
+        assertEquals("LrcAPI 已恢复默认。", state.message)
+        assertEquals(MANAGED_LRCAPI_SOURCE_ID, managed.id)
+        assertEquals(DEFAULT_LRCAPI_URL, managed.urlTemplate)
+        assertEquals(true, managed.enabled)
         scope.cancel()
     }
 
