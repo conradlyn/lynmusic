@@ -10,9 +10,6 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -306,47 +303,16 @@ private fun MusicRendererLyricsContent(
     state: MusicRendererLyricsState,
     modifier: Modifier = Modifier,
 ) {
-    val visibleLines = remember(state.lyrics) {
-        state.lyrics?.lines
-            ?.mapIndexedNotNull { index, line ->
-                line.text.trim().takeIf { it.isNotBlank() }?.let { text ->
-                    MusicRendererVisibleLyricsLine(rawIndex = index, text = text)
-                }
-            }
-            .orEmpty()
-    }
-    val highlightedVisibleIndex = remember(visibleLines, state.highlightedLineIndex) {
-        visibleLines.indexOfFirst { it.rawIndex == state.highlightedLineIndex }
-    }
-    val listState = rememberLazyListState()
-    LaunchedEffect(highlightedVisibleIndex, visibleLines.size) {
-        if (highlightedVisibleIndex >= 0) {
-            listState.animateScrollToItem((highlightedVisibleIndex - 3).coerceAtLeast(0))
-        }
-    }
-
-    when {
-        state.isLoading -> LyricsMessage(message = "歌词加载中...", modifier = modifier)
-        visibleLines.isEmpty() -> LyricsMessage(message = "暂无歌词", modifier = modifier)
-        else -> LazyColumn(
-            state = listState,
-            modifier = modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            itemsIndexed(visibleLines, key = { _, line -> line.rawIndex }) { _, line ->
-                val highlighted = line.rawIndex == state.highlightedLineIndex
-                Text(
-                    text = line.text,
-                    color = if (highlighted) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.74f),
-                    fontWeight = if (highlighted) FontWeight.ExtraBold else FontWeight.Medium,
-                    style = if (highlighted) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleLarge,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        }
-    }
+    TvCenteredLyricsList(
+        lyrics = state.lyrics,
+        highlightedLineIndex = state.highlightedLineIndex,
+        isLoading = state.isLoading,
+        modifier = modifier,
+        listModifier = Modifier.fillMaxWidth(),
+        messageContent = { message, contentModifier ->
+            LyricsMessage(message = message, modifier = contentModifier)
+        },
+    )
 }
 
 @Composable
@@ -624,11 +590,6 @@ private data class MusicRendererLyricsState(
     val lyrics: LyricsDocument? = null,
     val isLoading: Boolean = false,
     val highlightedLineIndex: Int = -1,
-)
-
-private data class MusicRendererVisibleLyricsLine(
-    val rawIndex: Int,
-    val text: String,
 )
 
 private const val MUSIC_RENDERER_SEEK_STEP_MS = 10_000L

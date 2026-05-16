@@ -459,47 +459,16 @@ private fun TvLyricsContent(
     isLyricsLoading: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val visibleLines = remember(lyrics) {
-        lyrics?.lines
-            ?.mapIndexedNotNull { index, line ->
-                line.text.trim().takeIf { it.isNotBlank() }?.let { text ->
-                    TvVisibleLyricsLine(rawIndex = index, text = text)
-                }
-            }
-            .orEmpty()
-    }
-    val highlightedVisibleIndex = remember(visibleLines, highlightedLineIndex) {
-        visibleLines.indexOfFirst { it.rawIndex == highlightedLineIndex }
-    }
-    val listState = rememberLazyListState()
-    LaunchedEffect(highlightedVisibleIndex, visibleLines.size) {
-        if (highlightedVisibleIndex >= 0) {
-            listState.animateScrollToItem((highlightedVisibleIndex - 3).coerceAtLeast(0))
-        }
-    }
-
-    when {
-        isLyricsLoading -> TvPlayerMessagePanel(message = "歌词加载中...", modifier = modifier)
-        visibleLines.isEmpty() -> TvPlayerMessagePanel(message = "暂无歌词", modifier = modifier)
-        else -> LazyColumn(
-            state = listState,
-            modifier = modifier.focusGroup(),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            itemsIndexed(visibleLines, key = { _, line -> line.rawIndex }) { _, line ->
-                val highlighted = line.rawIndex == highlightedLineIndex
-                Text(
-                    text = line.text,
-                    color = if (highlighted) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.74f),
-                    fontWeight = if (highlighted) FontWeight.ExtraBold else FontWeight.Medium,
-                    style = if (highlighted) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleLarge,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        }
-    }
+    TvCenteredLyricsList(
+        lyrics = lyrics,
+        highlightedLineIndex = highlightedLineIndex,
+        isLoading = isLyricsLoading,
+        modifier = modifier,
+        listModifier = Modifier.focusGroup(),
+        messageContent = { message, contentModifier ->
+            TvPlayerMessagePanel(message = message, modifier = contentModifier)
+        },
+    )
 }
 
 @Composable
@@ -1195,11 +1164,6 @@ private fun tvPlayerStableDensityScale(fallbackDensity: Float): Float {
     }.takeIf { it > 0 } ?: fallbackDpi.roundToInt()
     return stableDpi / DisplayMetrics.DENSITY_DEFAULT.toFloat()
 }
-
-private data class TvVisibleLyricsLine(
-    val rawIndex: Int,
-    val text: String,
-)
 
 private val TvPlayerPanelShape = RoundedCornerShape(22.dp)
 private val TvPlayerArtworkShape = RoundedCornerShape(0.dp)
