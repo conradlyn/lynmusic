@@ -45,7 +45,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import top.iwesley.lyn.music.core.model.GlobalDiagnosticLogger
 import top.iwesley.lyn.music.core.model.LocalFolderSelection
+import top.iwesley.lyn.music.core.model.info
 import java.io.File
 import java.util.Locale
 
@@ -116,6 +118,24 @@ private fun AndroidLocalFolderPickerScreen(
 ) {
     val context = LocalContext.current
     var permissionRefreshKey by remember { mutableIntStateOf(0) }
+    val directLocalFileAccess = hasDirectLocalFileAccess(context)
+    val allRoots = remember(permissionRefreshKey) {
+        listAndroidStorageRoots(context)
+    }
+    val browsableRoots = remember(permissionRefreshKey, directLocalFileAccess, allRoots) {
+        if (directLocalFileAccess) {
+            allRoots
+        } else {
+            allRoots.filter { root ->
+                root.isRemovable && root.root.exists() && root.root.isDirectory && root.root.canRead()
+            }
+        }
+    }
+    val browserMode = when {
+        directLocalFileAccess -> "all-roots"
+        browsableRoots.isNotEmpty() -> "usb-only"
+        else -> "permission-required"
+    }
     val refreshPermissionState = remember {
         { permissionRefreshKey += 1 }
     }
@@ -123,14 +143,22 @@ private fun AndroidLocalFolderPickerScreen(
         onRefreshPermissionStateRegistered(refreshPermissionState)
         onDispose { onRefreshPermissionStateRegistered({}) }
     }
+    LaunchedEffect(permissionRefreshKey, directLocalFileAccess, browsableRoots) {
+        GlobalDiagnosticLogger.info(LOCAL_IMPORT_LOG_TAG) {
+            "local-folder-picker-screen browserMode=$browserMode directLocalFileAccess=$directLocalFileAccess " +
+                "allRootCount=${allRoots.size} browsableRootCount=${browsableRoots.size} " +
+                "browsableRoots=${browsableRoots.joinToString(separator = ";") { it.root.absolutePath }}"
+        }
+    }
 
     MaterialTheme {
         Surface(
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background,
         ) {
-            if (hasDirectLocalFileAccess(context)) {
+            if (directLocalFileAccess || browsableRoots.isNotEmpty()) {
                 AndroidLocalFolderBrowser(
+                    roots = browsableRoots,
                     onCancel = onCancel,
                     onSelectDirectory = onSelectDirectory,
                 )
@@ -210,10 +238,10 @@ private fun AndroidLocalFolderPermissionScreen(
 
 @Composable
 private fun AndroidLocalFolderBrowser(
+    roots: List<AndroidStorageRoot>,
     onCancel: () -> Unit,
     onSelectDirectory: (AndroidStorageRoot, File) -> Unit,
 ) {
-    val context = LocalContext.current
     var selectedRoot by remember { mutableStateOf<AndroidStorageRoot?>(null) }
     var currentDirectory by remember { mutableStateOf<File?>(null) }
     val root = selectedRoot
@@ -238,7 +266,7 @@ private fun AndroidLocalFolderBrowser(
 
     if (root == null || directory == null) {
         AndroidStorageRootList(
-            roots = remember { listAndroidStorageRoots(context) },
+            roots = roots,
             onRootSelected = { storageRoot ->
                 selectedRoot = storageRoot
                 currentDirectory = storageRoot.root
@@ -626,3 +654,4 @@ private val androidAudioFileExtensions = setOf(
 
 private const val EXTRA_SELECTED_PATH = "top.iwesley.lyn.music.platform.extra.SELECTED_PATH"
 private const val EXTRA_SELECTED_LABEL = "top.iwesley.lyn.music.platform.extra.SELECTED_LABEL"
+private const val LOCAL_IMPORT_LOG_TAG = "LocalImport"

@@ -1,14 +1,20 @@
 package top.iwesley.lyn.music.platform
 
 import android.Manifest
+import android.annotation.TargetApi
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.storage.StorageManager
+import android.os.storage.StorageVolume
 import android.provider.DocumentsContract
 import android.provider.Settings
+import top.iwesley.lyn.music.core.model.DiagnosticLogger
+import top.iwesley.lyn.music.core.model.GlobalDiagnosticLogger
+import top.iwesley.lyn.music.core.model.info
 import java.io.File
 import java.net.URI
 
@@ -85,13 +91,22 @@ internal fun isSupportedOpenDocumentTreePackage(packageName: String?): Boolean {
 }
 
 @Suppress("DEPRECATION")
-internal fun listAndroidStorageRoots(context: Context): List<AndroidStorageRoot> {
+internal fun listAndroidStorageRoots(
+    context: Context,
+    logger: DiagnosticLogger = GlobalDiagnosticLogger,
+): List<AndroidStorageRoot> {
     val primaryRoot = Environment.getExternalStorageDirectory()
     val normalizedPrimary = primaryRoot.canonicalFileOrSelf()
     val roots = linkedMapOf<String, AndroidStorageRoot>()
 
-    fun addRoot(root: File, label: String, isRemovable: Boolean) {
-        if (!root.exists() || !root.isDirectory) return
+    fun addRoot(root: File, label: String, isRemovable: Boolean, source: String) {
+        if (!root.exists() || !root.isDirectory || !root.canRead()) {
+            logger.info(LOCAL_IMPORT_LOG_TAG) {
+                "storage-root-skip source=$source path=${root.absolutePath} exists=${root.exists()} " +
+                    "directory=${root.isDirectory} readable=${root.canRead()}"
+            }
+            return
+        }
         val normalizedRoot = root.canonicalFileOrSelf()
         if (!roots.containsKey(normalizedRoot.absolutePath)) {
             roots[normalizedRoot.absolutePath] = AndroidStorageRoot(
@@ -99,13 +114,40 @@ internal fun listAndroidStorageRoots(context: Context): List<AndroidStorageRoot>
                 root = normalizedRoot,
                 isRemovable = isRemovable,
             )
+            logger.info(LOCAL_IMPORT_LOG_TAG) {
+                "storage-root-add source=$source label=$label path=${normalizedRoot.absolutePath} removable=$isRemovable"
+            }
+        } else {
+            logger.info(LOCAL_IMPORT_LOG_TAG) {
+                "storage-root-duplicate source=$source path=${normalizedRoot.absolutePath}"
+            }
         }
     }
 
-    addRoot(primaryRoot, label = "内置存储", isRemovable = false)
-    context.getExternalFilesDirs(null)
+    logger.info(LOCAL_IMPORT_LOG_TAG) {
+        "storage-root-enumerate-start sdk=${Build.VERSION.SDK_INT} " +
+            "hasManageAllFilesAccess=${hasManageAllFilesAccess(context)} " +
+            "hasDirectLocalFileAccess=${hasDirectLocalFileAccess(context)}"
+    }
+
+    addRoot(primaryRoot, label = "内置存储", isRemovable = false, source = "primary")
+
+    val storageVolumeRoots = listStorageVolumeRoots(context, logger)
+    storageVolumeRoots.forEach { root ->
+        addRoot(
+            root = root.root,
+            label = root.label,
+            isRemovable = root.isRemovable,
+            source = "storage-volume",
+        )
+    }
+
+    val externalFilesDirs = context.getExternalFilesDirs(null).filterNotNull()
+    logger.info(LOCAL_IMPORT_LOG_TAG) {
+        "external-files-dirs ${externalFilesDirs.joinToString(separator = ";") { it.absolutePath }}"
+    }
+    externalFilesDirs
         .asSequence()
-        .filterNotNull()
         .mapNotNull(File::findStorageVolumeRoot)
         .map(File::canonicalFileOrSelf)
         .filterNot { root ->
@@ -117,12 +159,61 @@ internal fun listAndroidStorageRoots(context: Context): List<AndroidStorageRoot>
                 root = root,
                 label = "U 盘 ${root.name}",
                 isRemovable = true,
+                source = "external-files-dir",
             )
         }
+
+    val mountedUsbFallbackRoots = listMountedUsbFallbackRoots(logger)
+    if (roots.values.none { it.isRemovable }) {
+        mountedUsbFallbackRoots.forEach { root ->
+            addRoot(
+                root = root,
+                label = "U 盘 ${root.name}",
+                isRemovable = true,
+                source = "mnt-usb-fallback",
+            )
+        }
+    } else {
+        logger.info(LOCAL_IMPORT_LOG_TAG) {
+            "mnt-usb-fallback-skip reason=removable-root-already-found"
+        }
+    }
+
     return roots.values.sortedWith(
         compareBy<AndroidStorageRoot> { it.isRemovable }
             .thenBy { it.label.lowercase() },
-    )
+    ).also { sortedRoots ->
+        logger.info(LOCAL_IMPORT_LOG_TAG) {
+            "storage-root-enumerate-complete roots=${sortedRoots.joinToString(separator = ";") { root ->
+                "${root.label}|${root.root.absolutePath}|removable=${root.isRemovable}"
+            }}"
+        }
+    }
+}
+
+internal fun hasReadableAndroidUsbStorageRoot(
+    context: Context,
+    logger: DiagnosticLogger = GlobalDiagnosticLogger,
+): Boolean {
+    return listAndroidStorageRoots(context, logger).any { root ->
+        root.isRemovable && root.root.exists() && root.root.isDirectory && root.root.canRead()
+    }
+}
+
+internal fun isWithinReadableAndroidUsbStorageRoot(
+    context: Context,
+    file: File,
+    logger: DiagnosticLogger = GlobalDiagnosticLogger,
+): Boolean {
+    val normalizedFile = file.canonicalFileOrSelf()
+    val listedRootMatches = listAndroidStorageRoots(context, logger)
+        .asSequence()
+        .filter { root -> root.isRemovable && root.root.exists() && root.root.isDirectory && root.root.canRead() }
+        .any { root -> normalizedFile.isWithinOrSame(root.root) }
+    if (listedRootMatches) return true
+
+    return listMountedUsbFallbackRoots(logger)
+        .any { root -> normalizedFile.isWithinOrSame(root) }
 }
 
 internal fun resolveAndroidLocalTrackFile(locator: String): File? {
@@ -167,6 +258,7 @@ private fun resolveStorageVolumeRoot(context: Context, volumeId: String): File? 
     if (volumeId.equals(PRIMARY_VOLUME_ID, ignoreCase = true)) {
         return Environment.getExternalStorageDirectory()
     }
+    resolveStorageVolumeRootFromStorageManager(context, volumeId)?.let { return it }
     return context.getExternalFilesDirs(null)
         .asSequence()
         .filterNotNull()
@@ -174,15 +266,85 @@ private fun resolveStorageVolumeRoot(context: Context, volumeId: String): File? 
         .firstOrNull { root -> root.name.equals(volumeId, ignoreCase = true) }
 }
 
+private fun listStorageVolumeRoots(
+    context: Context,
+    logger: DiagnosticLogger,
+): List<AndroidStorageRoot> {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return emptyList()
+    val storageManager = context.getSystemService(StorageManager::class.java) ?: return emptyList()
+    return storageManager.storageVolumes.mapNotNull { volume ->
+        val directory = volume.directoryCompat()
+        val description = volume.descriptionCompat(context)
+        logger.info(LOCAL_IMPORT_LOG_TAG) {
+            "storage-volume uuid=${volume.uuid.orEmpty()} state=${volume.state.orEmpty()} " +
+                "removable=${volume.isRemovable} emulated=${volume.isEmulated} " +
+                "directory=${directory?.absolutePath ?: "null"} description=$description"
+        }
+        if (volume.state != Environment.MEDIA_MOUNTED || !volume.isRemovable) return@mapNotNull null
+        val root = directory ?: return@mapNotNull null
+        AndroidStorageRoot(
+            label = description.ifBlank { "U 盘 ${root.name}" },
+            root = root,
+            isRemovable = true,
+        )
+    }
+}
+
+private fun resolveStorageVolumeRootFromStorageManager(context: Context, volumeId: String): File? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return null
+    val storageManager = context.getSystemService(StorageManager::class.java) ?: return null
+    return storageManager.storageVolumes.firstNotNullOfOrNull { volume ->
+        val uuidMatches = volume.uuid?.equals(volumeId, ignoreCase = true) == true
+        if (uuidMatches && volume.state == Environment.MEDIA_MOUNTED) {
+            volume.directoryCompat()
+        } else {
+            null
+        }
+    }
+}
+
+@TargetApi(Build.VERSION_CODES.N)
+private fun StorageVolume.descriptionCompat(context: Context): String {
+    return runCatching { getDescription(context).orEmpty() }.getOrDefault("")
+}
+
+private fun StorageVolume.directoryCompat(): File? {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        directory
+    } else {
+        null
+    }
+}
+
+private fun listMountedUsbFallbackRoots(logger: DiagnosticLogger): List<File> {
+    val usbRoot = File(MNT_USB_ROOT_PATH)
+    val roots = usbRoot.listFiles()
+        .orEmpty()
+        .filter { file -> file.exists() && file.isDirectory && file.canRead() }
+        .map(File::canonicalFileOrSelf)
+    logger.info(LOCAL_IMPORT_LOG_TAG) {
+        "mnt-usb-fallback parent=$MNT_USB_ROOT_PATH exists=${usbRoot.exists()} directory=${usbRoot.isDirectory} " +
+            "readable=${usbRoot.canRead()} roots=${roots.joinToString(separator = ";") { it.absolutePath }}"
+    }
+    return roots
+}
+
 private fun File.findStorageVolumeRoot(): File? {
     var current: File? = this
     while (current != null) {
-        if (current.parentFile?.absolutePath == STORAGE_ROOT_PATH) {
+        val parentPath = current.parentFile?.absolutePath
+        if (parentPath == STORAGE_ROOT_PATH || parentPath == MNT_USB_ROOT_PATH) {
             return current
         }
         current = current.parentFile
     }
     return null
+}
+
+private fun File.isWithinOrSame(root: File): Boolean {
+    val rootPath = root.canonicalFileOrSelf().absolutePath
+    val filePath = canonicalFileOrSelf().absolutePath
+    return filePath == rootPath || filePath.startsWith(rootPath + File.separator)
 }
 
 private fun File.canonicalFileOrSelf(): File {
@@ -198,5 +360,7 @@ private fun hasLegacyExternalStorageReadWriteAccess(context: Context): Boolean {
 private const val EXTERNAL_STORAGE_DOCUMENTS_AUTHORITY = "com.android.externalstorage.documents"
 private const val PRIMARY_VOLUME_ID = "primary"
 private const val STORAGE_ROOT_PATH = "/storage"
+private const val MNT_USB_ROOT_PATH = "/mnt/usb"
 private const val FRAMEWORK_PACKAGE_STUBS_PACKAGE = "com.android.tv.frameworkpackagestubs"
 private const val FRAMEWORK_PACKAGE_STUBS_MARKER = "frameworkpackagestubs"
+private const val LOCAL_IMPORT_LOG_TAG = "LocalImport"

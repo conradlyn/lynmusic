@@ -1029,7 +1029,11 @@ class AndroidLocalFolderPicker(
         ActivityResultContracts.StartActivityForResult(),
     ) {
         if (folderContinuation != null) {
-            launchSafPickerOrFallback()
+            if (hasDirectLocalFileAccess(activity)) {
+                launchFallbackPicker()
+            } else {
+                launchSafPickerOrFallback()
+            }
         }
     }
 
@@ -1047,6 +1051,7 @@ class AndroidLocalFolderPicker(
     suspend fun pickLocalFolder(): LocalFolderSelection? {
         return withContext(Dispatchers.Main) {
             suspendCancellableCoroutine { continuation ->
+                logPickerState(stage = "start")
                 folderContinuation = { selection ->
                     if (continuation.isActive) {
                         continuation.resume(selection)
@@ -1066,19 +1071,40 @@ class AndroidLocalFolderPicker(
     }
 
     private fun showManageAllFilesAccessPrompt() {
-        AlertDialog.Builder(activity)
+        val hasReadableUsbRoot = hasReadableAndroidUsbStorageRoot(activity, logger)
+        val builder = AlertDialog.Builder(activity)
             .setTitle("需要文件管理权限")
-            .setMessage("授予“管理所有文件”后，导入的本地歌曲可以直接编辑音乐标签；如果不授权，会回退到 SAF 只读导入。")
+            .setMessage(
+                if (hasReadableUsbRoot) {
+                    "授予“管理所有文件”后，可以浏览内置存储和 U 盘，并支持本地歌曲标签写回；也可以先仅浏览当前 U 盘。"
+                } else {
+                    "授予“管理所有文件”后，导入的本地歌曲可以直接编辑音乐标签；如果不授权，会回退到 SAF 只读导入。"
+                },
+            )
             .setPositiveButton("去授权") { _, _ ->
+                logPermissionChoice("grant")
                 manageAllFilesPermissionLauncher.launch(buildManageAllFilesAccessIntent(activity))
             }
-            .setNegativeButton("使用 SAF") { _, _ ->
-                launchSafPickerOrFallback()
-            }
-            .setOnCancelListener {
+            .setNeutralButton("取消") { _, _ ->
+                logPermissionChoice("cancel")
                 resumeFolderSelection(null)
             }
-            .show()
+            .setOnCancelListener {
+                logPermissionChoice("cancel")
+                resumeFolderSelection(null)
+            }
+        if (hasReadableUsbRoot) {
+            builder.setNegativeButton("仅浏览 U 盘") { _, _ ->
+                logPermissionChoice("usb-only")
+                launchFallbackPicker()
+            }
+        } else {
+            builder.setNegativeButton("使用 SAF") { _, _ ->
+                logPermissionChoice("saf")
+                launchSafPickerOrFallback()
+            }
+        }
+        builder.show()
     }
 
     private fun shouldRequestManageAllFilesAccess(): Boolean {
@@ -1109,7 +1135,8 @@ class AndroidLocalFolderPicker(
     }
 
     private fun launchSafPickerOrFallback() {
-        if (!canResolveOpenDocumentTree(activity)) {
+        val safAvailable = canResolveOpenDocumentTree(activity)
+        if (!safAvailable) {
             logger.warn(LOCAL_IMPORT_LOG_TAG) {
                 "saf-tree-picker-unavailable fallback=local-folder-picker"
             }
@@ -1123,6 +1150,28 @@ class AndroidLocalFolderPicker(
                 "saf-tree-picker-launch-failed fallback=local-folder-picker reason=${throwable.message.orEmpty()}"
             }
             launchFallbackPicker()
+        }
+    }
+
+    private fun logPickerState(stage: String) {
+        val safAvailable = canResolveOpenDocumentTree(activity)
+        val hasManageAllFilesAccess = hasManageAllFilesAccess(activity)
+        val hasDirectLocalFileAccess = hasDirectLocalFileAccess(activity)
+        val readableUsbRoots = listAndroidStorageRoots(activity, logger).filter { root ->
+            root.isRemovable && root.root.exists() && root.root.isDirectory && root.root.canRead()
+        }
+        logger.info(LOCAL_IMPORT_LOG_TAG) {
+            "local-folder-picker-state stage=$stage safAvailable=$safAvailable " +
+                "hasManageAllFilesAccess=$hasManageAllFilesAccess " +
+                "hasDirectLocalFileAccess=$hasDirectLocalFileAccess " +
+                "readableUsbRootCount=${readableUsbRoots.size} " +
+                "readableUsbRoots=${readableUsbRoots.joinToString(separator = ";") { it.root.absolutePath }}"
+        }
+    }
+
+    private fun logPermissionChoice(choice: String) {
+        logger.info(LOCAL_IMPORT_LOG_TAG) {
+            "permission-choice=$choice"
         }
     }
 
@@ -1157,10 +1206,23 @@ private class AndroidImportSourceGateway(
     }
 
     override suspend fun scanLocalFolder(selection: LocalFolderSelection, sourceId: String): ImportScanReport {
+        val directLocalFileAccess = hasDirectLocalFileAccess(activity)
         resolveAndroidLocalTrackFile(selection.persistentReference)
-            ?.takeIf { hasDirectLocalFileAccess(activity) && it.isDirectory }
+            ?.takeIf { it.isDirectory }
             ?.let { root ->
-                return scanLocalDirectory(root)
+                val canScanDirectly = directLocalFileAccess || isWithinReadableAndroidUsbStorageRoot(activity, root, logger)
+                if (canScanDirectly) {
+                    val branch = if (directLocalFileAccess) "direct-permission" else "usb-readable-root"
+                    return scanLocalDirectoryWithLogging(
+                        root = root,
+                        sourceId = sourceId,
+                        branch = branch,
+                    )
+                }
+                logger.warn(LOCAL_IMPORT_LOG_TAG) {
+                    "direct-path-scan-denied source=$sourceId root=${root.absolutePath} " +
+                        "directLocalFileAccess=$directLocalFileAccess"
+                }
             }
         val treeUri = Uri.parse(selection.persistentReference)
         val resolvedDirectory = resolveTreeUriToDirectory(activity, treeUri)
@@ -1172,7 +1234,11 @@ private class AndroidImportSourceGateway(
             ?.takeIf { it.isDirectory }
             ?.let { root ->
                 return runCatching {
-                    scanLocalDirectory(root)
+                    scanLocalDirectoryWithLogging(
+                        root = root,
+                        sourceId = sourceId,
+                        branch = "direct-permission",
+                    )
                 }.onFailure { throwable ->
                     logger.warn(LOCAL_IMPORT_LOG_TAG) {
                         "direct-scan-fallback root=${root.absolutePath} reason=${throwable.message.orEmpty()}"
@@ -1182,15 +1248,27 @@ private class AndroidImportSourceGateway(
                         logger.warn(LOCAL_IMPORT_LOG_TAG) {
                             "direct-scan-empty-fallback root=${root.absolutePath} treeUri=$treeUri"
                         }
-                        scanLocalTree(treeUri)
+                        scanLocalTreeWithLogging(
+                            treeUri = treeUri,
+                            sourceId = sourceId,
+                            branch = "saf-tree",
+                        )
                     } else {
                         report
                     }
                 }.getOrElse {
-                    scanLocalTree(treeUri)
+                    scanLocalTreeWithLogging(
+                        treeUri = treeUri,
+                        sourceId = sourceId,
+                        branch = "saf-tree",
+                    )
                 }
         }
-        return scanLocalTree(treeUri)
+        return scanLocalTreeWithLogging(
+            treeUri = treeUri,
+            sourceId = sourceId,
+            branch = "saf-tree",
+        )
     }
 
     override suspend fun testSamba(draft: SambaSourceDraft) {
@@ -1311,6 +1389,31 @@ private class AndroidImportSourceGateway(
         )
     }
 
+    private fun scanLocalTreeWithLogging(
+        treeUri: Uri,
+        sourceId: String,
+        branch: String,
+    ): ImportScanReport {
+        val startedAt = System.currentTimeMillis()
+        logger.info(LOCAL_IMPORT_LOG_TAG) {
+            "local-scan-start source=$sourceId branch=$branch treeUri=$treeUri"
+        }
+        return runCatching {
+            scanLocalTree(treeUri)
+        }.onSuccess { report ->
+            logger.info(LOCAL_IMPORT_LOG_TAG) {
+                "local-scan-complete source=$sourceId branch=$branch treeUri=$treeUri " +
+                    "trackCount=${report.tracks.size} discoveredAudioFileCount=${report.discoveredAudioFileCount} " +
+                    "failureCount=${report.failures.size} elapsedMs=${System.currentTimeMillis() - startedAt}"
+            }
+        }.onFailure { throwable ->
+            logger.error(LOCAL_IMPORT_LOG_TAG, throwable) {
+                "local-scan-failed source=$sourceId branch=$branch treeUri=$treeUri " +
+                    "elapsedMs=${System.currentTimeMillis() - startedAt}"
+            }
+        }.getOrThrow()
+    }
+
     private fun scanLocalDirectory(root: File): ImportScanReport {
         val tracks = mutableListOf<top.iwesley.lyn.music.core.model.ImportedTrackCandidate>()
         val failures = mutableListOf<ImportScanFailure>()
@@ -1320,6 +1423,31 @@ private class AndroidImportSourceGateway(
             discoveredAudioFileCount = discoveredAudioFileCount,
             failures = failures,
         )
+    }
+
+    private fun scanLocalDirectoryWithLogging(
+        root: File,
+        sourceId: String,
+        branch: String,
+    ): ImportScanReport {
+        val startedAt = System.currentTimeMillis()
+        logger.info(LOCAL_IMPORT_LOG_TAG) {
+            "local-scan-start source=$sourceId branch=$branch root=${root.absolutePath}"
+        }
+        return runCatching {
+            scanLocalDirectory(root)
+        }.onSuccess { report ->
+            logger.info(LOCAL_IMPORT_LOG_TAG) {
+                "local-scan-complete source=$sourceId branch=$branch root=${root.absolutePath} " +
+                    "trackCount=${report.tracks.size} discoveredAudioFileCount=${report.discoveredAudioFileCount} " +
+                    "failureCount=${report.failures.size} elapsedMs=${System.currentTimeMillis() - startedAt}"
+            }
+        }.onFailure { throwable ->
+            logger.error(LOCAL_IMPORT_LOG_TAG, throwable) {
+                "local-scan-failed source=$sourceId branch=$branch root=${root.absolutePath} " +
+                    "elapsedMs=${System.currentTimeMillis() - startedAt}"
+            }
+        }.getOrThrow()
     }
 
     private fun walkDocumentTree(
