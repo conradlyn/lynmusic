@@ -44,12 +44,13 @@ import io.ktor.client.request.setBody
 import io.ktor.client.request.url
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpMethod
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import top.iwesley.lyn.music.SharedGraph
@@ -383,7 +384,7 @@ internal class AndroidLyricsHttpClient : LyricsHttpClient {
     }
 
     override suspend fun request(request: LyricsRequest): Result<LyricsHttpResponse> {
-        return runCatching {
+        return try {
             val response = client.request {
                 url(request.url)
                 this.method = when (request.method) {
@@ -393,10 +394,16 @@ internal class AndroidLyricsHttpClient : LyricsHttpClient {
                 request.headers.forEach { (key, value) -> headers.append(key, value) }
                 request.body?.let { setBody(it) }
             }
-            LyricsHttpResponse(
-                statusCode = response.status.value,
-                body = response.bodyAsText(),
+            Result.success(
+                LyricsHttpResponse(
+                    statusCode = response.status.value,
+                    body = response.bodyAsText(),
+                ),
             )
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (throwable: Throwable) {
+            Result.failure(throwable)
         }
     }
 }

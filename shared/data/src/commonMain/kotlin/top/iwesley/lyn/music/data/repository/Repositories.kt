@@ -1,5 +1,6 @@
 package top.iwesley.lyn.music.data.repository
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -2264,6 +2265,7 @@ class DefaultLyricsRepository(
         val response = httpClient.request(request).fold(
             onSuccess = { it },
             onFailure = { throwable ->
+                throwable.throwIfCancellation()
                 logger.error(LYRICS_LOG_TAG, throwable) {
                     "$requestType-request-failed track=$trackLabel source=${config.id} " +
                         "elapsedMs=${now() - startedAt} method=${request.method.name} url=${request.url}"
@@ -2347,6 +2349,7 @@ class DefaultLyricsRepository(
         val response = httpClient.request(request).fold(
             onSuccess = { it },
             onFailure = { throwable ->
+                throwable.throwIfCancellation()
                 logger.error(LYRICS_LOG_TAG, throwable) {
                     "$requestType-workflow-search-failed track=$trackLabel source=${config.id} elapsedMs=${now() - startedAt} url=${request.url}"
                 }
@@ -2402,6 +2405,7 @@ class DefaultLyricsRepository(
             val response = httpClient.request(request).fold(
                 onSuccess = { it },
                 onFailure = { throwable ->
+                    throwable.throwIfCancellation()
                     logger.log(DiagnosticLogLevel.WARN, LYRICS_LOG_TAG,
                         "$requestType-workflow-enrichment-failed track=$trackLabel source=${config.id} step=$index candidate=${candidate.id} elapsedMs=${now() - startedAt} url=${request.url}"
                     , throwable)
@@ -2458,6 +2462,7 @@ class DefaultLyricsRepository(
             val response = httpClient.request(request).fold(
                 onSuccess = { it },
                 onFailure = { throwable ->
+                    throwable.throwIfCancellation()
                     logger.error(LYRICS_LOG_TAG, throwable) {
                         "$requestType-workflow-step-failed track=$trackLabel source=${config.id} step=$index elapsedMs=${now() - startedAt} url=${request.url}"
                     }
@@ -2542,6 +2547,10 @@ private sealed interface SameNameLyricsLookup {
 }
 
 internal fun now(): Long = Clock.System.now().toEpochMilliseconds()
+
+private fun Throwable.throwIfCancellation() {
+    if (this is CancellationException) throw this
+}
 
 private const val LYRICS_LOG_TAG = "Lyrics"
 private const val NETWORK_LYRICS_LOOKUP_SOURCE_ID = "network-lyrics"

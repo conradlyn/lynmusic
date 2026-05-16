@@ -6,15 +6,19 @@ import kotlin.io.path.absolutePathString
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import top.iwesley.lyn.music.core.model.AudioTagGateway
 import top.iwesley.lyn.music.core.model.AudioTagPatch
 import top.iwesley.lyn.music.core.model.AudioTagSnapshot
 import top.iwesley.lyn.music.core.model.ArtworkCacheStore
+import top.iwesley.lyn.music.core.model.DiagnosticLogLevel
+import top.iwesley.lyn.music.core.model.DiagnosticLogger
 import top.iwesley.lyn.music.core.model.ImportScanReport
 import top.iwesley.lyn.music.core.model.ImportSourceGateway
 import top.iwesley.lyn.music.core.model.ImportSourceType
@@ -99,6 +103,168 @@ class LyricsRepositoryManualOverrideTest {
         assertEquals("https://img.example.com/cast.jpg", resolved.artworkLocator)
         assertEquals(listOf("https://lyrics.example/direct-cast"), httpClient.requestedUrls)
         assertEquals(emptyList(), database.lyricsCacheDao().observeBySourceId("direct-cast").first())
+    }
+
+    @Test
+    fun `network direct lyrics cancellation propagates without failed log`() = runTest {
+        val database = createTestDatabase()
+        database.lyricsSourceConfigDao().upsert(
+            directSourceEntity(
+                id = "direct-cancel",
+                urlTemplate = "https://lyrics.example/direct-cancel",
+                priority = 100,
+            ),
+        )
+        val logger = RecordingDiagnosticLogger()
+        val repository = DefaultLyricsRepository(
+            database = database,
+            httpClient = RecordingLyricsHttpClient(
+                responses = mapOf(
+                    "https://lyrics.example/direct-cancel" to Result.failure(CancellationException("cancelled")),
+                ),
+            ),
+            secureCredentialStore = MapCredentialStore(),
+            logger = logger,
+        )
+
+        assertFailsWith<CancellationException> {
+            repository.resolveNetworkLyrics(networkLyricsMetadata())
+        }
+
+        assertFalse(logger.messages.any { it.contains("request-failed") })
+    }
+
+    @Test
+    fun `network direct lyrics ordinary failure still logs failed request`() = runTest {
+        val database = createTestDatabase()
+        database.lyricsSourceConfigDao().upsert(
+            directSourceEntity(
+                id = "direct-fail",
+                urlTemplate = "https://lyrics.example/direct-fail",
+                priority = 100,
+            ),
+        )
+        val logger = RecordingDiagnosticLogger()
+        val repository = DefaultLyricsRepository(
+            database = database,
+            httpClient = RecordingLyricsHttpClient(
+                responses = mapOf(
+                    "https://lyrics.example/direct-fail" to Result.failure(IllegalStateException("network down")),
+                ),
+            ),
+            secureCredentialStore = MapCredentialStore(),
+            logger = logger,
+        )
+
+        val resolved = repository.resolveNetworkLyrics(networkLyricsMetadata())
+
+        assertNull(resolved)
+        assertTrue(logger.messages.any { it.contains("cast-auto-request-failed") })
+    }
+
+    @Test
+    fun `network workflow search cancellation propagates without failed log`() = runTest {
+        val database = createTestDatabase()
+        database.workflowLyricsSourceConfigDao().upsert(
+            WorkflowLyricsSourceConfigEntity(
+                id = "workflow-manual",
+                name = "Workflow Manual",
+                priority = 50,
+                enabled = true,
+                rawJson = TEST_WORKFLOW_JSON,
+            ),
+        )
+        val logger = RecordingDiagnosticLogger()
+        val repository = DefaultLyricsRepository(
+            database = database,
+            httpClient = RecordingLyricsHttpClient(
+                responses = mapOf(
+                    "https://lyrics.example/search?title=Blue" to Result.failure(CancellationException("cancelled")),
+                ),
+            ),
+            secureCredentialStore = MapCredentialStore(),
+            logger = logger,
+        )
+
+        assertFailsWith<CancellationException> {
+            repository.resolveNetworkLyrics(networkLyricsMetadata())
+        }
+
+        assertFalse(logger.messages.any { it.contains("workflow-search-failed") })
+    }
+
+    @Test
+    fun `network workflow enrichment cancellation propagates without failed log`() = runTest {
+        val database = createTestDatabase()
+        database.workflowLyricsSourceConfigDao().upsert(
+            WorkflowLyricsSourceConfigEntity(
+                id = "workflow-enrichment",
+                name = "Workflow Enrichment",
+                priority = 50,
+                enabled = true,
+                rawJson = TEST_WORKFLOW_WITH_ENRICHMENT_JSON,
+            ),
+        )
+        val logger = RecordingDiagnosticLogger()
+        val repository = DefaultLyricsRepository(
+            database = database,
+            httpClient = RecordingLyricsHttpClient(
+                responses = mapOf(
+                    "https://lyrics.example/search?title=Blue" to Result.success(
+                        LyricsHttpResponse(
+                            statusCode = 200,
+                            body = """{"data":[{"id":"wf-1","title":"Blue","artist":"Artist A"}]}""",
+                        ),
+                    ),
+                    "https://lyrics.example/enrich?id=wf-1" to Result.failure(CancellationException("cancelled")),
+                ),
+            ),
+            secureCredentialStore = MapCredentialStore(),
+            logger = logger,
+        )
+
+        assertFailsWith<CancellationException> {
+            repository.resolveNetworkLyrics(networkLyricsMetadata())
+        }
+
+        assertFalse(logger.messages.any { it.contains("workflow-enrichment-failed") })
+    }
+
+    @Test
+    fun `network workflow step cancellation propagates without failed log`() = runTest {
+        val database = createTestDatabase()
+        database.workflowLyricsSourceConfigDao().upsert(
+            WorkflowLyricsSourceConfigEntity(
+                id = "workflow-manual",
+                name = "Workflow Manual",
+                priority = 50,
+                enabled = true,
+                rawJson = TEST_WORKFLOW_JSON,
+            ),
+        )
+        val logger = RecordingDiagnosticLogger()
+        val repository = DefaultLyricsRepository(
+            database = database,
+            httpClient = RecordingLyricsHttpClient(
+                responses = mapOf(
+                    "https://lyrics.example/search?title=Blue" to Result.success(
+                        LyricsHttpResponse(
+                            statusCode = 200,
+                            body = """{"data":[{"id":"wf-1","title":"Blue","artist":"Artist A"}]}""",
+                        ),
+                    ),
+                    "https://lyrics.example/workflow?id=wf-1" to Result.failure(CancellationException("cancelled")),
+                ),
+            ),
+            secureCredentialStore = MapCredentialStore(),
+            logger = logger,
+        )
+
+        assertFailsWith<CancellationException> {
+            repository.resolveNetworkLyrics(networkLyricsMetadata())
+        }
+
+        assertFalse(logger.messages.any { it.contains("workflow-step-failed") })
     }
 
     @Test
@@ -1813,6 +1979,15 @@ private fun directSourceEntity(
     )
 }
 
+private fun networkLyricsMetadata(): LyricsLookupMetadata {
+    return LyricsLookupMetadata(
+        title = "Blue",
+        artistName = "Artist A",
+        albumTitle = "Album A",
+        durationMs = 215_000L,
+    )
+}
+
 private fun navidromeTrack(
     artworkLocator: String? = buildNavidromeCoverLocator("nav-source", "cover-1"),
 ): Track {
@@ -1930,6 +2105,28 @@ private class MatchingLyricsHttpClient(
     override suspend fun request(request: LyricsRequest): Result<LyricsHttpResponse> {
         requestedUrls += request.url
         return responder(request)
+    }
+}
+
+private class RecordingDiagnosticLogger : DiagnosticLogger {
+    data class Entry(
+        val level: DiagnosticLogLevel,
+        val tag: String,
+        val message: String,
+        val throwable: Throwable?,
+    )
+
+    val entries = mutableListOf<Entry>()
+    val messages: List<String>
+        get() = entries.map { it.message }
+
+    override fun log(
+        level: DiagnosticLogLevel,
+        tag: String,
+        message: String,
+        throwable: Throwable?,
+    ) {
+        entries += Entry(level, tag, message, throwable)
     }
 }
 
@@ -2087,6 +2284,63 @@ private const val TEST_WORKFLOW_JSON = """
   },
   "optionalFields": {
     "coverUrlField": "coverUrl"
+  }
+}
+"""
+
+private const val TEST_WORKFLOW_WITH_ENRICHMENT_JSON = """
+{
+  "id": "workflow-enrichment",
+  "name": "Workflow Enrichment",
+  "kind": "workflow",
+  "enabled": true,
+  "priority": 50,
+  "search": {
+    "method": "GET",
+    "url": "https://lyrics.example/search",
+    "queryTemplate": "title={title}",
+    "responseFormat": "json",
+    "resultPath": "data",
+    "mapping": {
+      "id": "id",
+      "title": "title",
+      "artists": "artist"
+    }
+  },
+  "selection": {
+    "titleWeight": 1.0,
+    "artistWeight": 0.0,
+    "albumWeight": 0.0,
+    "durationWeight": 0.0,
+    "durationToleranceSeconds": 3,
+    "minScore": 0.0,
+    "maxCandidates": 10
+  },
+  "enrichment": {
+    "steps": [
+      {
+        "method": "GET",
+        "url": "https://lyrics.example/enrich",
+        "queryTemplate": "id={candidate.id}",
+        "responseFormat": "json",
+        "capture": {
+          "coverUrl": "data.cover"
+        }
+      }
+    ]
+  },
+  "lyrics": {
+    "steps": [
+      {
+        "method": "GET",
+        "url": "https://lyrics.example/workflow",
+        "queryTemplate": "id={candidate.id}",
+        "responseFormat": "json",
+        "payloadPath": "data.content",
+        "format": "lrc",
+        "transforms": ["trim"]
+      }
+    ]
   }
 }
 """

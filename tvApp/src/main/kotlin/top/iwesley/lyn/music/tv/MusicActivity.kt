@@ -222,7 +222,6 @@ private fun rememberMusicRendererLyricsState(
         state.title,
         state.artistName,
         state.albumTitle,
-        state.durationMs,
     ) {
         state.toLyricsRequest()
     }
@@ -552,7 +551,6 @@ private fun TvRendererSessionState.toLyricsRequest(): MusicRendererLyricsRequest
         normalizedTitle,
         normalizedArtist.orEmpty(),
         normalizedAlbum.orEmpty(),
-        normalizedDurationMs.toString(),
         uri.orEmpty(),
     ).joinToString("|")
     return MusicRendererLyricsRequest(
