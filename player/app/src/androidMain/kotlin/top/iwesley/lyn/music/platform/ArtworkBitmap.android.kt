@@ -14,12 +14,15 @@ import java.net.URI
 import java.net.URL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import top.iwesley.lyn.music.core.model.NavidromeLocatorRuntime
+import top.iwesley.lyn.music.core.model.RemotePlaybackUrlCandidate
 import top.iwesley.lyn.music.core.model.inferArtworkFileExtension
 import top.iwesley.lyn.music.core.model.isCompleteArtworkPayload
 import top.iwesley.lyn.music.core.model.normalizedArtworkCacheLocator
 import top.iwesley.lyn.music.core.model.resolveArtworkDecodeSampleSize
-import top.iwesley.lyn.music.core.model.resolveArtworkCacheTarget
+import top.iwesley.lyn.music.core.model.resolveArtworkCacheTargets
 import top.iwesley.lyn.music.core.model.stableArtworkCacheHash
+import top.iwesley.lyn.music.domain.readRemotePlaybackUrlCandidateWithFallback
 import kotlin.math.roundToInt
 
 @Composable
@@ -45,7 +48,8 @@ private suspend fun loadAndroidArtworkBitmap(
 ): ImageBitmap? = withContext(Dispatchers.IO) {
     runCatching {
         val normalizedLocator = normalizedArtworkCacheLocator(locator) ?: return@runCatching null
-        val target = resolveArtworkCacheTarget(normalizedLocator) ?: return@runCatching null
+        val targets = resolveArtworkCacheTargets(normalizedLocator)
+        val target = targets.firstOrNull()?.value ?: return@runCatching null
         val bitmap = when {
             isRemoteArtworkTarget(target) -> {
                 val cacheDirectory = File(context.cacheDir, "artwork-cache").apply { mkdirs() }
@@ -54,15 +58,15 @@ private suspend fun loadAndroidArtworkBitmap(
                 if (existingCacheFile != null) {
                     decodeAndroidArtworkFile(existingCacheFile.absolutePath, maxDecodeSizePx)
                 } else {
-                    val payload = URL(target).openStream().use { it.readBytes() }
-                    if (!isCompleteArtworkPayload(payload)) return@runCatching null
+                    val (remoteTarget, payload) = readAndroidRemoteArtworkPayload(targets) ?: return@runCatching null
                     if (cacheRemote) {
                         writeAndroidArtworkCacheFileAtomically(
                             directory = cacheDirectory,
-                            fileName = "$cacheKey${inferArtworkFileExtension(locator = target, bytes = payload)}",
+                            fileName = "$cacheKey${inferArtworkFileExtension(locator = remoteTarget.value, bytes = payload)}",
                             payload = payload,
                         )
                     }
+                    NavidromeLocatorRuntime.markResolvedUrlSuccess(remoteTarget)
                     decodeAndroidArtworkBytes(payload, maxDecodeSizePx)
                 }
             }
@@ -142,6 +146,17 @@ private fun Bitmap.scaleDownAndroidArtworkBitmap(maxDecodeSizePx: Int): Bitmap {
 
 private fun isRemoteArtworkTarget(target: String): Boolean {
     return target.startsWith("http://", ignoreCase = true) || target.startsWith("https://", ignoreCase = true)
+}
+
+private suspend fun readAndroidRemoteArtworkPayload(
+    targets: List<RemotePlaybackUrlCandidate>,
+): Pair<RemotePlaybackUrlCandidate, ByteArray>? {
+    return readRemotePlaybackUrlCandidateWithFallback(
+        candidates = targets,
+        isRemoteUrl = ::isRemoteArtworkTarget,
+        read = { target -> URL(target.value).openStream().use { it.readBytes() } },
+        isValidPayload = ::isCompleteArtworkPayload,
+    )
 }
 
 private fun findValidAndroidArtworkCacheFile(directory: File, cacheKey: String): File? {

@@ -38,6 +38,7 @@ import top.iwesley.lyn.music.core.model.LyricsRequest
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.NavidromeAudioQualityPreferencesStore
 import top.iwesley.lyn.music.core.model.NavidromeSourceDraft
+import top.iwesley.lyn.music.core.model.NetworkConnectionState
 import top.iwesley.lyn.music.core.model.NetworkConnectionType
 import top.iwesley.lyn.music.core.model.NetworkConnectionTypeProvider
 import top.iwesley.lyn.music.core.model.PlatformCapabilities
@@ -68,6 +69,7 @@ import top.iwesley.lyn.music.data.db.openLynMusicDatabase
 import top.iwesley.lyn.music.data.repository.DailyRecommendationDateChangeNotifier
 import top.iwesley.lyn.music.data.repository.DailyRecommendationDateKeyProvider
 import top.iwesley.lyn.music.data.repository.PlayerRuntimeServices
+import top.iwesley.lyn.music.domain.RemoteSourceAddressSelector
 import top.iwesley.lyn.music.domain.scanEmbyLibrary
 import top.iwesley.lyn.music.domain.scanNavidromeLibrary
 import top.iwesley.lyn.music.domain.scanSubsonicLibrary
@@ -139,6 +141,7 @@ fun createIosAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
     val secureStore = IosKeychainCredentialStore().withSecureInMemoryCache()
     val appPreferencesStore = IosAppPreferencesStore()
     val networkConnectionTypeProvider = IosNetworkConnectionTypeProvider()
+    val remoteSourceAddressSelector = RemoteSourceAddressSelector(networkConnectionTypeProvider)
     val navidromeHttpClient = IosLyricsHttpClient()
     val platform = PlatformDescriptor(
         name = "iPhone / iPad",
@@ -162,6 +165,7 @@ fun createIosAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
             autoPlayOnStartupPreferencesStore = appPreferencesStore,
             navidromeAudioQualityPreferencesStore = appPreferencesStore,
             networkConnectionTypeProvider = networkConnectionTypeProvider,
+            remoteSourceAddressSelector = remoteSourceAddressSelector,
             librarySourceFilterPreferencesStore = appPreferencesStore,
             lyricsHttpClient = navidromeHttpClient,
             artworkCacheStore = createIosArtworkCacheStore(),
@@ -183,6 +187,7 @@ fun createIosAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
                 platformLabel = "iOS",
                 navidromeAudioQualityPreferencesStore = appPreferencesStore,
                 networkConnectionTypeProvider = networkConnectionTypeProvider,
+                addressSelector = remoteSourceAddressSelector,
             ),
             playbackPreferencesStore = appPreferencesStore,
             lyricsShareFontPreferencesStore = appPreferencesStore,
@@ -553,22 +558,31 @@ private class IosAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
 
 @OptIn(ExperimentalForeignApi::class)
 private class IosNetworkConnectionTypeProvider : NetworkConnectionTypeProvider {
-    private var currentType: NetworkConnectionType = NetworkConnectionType.MOBILE
+    private val mutableNetworkConnectionState = MutableStateFlow(
+        NetworkConnectionState(type = NetworkConnectionType.MOBILE),
+    )
     private val monitor = nw_path_monitor_create()
+
+    override val networkConnectionState: StateFlow<NetworkConnectionState> =
+        mutableNetworkConnectionState.asStateFlow()
 
     init {
         nw_path_monitor_set_update_handler(monitor) { path ->
-            currentType = if (nw_path_uses_interface_type(path, nw_interface_type_wifi)) {
+            val current = mutableNetworkConnectionState.value
+            val type = if (nw_path_uses_interface_type(path, nw_interface_type_wifi)) {
                 NetworkConnectionType.WIFI
             } else {
                 NetworkConnectionType.MOBILE
             }
+            if (type == current.type) return@nw_path_monitor_set_update_handler
+            mutableNetworkConnectionState.value = NetworkConnectionState(
+                type = type,
+                version = current.version + 1L,
+            )
         }
         nw_path_monitor_set_queue(monitor, dispatch_get_main_queue())
         nw_path_monitor_start(monitor)
     }
-
-    override fun currentNetworkConnectionType(): NetworkConnectionType = currentType
 }
 
 private class IosImportSourceGateway(

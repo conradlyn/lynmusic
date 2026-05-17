@@ -16,11 +16,14 @@ import org.jetbrains.skia.Bitmap
 import org.jetbrains.skia.Canvas
 import org.jetbrains.skia.Image
 import org.jetbrains.skia.Rect
+import top.iwesley.lyn.music.core.model.NavidromeLocatorRuntime
+import top.iwesley.lyn.music.core.model.RemotePlaybackUrlCandidate
 import top.iwesley.lyn.music.core.model.inferArtworkFileExtension
 import top.iwesley.lyn.music.core.model.isCompleteArtworkPayload
 import top.iwesley.lyn.music.core.model.normalizedArtworkCacheLocator
-import top.iwesley.lyn.music.core.model.resolveArtworkCacheTarget
+import top.iwesley.lyn.music.core.model.resolveArtworkCacheTargets
 import top.iwesley.lyn.music.core.model.stableArtworkCacheHash
+import top.iwesley.lyn.music.domain.readRemotePlaybackUrlCandidateWithFallback
 import kotlin.math.roundToInt
 
 @Composable
@@ -72,7 +75,8 @@ suspend fun loadJvmArtworkBytes(
 ): ByteArray? = withContext(Dispatchers.IO) {
     runCatching {
         val normalizedLocator = normalizedArtworkCacheLocator(locator) ?: return@runCatching null
-        val target = resolveArtworkCacheTarget(normalizedLocator) ?: return@runCatching null
+        val targets = resolveArtworkCacheTargets(normalizedLocator)
+        val target = targets.firstOrNull()?.value ?: return@runCatching null
         when {
             isRemoteArtworkTarget(target) -> {
                 val cacheDirectory = File(File(userHomePath), ".lynmusic/artwork-cache").apply { mkdirs() }
@@ -81,15 +85,16 @@ suspend fun loadJvmArtworkBytes(
                 if (existingCacheFile != null) {
                     Files.readAllBytes(existingCacheFile.toPath())
                 } else {
-                    val payload = remoteBytesLoader(target)
-                    if (payload == null || !isCompleteArtworkPayload(payload)) return@runCatching null
+                    val (remoteTarget, payload) = loadJvmRemoteArtworkPayload(targets, remoteBytesLoader)
+                        ?: return@runCatching null
                     if (cacheRemote) {
                         writeJvmArtworkCacheFileAtomically(
                             directory = cacheDirectory,
-                            fileName = "$cachePrefix${inferArtworkFileExtension(locator = target, bytes = payload)}",
+                            fileName = "$cachePrefix${inferArtworkFileExtension(locator = remoteTarget.value, bytes = payload)}",
                             payload = payload,
                         )
                     }
+                    NavidromeLocatorRuntime.markResolvedUrlSuccess(remoteTarget)
                     payload
                 }
             }
@@ -104,6 +109,18 @@ suspend fun loadJvmArtworkBytes(
 
 private fun isRemoteArtworkTarget(target: String): Boolean {
     return target.startsWith("http://", ignoreCase = true) || target.startsWith("https://", ignoreCase = true)
+}
+
+private suspend fun loadJvmRemoteArtworkPayload(
+    targets: List<RemotePlaybackUrlCandidate>,
+    remoteBytesLoader: suspend (String) -> ByteArray?,
+): Pair<RemotePlaybackUrlCandidate, ByteArray>? {
+    return readRemotePlaybackUrlCandidateWithFallback(
+        candidates = targets,
+        isRemoteUrl = ::isRemoteArtworkTarget,
+        read = { target -> remoteBytesLoader(target.value) ?: error("远端封面读取失败。") },
+        isValidPayload = ::isCompleteArtworkPayload,
+    )
 }
 
 private fun findValidJvmArtworkCacheFile(directory: File, cachePrefix: String): File? {

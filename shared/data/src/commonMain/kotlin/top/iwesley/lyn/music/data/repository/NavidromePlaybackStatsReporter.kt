@@ -18,6 +18,7 @@ import top.iwesley.lyn.music.domain.NavidromeResolvedSource
 import top.iwesley.lyn.music.domain.isSubsonicCompatibleSourceType
 import top.iwesley.lyn.music.domain.normalizeSubsonicBaseUrl
 import top.iwesley.lyn.music.domain.requestNavidromeJson
+import top.iwesley.lyn.music.domain.RemoteSourceAddressSelector
 import top.iwesley.lyn.music.domain.toSubsonicAuthMode
 
 class NavidromePlaybackStatsReporter(
@@ -25,6 +26,7 @@ class NavidromePlaybackStatsReporter(
     private val secureCredentialStore: SecureCredentialStore,
     private val httpClient: LyricsHttpClient,
     private val logger: DiagnosticLogger = NoopDiagnosticLogger,
+    private val addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
 ) : PlaybackStatsReporter {
 
     override suspend fun reportNowPlaying(track: Track, atMillis: Long) {
@@ -84,7 +86,10 @@ class NavidromePlaybackStatsReporter(
         if (authMode == SubsonicAuthMode.PASSWORD && (username.isBlank() || credential.isBlank())) return null
         if (authMode == SubsonicAuthMode.API_KEY && credential.isBlank()) return null
         return NavidromeResolvedSource(
-            baseUrl = normalizeSubsonicBaseUrl(rootReference),
+            baseUrl = rootReference,
+            wanBaseUrl = wanRootReference,
+            sourceId = id,
+            addressSelector = addressSelector,
             username = username,
             password = credential,
             authMode = authMode,

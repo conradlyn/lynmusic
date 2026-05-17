@@ -23,8 +23,11 @@ import top.iwesley.lyn.music.core.model.ArtworkCachedTarget
 import top.iwesley.lyn.music.core.model.ArtworkCachedTargetRegistry
 import top.iwesley.lyn.music.core.model.ArtworkCacheStore
 import top.iwesley.lyn.music.core.model.ArtworkCacheVersionRegistry
+import top.iwesley.lyn.music.core.model.NavidromeLocatorRuntime
+import top.iwesley.lyn.music.core.model.RemotePlaybackUrlCandidate
 import top.iwesley.lyn.music.core.model.isCompleteArtworkPayload
 import top.iwesley.lyn.music.core.model.isReplaceableNavidromePlaceholderArtwork
+import top.iwesley.lyn.music.domain.readRemotePlaybackUrlCandidateWithFallback
 
 fun createIosArtworkCacheStore(): ArtworkCacheStore = IosArtworkCacheStore()
 
@@ -36,7 +39,8 @@ private class IosArtworkCacheStore : ArtworkCacheStore {
     override suspend fun cache(locator: String, cacheKey: String, replaceExisting: Boolean): String? =
         withContext(Dispatchers.Default) {
         runCatching {
-            val target = resolveArtworkCacheTarget(locator) ?: return@runCatching null
+            val targets = resolveArtworkCacheTargets(locator)
+            val target = targets.firstOrNull()?.value ?: return@runCatching null
             val effectiveCacheKey = cacheKey.ifBlank { locator }
             val primaryPrefix = effectiveCacheKey.stableArtworkCacheHash()
             val legacyPrefix = locator.stableArtworkCacheHash().takeIf { it != primaryPrefix }
@@ -79,9 +83,8 @@ private class IosArtworkCacheStore : ArtworkCacheStore {
                         return@runCatching result
                     }
             }
-            val payload = readIosRemoteBytes(target) ?: return@runCatching null
-            if (!isCompleteArtworkPayload(payload)) return@runCatching null
-            val fileName = "$primaryPrefix${artworkCacheExtension(target, payload)}"
+            val (remoteTarget, payload) = readIosRemoteArtworkPayload(targets) ?: return@runCatching null
+            val fileName = "$primaryPrefix${artworkCacheExtension(remoteTarget.value, payload)}"
             val written = writeIosArtworkCacheFileAtomically(
                 directory = directory,
                 fileName = fileName,
@@ -91,6 +94,9 @@ private class IosArtworkCacheStore : ArtworkCacheStore {
             )
             val result = written?.path?.let { rememberIosArtworkTarget(effectiveCacheKey, it) }
             written?.takeIf { it.changed }?.let { versionRegistry.bump(effectiveCacheKey) }
+            if (result != null) {
+                NavidromeLocatorRuntime.markResolvedUrlSuccess(remoteTarget)
+            }
             result
         }.getOrNull()
     }
@@ -129,6 +135,17 @@ private class IosArtworkCacheStore : ArtworkCacheStore {
         }
         return path
     }
+}
+
+private suspend fun readIosRemoteArtworkPayload(
+    targets: List<RemotePlaybackUrlCandidate>,
+): Pair<RemotePlaybackUrlCandidate, ByteArray>? {
+    return readRemotePlaybackUrlCandidateWithFallback(
+        candidates = targets,
+        isRemoteUrl = ::isRemoteArtworkTarget,
+        read = { target -> readIosRemoteBytesOrThrow(target.value) },
+        isValidPayload = ::isCompleteArtworkPayload,
+    )
 }
 
 private fun iosArtworkCachedTarget(path: String): ArtworkCachedTarget? {
@@ -303,5 +320,9 @@ private data class IosArtworkCacheFileResult(
     val path: String,
     val changed: Boolean,
 )
+
+private fun isRemoteArtworkTarget(target: String): Boolean {
+    return target.startsWith("http://", ignoreCase = true) || target.startsWith("https://", ignoreCase = true)
+}
 
 private const val IOS_ARTWORK_CACHE_TEMP_MARKER = ".tmp-"

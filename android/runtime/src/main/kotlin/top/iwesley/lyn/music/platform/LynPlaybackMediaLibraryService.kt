@@ -57,6 +57,7 @@ import top.iwesley.lyn.music.data.repository.NavidromePlaybackStatsReporter
 import top.iwesley.lyn.music.data.repository.PlaybackRepository
 import top.iwesley.lyn.music.data.repository.effectiveArtworkOverridesByTrackId
 import top.iwesley.lyn.music.data.repository.toDomain
+import top.iwesley.lyn.music.domain.RemoteSourceAddressSelector
 
 @OptIn(UnstableApi::class)
 class LynPlaybackMediaLibraryService : MediaLibraryService() {
@@ -239,7 +240,8 @@ private class LynPlaybackServiceRuntime private constructor(
             val database = openAndroidRuntimeDatabase(appContext)
             val secureStore = AndroidCredentialStore(appContext, logger).withSecureInMemoryCache()
             val preferencesStore = AndroidAppPreferencesStore(appContext)
-            val networkConnectionTypeProvider = AndroidNetworkConnectionTypeProvider(appContext)
+            val networkConnectionTypeProvider = AndroidNetworkConnectionTypeProvider.get(appContext)
+            val remoteSourceAddressSelector = RemoteSourceAddressSelector(networkConnectionTypeProvider)
             val navidromeHttpClient = AndroidLyricsHttpClient()
             val artworkCacheStore = createAndroidArtworkCacheStore(appContext)
             val gateway = AndroidPlaybackGateway(
@@ -251,6 +253,7 @@ private class LynPlaybackServiceRuntime private constructor(
                 playbackDecoderPreferencesStore = preferencesStore,
                 navidromeAudioQualityPreferencesStore = preferencesStore,
                 networkConnectionTypeProvider = networkConnectionTypeProvider,
+                addressSelector = remoteSourceAddressSelector,
                 logger = logger,
             )
             val repository = DefaultPlaybackRepository(
@@ -266,12 +269,14 @@ private class LynPlaybackServiceRuntime private constructor(
                             database = database,
                             secureCredentialStore = secureStore,
                             httpClient = navidromeHttpClient,
+                            addressSelector = remoteSourceAddressSelector,
                             logger = logger,
                         ),
                         EmbyPlaybackStatsReporter(
                             database = database,
                             secureCredentialStore = secureStore,
                             httpClient = navidromeHttpClient,
+                            addressSelector = remoteSourceAddressSelector,
                             logger = logger,
                         ),
                         LocalPlaybackStatsReporter(database = database),

@@ -30,6 +30,7 @@ import top.iwesley.lyn.music.domain.NavidromeResolvedSource
 import top.iwesley.lyn.music.domain.isSubsonicCompatibleSourceType
 import top.iwesley.lyn.music.domain.normalizeSubsonicBaseUrl
 import top.iwesley.lyn.music.domain.requestNavidromeJson
+import top.iwesley.lyn.music.domain.RemoteSourceAddressSelector
 import top.iwesley.lyn.music.domain.resolveEmbySource
 import top.iwesley.lyn.music.domain.setEmbyFavorite
 import top.iwesley.lyn.music.domain.toSubsonicAuthMode
@@ -54,6 +55,7 @@ class RoomFavoritesRepository(
     private val secureCredentialStore: SecureCredentialStore,
     private val httpClient: LyricsHttpClient,
     private val logger: DiagnosticLogger = NoopDiagnosticLogger,
+    private val addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
 ) : FavoritesRepository {
     private val favoriteRows = database.favoriteTrackDao().observeAll()
 
@@ -148,7 +150,7 @@ class RoomFavoritesRepository(
         remoteSongId: String,
         favorite: Boolean,
     ): Boolean {
-        val resolvedSource = resolveEmbySource(database, secureCredentialStore, track.sourceId)
+        val resolvedSource = resolveEmbySource(database, secureCredentialStore, track.sourceId, addressSelector)
             ?: error("Emby 来源不可用，无法更新喜欢状态。")
         setEmbyFavorite(
             httpClient = httpClient,
@@ -231,7 +233,7 @@ class RoomFavoritesRepository(
     }
 
     private suspend fun syncEmbyFavorites(source: ImportSourceEntity) {
-        val resolved = resolveEmbySource(database, secureCredentialStore, source.id)
+        val resolved = resolveEmbySource(database, secureCredentialStore, source.id, addressSelector)
             ?: error("Emby 来源缺少有效凭据，无法同步喜欢。")
         val existingRows = database.favoriteTrackDao().getBySourceId(source.id)
         val existingByRemoteSongId = existingRows
@@ -326,7 +328,10 @@ class RoomFavoritesRepository(
         if (authMode == SubsonicAuthMode.PASSWORD && (username.isBlank() || credential.isBlank())) return null
         if (authMode == SubsonicAuthMode.API_KEY && credential.isBlank()) return null
         return NavidromeResolvedSource(
-            baseUrl = normalizeSubsonicBaseUrl(rootReference),
+            baseUrl = rootReference,
+            wanBaseUrl = wanRootReference,
+            sourceId = id,
+            addressSelector = addressSelector,
             username = username,
             password = credential,
             authMode = authMode,

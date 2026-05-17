@@ -11,11 +11,14 @@ import top.iwesley.lyn.music.core.model.ArtworkCachedTarget
 import top.iwesley.lyn.music.core.model.ArtworkCachedTargetRegistry
 import top.iwesley.lyn.music.core.model.ArtworkCacheStore
 import top.iwesley.lyn.music.core.model.ArtworkCacheVersionRegistry
+import top.iwesley.lyn.music.core.model.NavidromeLocatorRuntime
+import top.iwesley.lyn.music.core.model.RemotePlaybackUrlCandidate
 import top.iwesley.lyn.music.core.model.inferArtworkFileExtension
 import top.iwesley.lyn.music.core.model.isCompleteArtworkPayload
 import top.iwesley.lyn.music.core.model.isReplaceableNavidromePlaceholderArtwork
-import top.iwesley.lyn.music.core.model.resolveArtworkCacheTarget
+import top.iwesley.lyn.music.core.model.resolveArtworkCacheTargets
 import top.iwesley.lyn.music.core.model.stableArtworkCacheHash
+import top.iwesley.lyn.music.domain.readRemotePlaybackUrlCandidateWithFallback
 
 fun createJvmArtworkCacheStore(): ArtworkCacheStore = JvmArtworkCacheStore()
 
@@ -28,7 +31,8 @@ private class JvmArtworkCacheStore : ArtworkCacheStore {
 
     override suspend fun cache(locator: String, cacheKey: String, replaceExisting: Boolean): String? {
         return runCatching {
-            val target = resolveArtworkCacheTarget(locator) ?: return@runCatching null
+            val targets = resolveArtworkCacheTargets(locator)
+            val target = targets.firstOrNull()?.value ?: return@runCatching null
             if (target.isBlank()) return@runCatching null
             val effectiveCacheKey = cacheKey.ifBlank { locator }
             val primaryPrefix = effectiveCacheKey.stableArtworkCacheHash()
@@ -74,9 +78,8 @@ private class JvmArtworkCacheStore : ArtworkCacheStore {
                         return@runCatching result
                     }
             }
-            val payload = URL(target).openStream().use { it.readBytes() }
-            if (!isCompleteArtworkPayload(payload)) return@runCatching null
-            val fileName = "$primaryPrefix${inferArtworkFileExtension(locator = target, bytes = payload)}"
+            val (remoteTarget, payload) = readRemoteArtworkPayload(targets) ?: return@runCatching null
+            val fileName = "$primaryPrefix${inferArtworkFileExtension(locator = remoteTarget.value, bytes = payload)}"
             val written = writeArtworkCacheFileAtomically(
                 fileName = fileName,
                 payload = payload,
@@ -85,8 +88,22 @@ private class JvmArtworkCacheStore : ArtworkCacheStore {
             )
             val result = written?.file?.let { rememberArtworkTarget(effectiveCacheKey, it) }
             written?.takeIf { it.changed }?.let { versionRegistry.bump(effectiveCacheKey) }
+            if (result != null) {
+                NavidromeLocatorRuntime.markResolvedUrlSuccess(remoteTarget)
+            }
             result
         }.getOrNull()
+    }
+
+    private suspend fun readRemoteArtworkPayload(
+        targets: List<RemotePlaybackUrlCandidate>,
+    ): Pair<RemotePlaybackUrlCandidate, ByteArray>? {
+        return readRemotePlaybackUrlCandidateWithFallback(
+            candidates = targets,
+            isRemoteUrl = ::isRemoteArtworkTarget,
+            read = { target -> URL(target.value).openStream().use { it.readBytes() } },
+            isValidPayload = ::isCompleteArtworkPayload,
+        )
     }
 
     override suspend fun hasCached(cacheKey: String): Boolean {
@@ -275,5 +292,9 @@ private data class ArtworkCacheFileResult(
     val file: File,
     val changed: Boolean,
 )
+
+private fun isRemoteArtworkTarget(target: String): Boolean {
+    return target.startsWith("http://", ignoreCase = true) || target.startsWith("https://", ignoreCase = true)
+}
 
 private const val ARTWORK_CACHE_TEMP_MARKER = ".tmp-"

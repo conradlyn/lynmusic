@@ -38,6 +38,7 @@ import top.iwesley.lyn.music.domain.isSubsonicCompatibleSourceType
 import top.iwesley.lyn.music.domain.normalizeSubsonicBaseUrl
 import top.iwesley.lyn.music.domain.removeEmbyPlaylistEntries
 import top.iwesley.lyn.music.domain.requestNavidromeJson
+import top.iwesley.lyn.music.domain.RemoteSourceAddressSelector
 import top.iwesley.lyn.music.domain.resolveEmbySource
 import top.iwesley.lyn.music.domain.toSubsonicAuthMode
 import top.iwesley.lyn.music.domain.updateEmbyPlaylistName
@@ -47,6 +48,7 @@ class RoomPlaylistRepository(
     private val secureCredentialStore: SecureCredentialStore,
     private val httpClient: LyricsHttpClient,
     private val logger: DiagnosticLogger = NoopDiagnosticLogger,
+    private val addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
 ) : PlaylistRepository {
     override val playlists: Flow<List<PlaylistSummary>> = combine(
         database.playlistDao().observeAll(),
@@ -138,7 +140,7 @@ class RoomPlaylistRepository(
             val bindings = database.playlistRemoteBindingDao().getByPlaylistId(playlistId)
             bindings.forEach { binding ->
                 if (database.importSourceDao().getById(binding.sourceId)?.isEmbySource() == true) {
-                    val resolvedSource = resolveEmbySource(database, secureCredentialStore, binding.sourceId)
+                    val resolvedSource = resolveEmbySource(database, secureCredentialStore, binding.sourceId, addressSelector)
                         ?: error("Emby 来源不可用，无法重命名歌单。")
                     updateEmbyPlaylistName(
                         httpClient = httpClient,
@@ -193,7 +195,7 @@ class RoomPlaylistRepository(
             val bindings = database.playlistRemoteBindingDao().getByPlaylistId(playlistId)
             bindings.forEach { binding ->
                 if (database.importSourceDao().getById(binding.sourceId)?.isEmbySource() == true) {
-                    val resolvedSource = resolveEmbySource(database, secureCredentialStore, binding.sourceId)
+                    val resolvedSource = resolveEmbySource(database, secureCredentialStore, binding.sourceId, addressSelector)
                         ?: error("Emby 来源不可用，无法删除歌单。")
                     deleteEmbyPlaylist(
                         httpClient = httpClient,
@@ -365,7 +367,7 @@ class RoomPlaylistRepository(
         track: Track,
         itemId: String,
     ) {
-        val resolvedSource = resolveEmbySource(database, secureCredentialStore, track.sourceId)
+        val resolvedSource = resolveEmbySource(database, secureCredentialStore, track.sourceId, addressSelector)
             ?: error("Emby 来源不可用，无法更新歌单。")
         val binding = ensureEmbyRemoteBinding(
             playlist = playlist,
@@ -392,7 +394,7 @@ class RoomPlaylistRepository(
         binding: PlaylistRemoteBindingEntity,
         row: PlaylistTrackEntity,
     ) {
-        val resolvedSource = resolveEmbySource(database, secureCredentialStore, row.sourceId)
+        val resolvedSource = resolveEmbySource(database, secureCredentialStore, row.sourceId, addressSelector)
             ?: error("Emby 来源不可用，无法更新歌单。")
         val entries = fetchEmbyPlaylistEntries(
             httpClient = httpClient,
@@ -526,7 +528,7 @@ class RoomPlaylistRepository(
     }
 
     private suspend fun syncEmbySourcePlaylists(source: ImportSourceEntity) {
-        val resolvedSource = resolveEmbySource(database, secureCredentialStore, source.id)
+        val resolvedSource = resolveEmbySource(database, secureCredentialStore, source.id, addressSelector)
             ?: error("Emby 来源缺少有效凭据，无法同步歌单。")
         val remotePlaylists = fetchEmbyPlaylists(
             httpClient = httpClient,
@@ -632,7 +634,7 @@ class RoomPlaylistRepository(
         remotePlaylistId: String,
         remoteName: String,
     ) {
-        val resolvedSource = resolveEmbySource(database, secureCredentialStore, sourceId)
+        val resolvedSource = resolveEmbySource(database, secureCredentialStore, sourceId, addressSelector)
             ?: error("Emby 来源不可用，无法同步歌单。")
         val remoteEntries = fetchEmbyPlaylistEntries(
             httpClient = httpClient,
@@ -768,7 +770,10 @@ class RoomPlaylistRepository(
         if (authMode == SubsonicAuthMode.PASSWORD && (username.isBlank() || credential.isBlank())) return null
         if (authMode == SubsonicAuthMode.API_KEY && credential.isBlank()) return null
         return NavidromeResolvedSource(
-            baseUrl = normalizeSubsonicBaseUrl(rootReference),
+            baseUrl = rootReference,
+            wanBaseUrl = wanRootReference,
+            sourceId = id,
+            addressSelector = addressSelector,
             username = username,
             password = credential,
             authMode = authMode,

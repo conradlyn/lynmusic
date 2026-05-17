@@ -26,6 +26,7 @@ data class RemoteSourceEditorState(
     val port: String = "",
     val path: String = "",
     val rootUrl: String = "",
+    val wanRootUrl: String = "",
     val username: String = "",
     val password: String = "",
     val allowInsecureTls: Boolean = false,
@@ -57,15 +58,18 @@ data class ImportState(
     val webDavAllowInsecureTls: Boolean = false,
     val navidromeLabel: String = "",
     val navidromeBaseUrl: String = "",
+    val navidromeWanBaseUrl: String = "",
     val navidromeUsername: String = "",
     val navidromePassword: String = "",
     val subsonicLabel: String = "",
     val subsonicBaseUrl: String = "",
+    val subsonicWanBaseUrl: String = "",
     val subsonicUsername: String = "",
     val subsonicCredential: String = "",
     val subsonicAuthMode: SubsonicAuthMode = SubsonicAuthMode.PASSWORD,
     val embyLabel: String = "",
     val embyBaseUrl: String = "",
+    val embyWanBaseUrl: String = "",
     val embyUsername: String = "",
     val embyPassword: String = "",
     val creatingSourceType: ImportSourceType? = null,
@@ -113,15 +117,18 @@ sealed interface ImportIntent {
     data class WebDavAllowInsecureTlsChanged(val value: Boolean) : ImportIntent
     data class NavidromeLabelChanged(val value: String) : ImportIntent
     data class NavidromeBaseUrlChanged(val value: String) : ImportIntent
+    data class NavidromeWanBaseUrlChanged(val value: String) : ImportIntent
     data class NavidromeUsernameChanged(val value: String) : ImportIntent
     data class NavidromePasswordChanged(val value: String) : ImportIntent
     data class SubsonicLabelChanged(val value: String) : ImportIntent
     data class SubsonicBaseUrlChanged(val value: String) : ImportIntent
+    data class SubsonicWanBaseUrlChanged(val value: String) : ImportIntent
     data class SubsonicUsernameChanged(val value: String) : ImportIntent
     data class SubsonicCredentialChanged(val value: String) : ImportIntent
     data class SubsonicAuthModeChanged(val value: SubsonicAuthMode) : ImportIntent
     data class EmbyLabelChanged(val value: String) : ImportIntent
     data class EmbyBaseUrlChanged(val value: String) : ImportIntent
+    data class EmbyWanBaseUrlChanged(val value: String) : ImportIntent
     data class EmbyUsernameChanged(val value: String) : ImportIntent
     data class EmbyPasswordChanged(val value: String) : ImportIntent
     data class RemoteSourceLabelChanged(val value: String) : ImportIntent
@@ -129,6 +136,7 @@ sealed interface ImportIntent {
     data class RemoteSourcePortChanged(val value: String) : ImportIntent
     data class RemoteSourcePathChanged(val value: String) : ImportIntent
     data class RemoteSourceRootUrlChanged(val value: String) : ImportIntent
+    data class RemoteSourceWanRootUrlChanged(val value: String) : ImportIntent
     data class RemoteSourceUsernameChanged(val value: String) : ImportIntent
     data class RemoteSourcePasswordChanged(val value: String) : ImportIntent
     data class RemoteSourceAllowInsecureTlsChanged(val value: Boolean) : ImportIntent
@@ -253,6 +261,7 @@ class ImportStore(
                 val draft = navidromeDraftOrNull(
                     label = state.value.navidromeLabel,
                     baseUrl = state.value.navidromeBaseUrl,
+                    wanBaseUrl = state.value.navidromeWanBaseUrl,
                     username = state.value.navidromeUsername,
                     password = state.value.navidromePassword,
                     allowBlankPassword = false,
@@ -268,6 +277,7 @@ class ImportStore(
                 val draft = navidromeDraftOrNull(
                     label = state.value.navidromeLabel,
                     baseUrl = state.value.navidromeBaseUrl,
+                    wanBaseUrl = state.value.navidromeWanBaseUrl,
                     username = state.value.navidromeUsername,
                     password = state.value.navidromePassword,
                     allowBlankPassword = false,
@@ -280,6 +290,7 @@ class ImportStore(
                                     creatingSourceType = null,
                                     navidromeLabel = "",
                                     navidromeBaseUrl = "",
+                                    navidromeWanBaseUrl = "",
                                     navidromeUsername = "",
                                     navidromePassword = "",
                                     testMessage = null,
@@ -296,6 +307,7 @@ class ImportStore(
                 val draft = subsonicDraftOrNull(
                     label = state.value.subsonicLabel,
                     baseUrl = state.value.subsonicBaseUrl,
+                    wanBaseUrl = state.value.subsonicWanBaseUrl,
                     username = state.value.subsonicUsername,
                     credential = state.value.subsonicCredential,
                     authMode = state.value.subsonicAuthMode,
@@ -312,6 +324,7 @@ class ImportStore(
                 val draft = subsonicDraftOrNull(
                     label = state.value.subsonicLabel,
                     baseUrl = state.value.subsonicBaseUrl,
+                    wanBaseUrl = state.value.subsonicWanBaseUrl,
                     username = state.value.subsonicUsername,
                     credential = state.value.subsonicCredential,
                     authMode = state.value.subsonicAuthMode,
@@ -325,6 +338,7 @@ class ImportStore(
                                     creatingSourceType = null,
                                     subsonicLabel = "",
                                     subsonicBaseUrl = "",
+                                    subsonicWanBaseUrl = "",
                                     subsonicUsername = "",
                                     subsonicCredential = "",
                                     subsonicAuthMode = SubsonicAuthMode.PASSWORD,
@@ -342,6 +356,7 @@ class ImportStore(
                 val draft = embyDraftOrNull(
                     label = state.value.embyLabel,
                     baseUrl = state.value.embyBaseUrl,
+                    wanBaseUrl = state.value.embyWanBaseUrl,
                     username = state.value.embyUsername,
                     password = state.value.embyPassword,
                     allowBlankPassword = false,
@@ -357,6 +372,7 @@ class ImportStore(
                 val draft = embyDraftOrNull(
                     label = state.value.embyLabel,
                     baseUrl = state.value.embyBaseUrl,
+                    wanBaseUrl = state.value.embyWanBaseUrl,
                     username = state.value.embyUsername,
                     password = state.value.embyPassword,
                     allowBlankPassword = false,
@@ -369,6 +385,7 @@ class ImportStore(
                                     creatingSourceType = null,
                                     embyLabel = "",
                                     embyBaseUrl = "",
+                                    embyWanBaseUrl = "",
                                     embyUsername = "",
                                     embyPassword = "",
                                     testMessage = null,
@@ -418,6 +435,7 @@ class ImportStore(
                             } else {
                                 source.rootReference
                             },
+                            wanRootUrl = source.wanRootReference.orEmpty(),
                             username = source.username.orEmpty(),
                             password = "",
                             allowInsecureTls = source.allowInsecureTls,
@@ -644,10 +662,12 @@ class ImportStore(
             is ImportIntent.WebDavAllowInsecureTlsChanged -> updateState { it.copy(webDavAllowInsecureTls = intent.value) }
             is ImportIntent.NavidromeLabelChanged -> updateState { it.copy(navidromeLabel = intent.value) }
             is ImportIntent.NavidromeBaseUrlChanged -> updateState { it.copy(navidromeBaseUrl = intent.value) }
+            is ImportIntent.NavidromeWanBaseUrlChanged -> updateState { it.copy(navidromeWanBaseUrl = intent.value) }
             is ImportIntent.NavidromeUsernameChanged -> updateState { it.copy(navidromeUsername = intent.value) }
             is ImportIntent.NavidromePasswordChanged -> updateState { it.copy(navidromePassword = intent.value) }
             is ImportIntent.SubsonicLabelChanged -> updateState { it.copy(subsonicLabel = intent.value) }
             is ImportIntent.SubsonicBaseUrlChanged -> updateState { it.copy(subsonicBaseUrl = intent.value) }
+            is ImportIntent.SubsonicWanBaseUrlChanged -> updateState { it.copy(subsonicWanBaseUrl = intent.value) }
             is ImportIntent.SubsonicUsernameChanged -> updateState { it.copy(subsonicUsername = intent.value) }
             is ImportIntent.SubsonicCredentialChanged -> updateState { it.copy(subsonicCredential = intent.value) }
             is ImportIntent.SubsonicAuthModeChanged -> updateState {
@@ -663,6 +683,7 @@ class ImportStore(
             }
             is ImportIntent.EmbyLabelChanged -> updateState { it.copy(embyLabel = intent.value) }
             is ImportIntent.EmbyBaseUrlChanged -> updateState { it.copy(embyBaseUrl = intent.value) }
+            is ImportIntent.EmbyWanBaseUrlChanged -> updateState { it.copy(embyWanBaseUrl = intent.value) }
             is ImportIntent.EmbyUsernameChanged -> updateState { it.copy(embyUsername = intent.value) }
             is ImportIntent.EmbyPasswordChanged -> updateState { it.copy(embyPassword = intent.value) }
             is ImportIntent.RemoteSourceLabelChanged -> updateEditingSource { it.copy(label = intent.value) }
@@ -676,6 +697,7 @@ class ImportStore(
                     it.copy(rootUrl = intent.value)
                 }
             }
+            is ImportIntent.RemoteSourceWanRootUrlChanged -> updateEditingSource { it.copy(wanRootUrl = intent.value) }
             is ImportIntent.RemoteSourceUsernameChanged -> updateEditingSource {
                 if (it.type == ImportSourceType.EMBY && it.username != intent.value) {
                     it.copy(username = intent.value, password = "", keepExistingCredential = false)
@@ -772,12 +794,13 @@ class ImportStore(
     private fun navidromeDraftOrNull(
         label: String,
         baseUrl: String,
+        wanBaseUrl: String,
         username: String,
         password: String,
         allowBlankPassword: Boolean,
     ): NavidromeSourceDraft? {
-        if (baseUrl.isBlank()) {
-            setCreateOrPageMessage(ImportSourceType.NAVIDROME, "请先填写 Navidrome 服务器地址。")
+        if (baseUrl.isBlank() && wanBaseUrl.isBlank()) {
+            setCreateOrPageMessage(ImportSourceType.NAVIDROME, "请至少填写一个服务器地址。")
             return null
         }
         if (username.isBlank()) {
@@ -791,6 +814,7 @@ class ImportStore(
         return NavidromeSourceDraft(
             label = label,
             baseUrl = baseUrl,
+            wanBaseUrl = wanBaseUrl,
             username = username,
             password = password,
         )
@@ -799,13 +823,14 @@ class ImportStore(
     private fun subsonicDraftOrNull(
         label: String,
         baseUrl: String,
+        wanBaseUrl: String,
         username: String,
         credential: String,
         authMode: SubsonicAuthMode,
         allowBlankCredential: Boolean,
     ): SubsonicSourceDraft? {
-        if (baseUrl.isBlank()) {
-            setCreateOrPageMessage(ImportSourceType.SUBSONIC, "请先填写 Subsonic 服务器地址。")
+        if (baseUrl.isBlank() && wanBaseUrl.isBlank()) {
+            setCreateOrPageMessage(ImportSourceType.SUBSONIC, "请至少填写一个服务器地址。")
             return null
         }
         if (authMode == SubsonicAuthMode.PASSWORD && username.isBlank()) {
@@ -820,6 +845,7 @@ class ImportStore(
         return SubsonicSourceDraft(
             label = label,
             baseUrl = baseUrl,
+            wanBaseUrl = wanBaseUrl,
             username = username,
             credential = credential,
             authMode = authMode,
@@ -829,12 +855,13 @@ class ImportStore(
     private fun embyDraftOrNull(
         label: String,
         baseUrl: String,
+        wanBaseUrl: String,
         username: String,
         password: String,
         allowBlankPassword: Boolean,
     ): EmbySourceDraft? {
-        if (baseUrl.isBlank()) {
-            setCreateOrPageMessage(ImportSourceType.EMBY, "请先填写 Emby 服务器地址。")
+        if (baseUrl.isBlank() && wanBaseUrl.isBlank()) {
+            setCreateOrPageMessage(ImportSourceType.EMBY, "请至少填写一个服务器地址。")
             return null
         }
         if (username.isBlank()) {
@@ -848,6 +875,7 @@ class ImportStore(
         return EmbySourceDraft(
             label = label,
             baseUrl = baseUrl,
+            wanBaseUrl = wanBaseUrl,
             username = username,
             password = password,
         )
@@ -904,6 +932,7 @@ class ImportStore(
         return navidromeDraftOrNull(
             label = editor.label,
             baseUrl = editor.rootUrl,
+            wanBaseUrl = editor.wanRootUrl,
             username = editor.username,
             password = editor.password,
             allowBlankPassword = canReuseStoredPassword,
@@ -915,6 +944,7 @@ class ImportStore(
         return subsonicDraftOrNull(
             label = editor.label,
             baseUrl = editor.rootUrl,
+            wanBaseUrl = editor.wanRootUrl,
             username = editor.username,
             credential = editor.password,
             authMode = editor.subsonicAuthMode,
@@ -927,6 +957,7 @@ class ImportStore(
         return embyDraftOrNull(
             label = editor.label,
             baseUrl = editor.rootUrl,
+            wanBaseUrl = editor.wanRootUrl,
             username = editor.username,
             password = editor.password,
             allowBlankPassword = canReuseStoredCredential,
@@ -961,6 +992,7 @@ class ImportStore(
             ImportSourceType.NAVIDROME -> copy(
                 navidromeLabel = "",
                 navidromeBaseUrl = "",
+                navidromeWanBaseUrl = "",
                 navidromeUsername = "",
                 navidromePassword = "",
             )
@@ -968,6 +1000,7 @@ class ImportStore(
             ImportSourceType.SUBSONIC -> copy(
                 subsonicLabel = "",
                 subsonicBaseUrl = "",
+                subsonicWanBaseUrl = "",
                 subsonicUsername = "",
                 subsonicCredential = "",
                 subsonicAuthMode = SubsonicAuthMode.PASSWORD,
@@ -976,6 +1009,7 @@ class ImportStore(
             ImportSourceType.EMBY -> copy(
                 embyLabel = "",
                 embyBaseUrl = "",
+                embyWanBaseUrl = "",
                 embyUsername = "",
                 embyPassword = "",
             )

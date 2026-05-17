@@ -3,13 +3,19 @@ package top.iwesley.lyn.music.platform
 import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.ObjCObjectVar
 import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.alloc
 import kotlinx.cinterop.convert
+import kotlinx.cinterop.memScoped
+import kotlinx.cinterop.ptr
 import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.usePinned
+import kotlinx.cinterop.value
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import platform.Foundation.NSData
+import platform.Foundation.NSError
 import platform.Foundation.NSURL
 import platform.Foundation.create
 import platform.posix.SEEK_END
@@ -23,9 +29,25 @@ import platform.posix.fwrite
 import platform.posix.memcpy
 
 @OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
-internal suspend fun readIosRemoteBytes(target: String): ByteArray? = withContext(Dispatchers.Default) {
-    val url = NSURL.URLWithString(target) ?: return@withContext null
-    NSData.create(contentsOfURL = url, options = 0u, error = null)?.toByteArray()
+internal suspend fun readIosRemoteBytes(target: String): ByteArray? =
+    runCatching { readIosRemoteBytesOrThrow(target) }.getOrNull()
+
+@OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
+internal suspend fun readIosRemoteBytesOrThrow(target: String): ByteArray = withContext(Dispatchers.Default) {
+    val url = NSURL.URLWithString(target) ?: error("远端封面 URL 无效。")
+    memScoped {
+        val error = alloc<ObjCObjectVar<NSError?>>()
+        NSData.create(contentsOfURL = url, options = 0u, error = error.ptr)?.toByteArray()
+            ?: throw IllegalStateException(iosRemoteReadErrorMessage(error.value))
+    }
+}
+
+private fun iosRemoteReadErrorMessage(error: NSError?): String {
+    return if (error == null) {
+        "远端封面读取失败。"
+    } else {
+        "NSError domain=${error.domain} code=${error.code} description=${error.localizedDescription}"
+    }
 }
 
 @OptIn(ExperimentalForeignApi::class)

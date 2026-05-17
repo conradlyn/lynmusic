@@ -31,15 +31,19 @@ fun albumArtworkCacheKey(
 }
 
 suspend fun resolveArtworkCacheTarget(locator: String?): String? {
-    val rawTarget = normalizedArtworkCacheLocator(locator) ?: return null
-    val target = if (parseSubsonicCompatibleCoverLocator(rawTarget) != null) {
-        NavidromeLocatorRuntime.resolveCoverArtUrl(rawTarget).orEmpty()
+    return resolveArtworkCacheTargets(locator).firstOrNull()?.value
+}
+
+suspend fun resolveArtworkCacheTargets(locator: String?): List<RemotePlaybackUrlCandidate> {
+    val rawTarget = normalizedArtworkCacheLocator(locator) ?: return emptyList()
+    val targets = if (parseSubsonicCompatibleCoverLocator(rawTarget) != null) {
+        NavidromeLocatorRuntime.resolveCoverArtUrlCandidates(rawTarget)
     } else if (parseEmbyCoverLocator(rawTarget) != null) {
-        NavidromeLocatorRuntime.resolveCoverArtUrl(rawTarget).orEmpty()
+        NavidromeLocatorRuntime.resolveCoverArtUrlCandidates(rawTarget)
     } else {
-        rawTarget
+        listOf(RemotePlaybackUrlCandidate(value = rawTarget))
     }
-    return target.takeIf { it.isNotBlank() }
+    return targets.orEmpty().filter { it.value.isNotBlank() }
 }
 
 fun String.stableArtworkCacheHash(): String {

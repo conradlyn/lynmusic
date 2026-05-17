@@ -12,6 +12,7 @@ import top.iwesley.lyn.music.core.model.parseEmbySongLocator
 import top.iwesley.lyn.music.core.model.warn
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
 import top.iwesley.lyn.music.domain.reportEmbyNowPlaying
+import top.iwesley.lyn.music.domain.RemoteSourceAddressSelector
 import top.iwesley.lyn.music.domain.resolveEmbySource
 import top.iwesley.lyn.music.domain.submitEmbyPlay
 
@@ -20,6 +21,7 @@ class EmbyPlaybackStatsReporter(
     private val secureCredentialStore: SecureCredentialStore,
     private val httpClient: LyricsHttpClient,
     private val logger: DiagnosticLogger = NoopDiagnosticLogger,
+    private val addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
 ) : PlaybackStatsReporter {
     override suspend fun reportNowPlaying(track: Track, atMillis: Long) {
         report(track = track, submission = false)
@@ -63,7 +65,7 @@ class EmbyPlaybackStatsReporter(
     private suspend fun resolveEmbyStatsTarget(track: Track): EmbyStatsTarget? {
         val parsed = parseEmbySongLocator(track.mediaLocator) ?: return null
         if (parsed.first != track.sourceId) return null
-        val source = resolveEmbySource(database, secureCredentialStore, parsed.first) ?: return null
+        val source = resolveEmbySource(database, secureCredentialStore, parsed.first, addressSelector) ?: return null
         return EmbyStatsTarget(
             source = source,
             itemId = parsed.second,

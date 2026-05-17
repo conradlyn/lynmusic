@@ -1659,8 +1659,17 @@ internal fun SourcesTab(
                 ImeAwareOutlinedTextField(
                     value = state.embyBaseUrl,
                     onValueChange = { onImportIntent(ImportIntent.EmbyBaseUrlChanged(it)) },
-                    label = { Text("服务器地址") },
+                    label = { Text("局域网/首选地址") },
                     placeholder = { Text("https://emby.example.com") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = importFieldColors,
+                )
+                ImeAwareOutlinedTextField(
+                    value = state.embyWanBaseUrl,
+                    onValueChange = { onImportIntent(ImportIntent.EmbyWanBaseUrlChanged(it)) },
+                    label = { Text("广域网地址") },
+                    placeholder = { Text("https://music.example.com") },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(18.dp),
                     colors = importFieldColors,
@@ -1725,7 +1734,16 @@ internal fun SourcesTab(
                 ImeAwareOutlinedTextField(
                     value = state.subsonicBaseUrl,
                     onValueChange = { onImportIntent(ImportIntent.SubsonicBaseUrlChanged(it)) },
-                    label = { Text("服务器地址") },
+                    label = { Text("局域网/首选地址") },
+                    placeholder = { Text("https://music.example.com") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = importFieldColors,
+                )
+                ImeAwareOutlinedTextField(
+                    value = state.subsonicWanBaseUrl,
+                    onValueChange = { onImportIntent(ImportIntent.SubsonicWanBaseUrlChanged(it)) },
+                    label = { Text("广域网地址") },
                     placeholder = { Text("https://music.example.com") },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(18.dp),
@@ -1807,8 +1825,17 @@ internal fun SourcesTab(
                 ImeAwareOutlinedTextField(
                     value = state.navidromeBaseUrl,
                     onValueChange = { onImportIntent(ImportIntent.NavidromeBaseUrlChanged(it)) },
-                    label = { Text("服务器地址") },
+                    label = { Text("局域网/首选地址") },
                     placeholder = { Text("http://192.168.31.115:32768") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = importFieldColors,
+                )
+                ImeAwareOutlinedTextField(
+                    value = state.navidromeWanBaseUrl,
+                    onValueChange = { onImportIntent(ImportIntent.NavidromeWanBaseUrlChanged(it)) },
+                    label = { Text("广域网地址") },
+                    placeholder = { Text("https://music.example.com") },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(18.dp),
                     colors = importFieldColors,
@@ -2335,7 +2362,17 @@ private fun RemoteSourceEditorDialog(
                                     )
                                 }
 
-                                ImportSourceType.WEBDAV,
+                                ImportSourceType.WEBDAV -> {
+                                    ImeAwareOutlinedTextField(
+                                        value = state.rootUrl,
+                                        onValueChange = { onIntent(ImportIntent.RemoteSourceRootUrlChanged(it)) },
+                                        label = { Text("根 URL") },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(18.dp),
+                                        colors = fieldColors,
+                                    )
+                                }
+
                                 ImportSourceType.NAVIDROME,
                                 ImportSourceType.SUBSONIC,
                                 ImportSourceType.EMBY,
@@ -2343,9 +2380,15 @@ private fun RemoteSourceEditorDialog(
                                     ImeAwareOutlinedTextField(
                                         value = state.rootUrl,
                                         onValueChange = { onIntent(ImportIntent.RemoteSourceRootUrlChanged(it)) },
-                                        label = {
-                                            Text(if (state.type == ImportSourceType.WEBDAV) "根 URL" else "服务器地址")
-                                        },
+                                        label = { Text("局域网/首选地址") },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(18.dp),
+                                        colors = fieldColors,
+                                    )
+                                    ImeAwareOutlinedTextField(
+                                        value = state.wanRootUrl,
+                                        onValueChange = { onIntent(ImportIntent.RemoteSourceWanRootUrlChanged(it)) },
+                                        label = { Text("广域网地址") },
                                         modifier = Modifier.fillMaxWidth(),
                                         shape = RoundedCornerShape(18.dp),
                                         colors = fieldColors,

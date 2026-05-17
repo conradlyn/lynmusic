@@ -30,6 +30,7 @@ import top.iwesley.lyn.music.core.model.OfflineDownloadGateway
 import top.iwesley.lyn.music.core.model.PlatformDescriptor
 import top.iwesley.lyn.music.core.model.PlaybackDecoderPreferencesStore
 import top.iwesley.lyn.music.core.model.PlaybackStatsReporter
+import top.iwesley.lyn.music.core.model.RemotePlaybackUrlCandidate
 import top.iwesley.lyn.music.core.model.SambaCachePreferencesStore
 import top.iwesley.lyn.music.core.model.SecureCredentialStore
 import top.iwesley.lyn.music.core.model.SameNameLyricsFileGateway
@@ -71,10 +72,17 @@ import top.iwesley.lyn.music.data.repository.RoomLibraryRepository
 import top.iwesley.lyn.music.data.repository.RoomPlaylistRepository
 import top.iwesley.lyn.music.data.repository.RoomTrackPlaybackStatsRepository
 import top.iwesley.lyn.music.data.repository.UtcDailyRecommendationDateKeyProvider
+import top.iwesley.lyn.music.domain.RemoteSourceResolvedUrl
 import top.iwesley.lyn.music.domain.resolveNavidromeCoverArtUrl
+import top.iwesley.lyn.music.domain.resolveNavidromeCoverArtUrlCandidates
 import top.iwesley.lyn.music.domain.resolveNavidromeStreamUrl
+import top.iwesley.lyn.music.domain.resolveNavidromeStreamUrlCandidates
+import top.iwesley.lyn.music.domain.RemoteSourceAddressKind
 import top.iwesley.lyn.music.domain.resolveEmbyCoverArtUrl
+import top.iwesley.lyn.music.domain.resolveEmbyCoverArtUrlCandidates
 import top.iwesley.lyn.music.domain.resolveEmbyStreamUrl
+import top.iwesley.lyn.music.domain.resolveEmbyStreamUrlCandidates
+import top.iwesley.lyn.music.domain.RemoteSourceAddressSelector
 import top.iwesley.lyn.music.feature.favorites.FavoritesStore
 import top.iwesley.lyn.music.feature.importing.ImportStore
 import top.iwesley.lyn.music.feature.library.LibrarySourceFilterPreferencesStore
@@ -103,6 +111,8 @@ data class SharedRuntimeServices(
     val playbackDecoderPreferencesStore: PlaybackDecoderPreferencesStore =
         UnsupportedPlaybackDecoderPreferencesStore,
     val networkConnectionTypeProvider: NetworkConnectionTypeProvider = MobileNetworkConnectionTypeProvider,
+    val remoteSourceAddressSelector: RemoteSourceAddressSelector =
+        RemoteSourceAddressSelector(networkConnectionTypeProvider),
     val desktopVlcPreferencesStore: DesktopVlcPreferencesStore = UnsupportedDesktopVlcPreferencesStore,
     val librarySourceFilterPreferencesStore: LibrarySourceFilterPreferencesStore,
     val lyricsHttpClient: LyricsHttpClient,
@@ -149,6 +159,16 @@ class SharedGraph(
     val scope: CoroutineScope,
 )
 
+private fun List<RemoteSourceResolvedUrl>.toRemotePlaybackUrlCandidates(): List<RemotePlaybackUrlCandidate> {
+    return map { candidate ->
+        RemotePlaybackUrlCandidate(
+            sourceId = candidate.sourceId,
+            addressKind = candidate.kind.name,
+            value = candidate.value,
+        )
+    }
+}
+
 fun buildSharedGraph(
     platform: PlatformDescriptor,
     database: LynMusicDatabase,
@@ -166,6 +186,7 @@ fun buildSharedGraph(
         gateway = runtimeServices.importSourceGateway,
         secureCredentialStore = runtimeServices.secureCredentialStore,
         offlineDownloadGateway = runtimeServices.offlineDownloadGateway,
+        addressSelector = runtimeServices.remoteSourceAddressSelector,
     )
     val settingsRepository = DefaultSettingsRepository(
         database = database,
@@ -190,11 +211,31 @@ fun buildSharedGraph(
                     secureCredentialStore = runtimeServices.secureCredentialStore,
                     locator = locator,
                     audioQuality = audioQuality,
+                    addressSelector = runtimeServices.remoteSourceAddressSelector,
                 ) ?: resolveEmbyStreamUrl(
                     database = database,
                     secureCredentialStore = runtimeServices.secureCredentialStore,
                     locator = locator,
+                    addressSelector = runtimeServices.remoteSourceAddressSelector,
                 )
+            }
+
+            override suspend fun resolveStreamUrlCandidates(
+                locator: String,
+                audioQuality: top.iwesley.lyn.music.core.model.NavidromeAudioQuality,
+            ): List<RemotePlaybackUrlCandidate>? {
+                return resolveNavidromeStreamUrlCandidates(
+                    database = database,
+                    secureCredentialStore = runtimeServices.secureCredentialStore,
+                    locator = locator,
+                    audioQuality = audioQuality,
+                    addressSelector = runtimeServices.remoteSourceAddressSelector,
+                )?.toRemotePlaybackUrlCandidates() ?: resolveEmbyStreamUrlCandidates(
+                    database = database,
+                    secureCredentialStore = runtimeServices.secureCredentialStore,
+                    locator = locator,
+                    addressSelector = runtimeServices.remoteSourceAddressSelector,
+                )?.toRemotePlaybackUrlCandidates()
             }
 
             override suspend fun resolveCoverArtUrl(locator: String): String? {
@@ -202,11 +243,35 @@ fun buildSharedGraph(
                     database = database,
                     secureCredentialStore = runtimeServices.secureCredentialStore,
                     locator = locator,
+                    addressSelector = runtimeServices.remoteSourceAddressSelector,
                 ) ?: resolveEmbyCoverArtUrl(
                     database = database,
                     secureCredentialStore = runtimeServices.secureCredentialStore,
                     locator = locator,
+                    addressSelector = runtimeServices.remoteSourceAddressSelector,
                 )
+            }
+
+            override suspend fun resolveCoverArtUrlCandidates(locator: String): List<RemotePlaybackUrlCandidate>? {
+                return resolveNavidromeCoverArtUrlCandidates(
+                    database = database,
+                    secureCredentialStore = runtimeServices.secureCredentialStore,
+                    locator = locator,
+                    addressSelector = runtimeServices.remoteSourceAddressSelector,
+                )?.toRemotePlaybackUrlCandidates() ?: resolveEmbyCoverArtUrlCandidates(
+                    database = database,
+                    secureCredentialStore = runtimeServices.secureCredentialStore,
+                    locator = locator,
+                    addressSelector = runtimeServices.remoteSourceAddressSelector,
+                )?.toRemotePlaybackUrlCandidates()
+            }
+
+            override fun markResolvedUrlSuccess(candidate: RemotePlaybackUrlCandidate) {
+                val kind = runCatching { RemoteSourceAddressKind.valueOf(candidate.addressKind) }.getOrNull()
+                    ?: return
+                candidate.sourceId.takeIf { it.isNotBlank() }?.let { sourceId ->
+                    runtimeServices.remoteSourceAddressSelector.markSuccess(sourceId, kind)
+                }
             }
         },
     )
@@ -218,6 +283,7 @@ fun buildSharedGraph(
         sameNameLyricsFileGateway = runtimeServices.sameNameLyricsFileGateway,
         artworkCacheStore = runtimeServices.artworkCacheStore,
         logger = runtimeServices.logger,
+        addressSelector = runtimeServices.remoteSourceAddressSelector,
     )
     val playbackStatsReporter = CompositePlaybackStatsReporter(
         reporters = listOf(
@@ -226,12 +292,14 @@ fun buildSharedGraph(
                 secureCredentialStore = runtimeServices.secureCredentialStore,
                 httpClient = runtimeServices.lyricsHttpClient,
                 logger = runtimeServices.logger,
+                addressSelector = runtimeServices.remoteSourceAddressSelector,
             ),
             EmbyPlaybackStatsReporter(
                 database = database,
                 secureCredentialStore = runtimeServices.secureCredentialStore,
                 httpClient = runtimeServices.lyricsHttpClient,
                 logger = runtimeServices.logger,
+                addressSelector = runtimeServices.remoteSourceAddressSelector,
             ),
             LocalPlaybackStatsReporter(
                 database = database,
@@ -244,12 +312,14 @@ fun buildSharedGraph(
         secureCredentialStore = runtimeServices.secureCredentialStore,
         httpClient = runtimeServices.lyricsHttpClient,
         logger = runtimeServices.logger,
+        addressSelector = runtimeServices.remoteSourceAddressSelector,
     )
     val playlistRepository = RoomPlaylistRepository(
         database = database,
         secureCredentialStore = runtimeServices.secureCredentialStore,
         httpClient = runtimeServices.lyricsHttpClient,
         logger = runtimeServices.logger,
+        addressSelector = runtimeServices.remoteSourceAddressSelector,
     )
     val musicTagsRepository = RoomMusicTagsRepository(
         database = database,
@@ -263,6 +333,7 @@ fun buildSharedGraph(
         logger = runtimeServices.logger,
         dailyRecommendationDateKeyProvider = runtimeServices.dailyRecommendationDateKeyProvider,
         dailyRecommendationDateChangeNotifier = runtimeServices.dailyRecommendationDateChangeNotifier,
+        addressSelector = runtimeServices.remoteSourceAddressSelector,
     )
     scope.launch {
         settingsRepository.ensureDefaults()

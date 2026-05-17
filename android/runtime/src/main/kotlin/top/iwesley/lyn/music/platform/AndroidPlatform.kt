@@ -9,7 +9,9 @@ import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -86,6 +88,7 @@ import top.iwesley.lyn.music.core.model.LyricsRequest
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.NavidromeAudioQualityPreferencesStore
 import top.iwesley.lyn.music.core.model.NavidromeSourceDraft
+import top.iwesley.lyn.music.core.model.NetworkConnectionState
 import top.iwesley.lyn.music.core.model.NetworkConnectionType
 import top.iwesley.lyn.music.core.model.NetworkConnectionTypeProvider
 import top.iwesley.lyn.music.core.model.NonNavidromeAudioScanResult
@@ -142,8 +145,13 @@ import top.iwesley.lyn.music.data.db.openLynMusicDatabase
 import top.iwesley.lyn.music.data.repository.DailyRecommendationDateChangeNotifier
 import top.iwesley.lyn.music.data.repository.DailyRecommendationDateKeyProvider
 import top.iwesley.lyn.music.data.repository.PlayerRuntimeServices
+import top.iwesley.lyn.music.domain.RemoteSourceResolvedUrl
 import top.iwesley.lyn.music.domain.resolveNavidromeStreamUrl
 import top.iwesley.lyn.music.domain.resolveEmbyStreamUrl
+import top.iwesley.lyn.music.domain.RemoteSourceAddressSelector
+import top.iwesley.lyn.music.domain.isRemoteSourceAddressFallbackAllowed
+import top.iwesley.lyn.music.domain.resolveEmbyStreamUrlCandidates
+import top.iwesley.lyn.music.domain.resolveNavidromeStreamUrlCandidates
 import top.iwesley.lyn.music.domain.scanEmbyLibrary
 import top.iwesley.lyn.music.domain.scanNavidromeLibrary
 import top.iwesley.lyn.music.domain.scanSubsonicLibrary
@@ -211,7 +219,8 @@ fun createAndroidRuntimeGraph(
         logger = logger,
     ).withSecureInMemoryCache()
     val appPreferencesStore = AndroidAppPreferencesStore(activity.applicationContext)
-    val networkConnectionTypeProvider = AndroidNetworkConnectionTypeProvider(activity.applicationContext)
+    val networkConnectionTypeProvider = AndroidNetworkConnectionTypeProvider.get(activity.applicationContext)
+    val remoteSourceAddressSelector = RemoteSourceAddressSelector(networkConnectionTypeProvider)
     val lyricsShareFontLibraryPlatformService = AndroidLyricsShareFontLibraryPlatformService(activity)
     val navidromeHttpClient = AndroidLyricsHttpClient()
     val artworkCacheStore = createAndroidArtworkCacheStore(activity.applicationContext)
@@ -247,6 +256,7 @@ fun createAndroidRuntimeGraph(
             navidromeAudioQualityPreferencesStore = appPreferencesStore,
             playbackDecoderPreferencesStore = appPreferencesStore,
             networkConnectionTypeProvider = networkConnectionTypeProvider,
+            remoteSourceAddressSelector = remoteSourceAddressSelector,
             librarySourceFilterPreferencesStore = appPreferencesStore,
             lyricsShareFontLibraryPlatformService = lyricsShareFontLibraryPlatformService,
             lyricsShareFontPreferencesStore = appPreferencesStore,
@@ -258,6 +268,7 @@ fun createAndroidRuntimeGraph(
                 database = database,
                 secureCredentialStore = secureStore,
                 logger = logger,
+                addressSelector = remoteSourceAddressSelector,
             ),
             deviceInfoGateway = createAndroidDeviceInfoGateway(activity),
             audioTagGateway = AndroidAudioTagGateway(
@@ -817,23 +828,95 @@ internal class AndroidAppPreferencesStore(
     }
 }
 
-internal class AndroidNetworkConnectionTypeProvider(
+internal class AndroidNetworkConnectionTypeProvider private constructor(
     context: Context,
 ) : NetworkConnectionTypeProvider {
     private val connectivityManager =
         context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+    private val stateLock = Any()
+    private var currentNetworkSnapshot = readCurrentNetworkSnapshot()
+    private val mutableNetworkConnectionState = MutableStateFlow(
+        NetworkConnectionState(
+            type = currentNetworkSnapshot.type,
+            version = 0L,
+        ),
+    )
 
-    override fun currentNetworkConnectionType(): NetworkConnectionType {
-        val manager = connectivityManager ?: return NetworkConnectionType.MOBILE
-        val network = manager.activeNetwork ?: return NetworkConnectionType.MOBILE
-        val capabilities = manager.getNetworkCapabilities(network) ?: return NetworkConnectionType.MOBILE
-        return if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+    override val networkConnectionState: StateFlow<NetworkConnectionState> = mutableNetworkConnectionState.asStateFlow()
+
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            publishCurrentNetworkConnectionState()
+        }
+
+        override fun onLost(network: Network) {
+            publishCurrentNetworkConnectionState()
+        }
+
+        override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+            publishCurrentNetworkConnectionState()
+        }
+    }
+
+    init {
+        registerNetworkCallback()
+    }
+
+    companion object {
+        @Volatile
+        private var instance: AndroidNetworkConnectionTypeProvider? = null
+
+        fun get(context: Context): AndroidNetworkConnectionTypeProvider {
+            return instance ?: synchronized(this) {
+                instance ?: AndroidNetworkConnectionTypeProvider(context.applicationContext).also { instance = it }
+            }
+        }
+    }
+
+    private fun registerNetworkCallback() {
+        val manager = connectivityManager ?: return
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                manager.registerDefaultNetworkCallback(networkCallback)
+            } else {
+                manager.registerNetworkCallback(NetworkRequest.Builder().build(), networkCallback)
+            }
+        }
+    }
+
+    private fun publishCurrentNetworkConnectionState() {
+        val nextSnapshot = readCurrentNetworkSnapshot()
+        synchronized(stateLock) {
+            if (nextSnapshot == currentNetworkSnapshot) return
+            currentNetworkSnapshot = nextSnapshot
+            val current = mutableNetworkConnectionState.value
+            mutableNetworkConnectionState.value = NetworkConnectionState(
+                type = nextSnapshot.type,
+                version = current.version + 1L,
+            )
+        }
+    }
+
+    private fun readCurrentNetworkSnapshot(): AndroidNetworkSnapshot {
+        val manager = connectivityManager
+            ?: return AndroidNetworkSnapshot(activeNetwork = null, type = NetworkConnectionType.MOBILE)
+        val network = manager.activeNetwork
+            ?: return AndroidNetworkSnapshot(activeNetwork = null, type = NetworkConnectionType.MOBILE)
+        val capabilities = manager.getNetworkCapabilities(network)
+            ?: return AndroidNetworkSnapshot(activeNetwork = network, type = NetworkConnectionType.MOBILE)
+        val type = if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
             NetworkConnectionType.WIFI
         } else {
             NetworkConnectionType.MOBILE
         }
+        return AndroidNetworkSnapshot(activeNetwork = network, type = type)
     }
 }
+
+private data class AndroidNetworkSnapshot(
+    val activeNetwork: Network?,
+    val type: NetworkConnectionType,
+)
 
 internal class AndroidAudioTagGateway(
     private val context: Context,
@@ -1941,6 +2024,13 @@ private suspend fun resolveAndroidSambaTagReadTarget(
     )
 }
 
+private data class AndroidRemotePlaybackFallback(
+    val candidates: List<RemoteSourceResolvedUrl>,
+    val selectedIndex: Int,
+) {
+    fun currentCandidate(): RemoteSourceResolvedUrl? = candidates.getOrNull(selectedIndex)
+}
+
 @UnstableApi
 internal class AndroidPlaybackGateway(
     private val context: Context,
@@ -1951,6 +2041,7 @@ internal class AndroidPlaybackGateway(
     private val playbackDecoderPreferencesStore: PlaybackDecoderPreferencesStore,
     private val navidromeAudioQualityPreferencesStore: NavidromeAudioQualityPreferencesStore,
     private val networkConnectionTypeProvider: NetworkConnectionTypeProvider,
+    private val addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(networkConnectionTypeProvider),
     private val logger: DiagnosticLogger,
 ) : PlaybackGateway {
     private var activeAndroidExtensionDecoderEnabled =
@@ -1966,6 +2057,7 @@ internal class AndroidPlaybackGateway(
     private var progressTickerRunning = false
     private var currentRemoteLogTag: String? = null
     private var currentRemoteLabel: String? = null
+    private var currentRemotePlaybackFallback: AndroidRemotePlaybackFallback? = null
     private var pendingLoadPlayWhenReady = false
     private var lastPublishedPlaybackLogKey: String? = null
 
@@ -2001,6 +2093,11 @@ internal class AndroidPlaybackGateway(
             }
             if (isPlaying) {
                 pendingLoadPlayWhenReady = false
+                currentRemotePlaybackFallback?.currentCandidate()?.let { candidate ->
+                    if (candidate.sourceId.isNotBlank()) {
+                        addressSelector.markSuccess(candidate.sourceId, candidate.kind)
+                    }
+                }
             }
             publishPlayerState()
             if (isPlaying) {
@@ -2053,6 +2150,9 @@ internal class AndroidPlaybackGateway(
             logger.error(PLAYBACK_LOG_TAG, error) {
                 "play-failed locator=${currentRemoteLabel.orEmpty()}"
             }
+            if (tryApplyRemoteAddressFallback(error)) {
+                return
+            }
             val detail = error.messageChain()
             mutableState.update {
                 it.copy(
@@ -2104,6 +2204,26 @@ internal class AndroidPlaybackGateway(
                 "analyticsListener onAudioInputFormatChanged format=$format"
             }
         }
+    }
+
+    private fun tryApplyRemoteAddressFallback(error: Throwable): Boolean {
+        val fallback = currentRemotePlaybackFallback ?: return false
+        if (!isRemoteSourceAddressFallbackAllowed(error)) return false
+        val nextIndex = fallback.selectedIndex + 1
+        val nextCandidate = fallback.candidates.getOrNull(nextIndex) ?: return false
+        val retryPositionMs = player.currentPosition.takeIf { it >= 0L } ?: 0L
+        val retryPlayWhenReady = player.playWhenReady || pendingLoadPlayWhenReady
+        currentRemotePlaybackFallback = fallback.copy(selectedIndex = nextIndex)
+        currentRemoteLabel = nextCandidate.value
+        logger.warn(PLAYBACK_LOG_TAG) {
+            "remote-address-fallback retry index=$nextIndex url=${nextCandidate.value}"
+        }
+        player.setMediaItem(MediaItem.fromUri(Uri.parse(nextCandidate.value)))
+        player.prepare()
+        player.seekTo(retryPositionMs)
+        player.playWhenReady = retryPlayWhenReady
+        mutableState.update { it.copy(errorMessage = null) }
+        return true
     }
 
     init {
@@ -2180,10 +2300,16 @@ internal class AndroidPlaybackGateway(
                 )
                 else -> null
             }
+            val remotePlaybackCandidates = if (offlineTarget == null && webDavTarget == null && sambaTarget == null) {
+                resolveLocatorCandidates(track.mediaLocator, navidromeAudioQuality)
+            } else {
+                null
+            }
             val resolvedUri = if (offlineTarget != null) {
                 Uri.fromFile(offlineTarget.file)
             } else if (webDavTarget == null && sambaTarget == null) {
-                resolveLocator(track.mediaLocator, navidromeAudioQuality)
+                remotePlaybackCandidates?.firstOrNull()?.value?.let(Uri::parse)
+                    ?: resolveLocator(track.mediaLocator, navidromeAudioQuality)
             } else {
                 null
             }
@@ -2227,6 +2353,9 @@ internal class AndroidPlaybackGateway(
                     } else {
                         null
                     }
+                    currentRemotePlaybackFallback = remotePlaybackCandidates?.takeIf { it.isNotEmpty() }?.let { candidates ->
+                        AndroidRemotePlaybackFallback(candidates = candidates, selectedIndex = 0)
+                    }
                     player.setMediaItem(MediaItem.fromUri(checkNotNull(resolvedUri)))
                 }
                 mutableState.update {
@@ -2267,6 +2396,7 @@ internal class AndroidPlaybackGateway(
             player.clearMediaItems()
             currentRemoteLogTag = null
             currentRemoteLabel = null
+            currentRemotePlaybackFallback = null
             mutableState.update {
                 it.resetForTrackSwitch(
                     volumeOverride = player.volume,
@@ -2372,11 +2502,13 @@ internal class AndroidPlaybackGateway(
             secureCredentialStore = secureCredentialStore,
             locator = locator,
             audioQuality = navidromeAudioQuality ?: NavidromeAudioQuality.Original,
+            addressSelector = addressSelector,
         )?.let { return Uri.parse(it) }
         resolveEmbyStreamUrl(
             database = database,
             secureCredentialStore = secureCredentialStore,
             locator = locator,
+            addressSelector = addressSelector,
         )?.let { return Uri.parse(it) }
         val samba = parseSambaLocator(locator) ?: return Uri.parse(locator)
         if (!playbackPreferencesStore.useSambaCache.value) {
@@ -2444,6 +2576,26 @@ internal class AndroidPlaybackGateway(
             throw throwable
         }
         return Uri.fromFile(cacheFile)
+    }
+
+    private suspend fun resolveLocatorCandidates(
+        locator: String,
+        navidromeAudioQuality: NavidromeAudioQuality?,
+    ): List<RemoteSourceResolvedUrl>? {
+        resolveNavidromeStreamUrlCandidates(
+            database = database,
+            secureCredentialStore = secureCredentialStore,
+            locator = locator,
+            audioQuality = navidromeAudioQuality ?: NavidromeAudioQuality.Original,
+            addressSelector = addressSelector,
+        )?.let { return it }
+        resolveEmbyStreamUrlCandidates(
+            database = database,
+            secureCredentialStore = secureCredentialStore,
+            locator = locator,
+            addressSelector = addressSelector,
+        )?.let { return it }
+        return null
     }
 
     private suspend fun <T> onPlayerThread(block: () -> T): T {

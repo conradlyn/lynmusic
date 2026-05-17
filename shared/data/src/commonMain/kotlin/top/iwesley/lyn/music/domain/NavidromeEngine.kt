@@ -49,6 +49,9 @@ private val subsonicJson = Json { ignoreUnknownKeys = true }
 
 data class NavidromeResolvedSource(
     val baseUrl: String,
+    val wanBaseUrl: String? = null,
+    val sourceId: String? = null,
+    val addressSelector: RemoteSourceAddressSelector? = null,
     val username: String,
     val password: String,
     val authMode: SubsonicAuthMode = SubsonicAuthMode.PASSWORD,
@@ -531,8 +534,19 @@ suspend fun resolveNavidromeStreamUrl(
     secureCredentialStore: SecureCredentialStore,
     locator: String,
     audioQuality: NavidromeAudioQuality = NavidromeAudioQuality.Original,
+    addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
 ): String? {
-    return resolveSubsonicCompatibleStreamUrl(database, secureCredentialStore, locator, audioQuality)
+    return resolveSubsonicCompatibleStreamUrl(database, secureCredentialStore, locator, audioQuality, addressSelector)
+}
+
+suspend fun resolveNavidromeStreamUrlCandidates(
+    database: LynMusicDatabase,
+    secureCredentialStore: SecureCredentialStore,
+    locator: String,
+    audioQuality: NavidromeAudioQuality = NavidromeAudioQuality.Original,
+    addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
+): List<RemoteSourceResolvedUrl>? {
+    return resolveSubsonicCompatibleStreamUrlCandidates(database, secureCredentialStore, locator, audioQuality, addressSelector)
 }
 
 suspend fun resolveSubsonicCompatibleStreamUrl(
@@ -540,11 +554,12 @@ suspend fun resolveSubsonicCompatibleStreamUrl(
     secureCredentialStore: SecureCredentialStore,
     locator: String,
     audioQuality: NavidromeAudioQuality = NavidromeAudioQuality.Original,
+    addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
 ): String? {
     val parsed = parseSubsonicCompatibleSongLocator(locator) ?: return null
-    val source = resolveSubsonicCompatibleSource(database, secureCredentialStore, locator) ?: return null
+    val source = resolveSubsonicCompatibleSource(database, secureCredentialStore, locator, addressSelector) ?: return null
     return buildSubsonicStreamUrl(
-        baseUrl = source.baseUrl,
+        baseUrl = source.preferredBaseUrl(),
         username = source.username,
         credential = source.password,
         authMode = source.authMode,
@@ -553,23 +568,59 @@ suspend fun resolveSubsonicCompatibleStreamUrl(
     )
 }
 
+suspend fun resolveSubsonicCompatibleStreamUrlCandidates(
+    database: LynMusicDatabase,
+    secureCredentialStore: SecureCredentialStore,
+    locator: String,
+    audioQuality: NavidromeAudioQuality = NavidromeAudioQuality.Original,
+    addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
+): List<RemoteSourceResolvedUrl>? {
+    val parsed = parseSubsonicCompatibleSongLocator(locator) ?: return null
+    val source = resolveSubsonicCompatibleSource(database, secureCredentialStore, locator, addressSelector) ?: return null
+    return source.addressCandidates().map { candidate ->
+        RemoteSourceResolvedUrl(
+            sourceId = source.sourceId.orEmpty(),
+            kind = candidate.kind,
+            value = buildSubsonicStreamUrl(
+                baseUrl = candidate.value,
+                username = source.username,
+                credential = source.password,
+                authMode = source.authMode,
+                songId = parsed.itemId,
+                audioQuality = audioQuality,
+            ),
+        )
+    }
+}
+
 suspend fun resolveNavidromeDownloadUrl(
     database: LynMusicDatabase,
     secureCredentialStore: SecureCredentialStore,
     locator: String,
+    addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
 ): String? {
-    return resolveSubsonicCompatibleDownloadUrl(database, secureCredentialStore, locator)
+    return resolveSubsonicCompatibleDownloadUrl(database, secureCredentialStore, locator, addressSelector)
+}
+
+suspend fun resolveNavidromeDownloadUrlCandidates(
+    database: LynMusicDatabase,
+    secureCredentialStore: SecureCredentialStore,
+    locator: String,
+    addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
+): List<RemoteSourceResolvedUrl>? {
+    return resolveSubsonicCompatibleDownloadUrlCandidates(database, secureCredentialStore, locator, addressSelector)
 }
 
 suspend fun resolveSubsonicCompatibleDownloadUrl(
     database: LynMusicDatabase,
     secureCredentialStore: SecureCredentialStore,
     locator: String,
+    addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
 ): String? {
     val parsed = parseSubsonicCompatibleSongLocator(locator) ?: return null
-    val source = resolveSubsonicCompatibleSource(database, secureCredentialStore, locator) ?: return null
+    val source = resolveSubsonicCompatibleSource(database, secureCredentialStore, locator, addressSelector) ?: return null
     return buildSubsonicDownloadUrl(
-        baseUrl = source.baseUrl,
+        baseUrl = source.preferredBaseUrl(),
         username = source.username,
         credential = source.password,
         authMode = source.authMode,
@@ -577,23 +628,57 @@ suspend fun resolveSubsonicCompatibleDownloadUrl(
     )
 }
 
+suspend fun resolveSubsonicCompatibleDownloadUrlCandidates(
+    database: LynMusicDatabase,
+    secureCredentialStore: SecureCredentialStore,
+    locator: String,
+    addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
+): List<RemoteSourceResolvedUrl>? {
+    val parsed = parseSubsonicCompatibleSongLocator(locator) ?: return null
+    val source = resolveSubsonicCompatibleSource(database, secureCredentialStore, locator, addressSelector) ?: return null
+    return source.addressCandidates().map { candidate ->
+        RemoteSourceResolvedUrl(
+            sourceId = source.sourceId.orEmpty(),
+            kind = candidate.kind,
+            value = buildSubsonicDownloadUrl(
+                baseUrl = candidate.value,
+                username = source.username,
+                credential = source.password,
+                authMode = source.authMode,
+                songId = parsed.itemId,
+            ),
+        )
+    }
+}
+
 suspend fun resolveNavidromeCoverArtUrl(
     database: LynMusicDatabase,
     secureCredentialStore: SecureCredentialStore,
     locator: String,
+    addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
 ): String? {
-    return resolveSubsonicCompatibleCoverArtUrl(database, secureCredentialStore, locator)
+    return resolveSubsonicCompatibleCoverArtUrl(database, secureCredentialStore, locator, addressSelector)
+}
+
+suspend fun resolveNavidromeCoverArtUrlCandidates(
+    database: LynMusicDatabase,
+    secureCredentialStore: SecureCredentialStore,
+    locator: String,
+    addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
+): List<RemoteSourceResolvedUrl>? {
+    return resolveSubsonicCompatibleCoverArtUrlCandidates(database, secureCredentialStore, locator, addressSelector)
 }
 
 suspend fun resolveSubsonicCompatibleCoverArtUrl(
     database: LynMusicDatabase,
     secureCredentialStore: SecureCredentialStore,
     locator: String,
+    addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
 ): String? {
     val parsed = parseSubsonicCompatibleCoverLocator(locator) ?: return null
-    val source = resolveSubsonicCompatibleSource(database, secureCredentialStore, locator) ?: return null
+    val source = resolveSubsonicCompatibleSource(database, secureCredentialStore, locator, addressSelector) ?: return null
     return buildSubsonicCoverArtUrl(
-        baseUrl = source.baseUrl,
+        baseUrl = source.preferredBaseUrl(),
         username = source.username,
         credential = source.password,
         authMode = source.authMode,
@@ -601,12 +686,36 @@ suspend fun resolveSubsonicCompatibleCoverArtUrl(
     )
 }
 
+suspend fun resolveSubsonicCompatibleCoverArtUrlCandidates(
+    database: LynMusicDatabase,
+    secureCredentialStore: SecureCredentialStore,
+    locator: String,
+    addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
+): List<RemoteSourceResolvedUrl>? {
+    val parsed = parseSubsonicCompatibleCoverLocator(locator) ?: return null
+    val source = resolveSubsonicCompatibleSource(database, secureCredentialStore, locator, addressSelector) ?: return null
+    return source.addressCandidates().map { candidate ->
+        RemoteSourceResolvedUrl(
+            sourceId = source.sourceId.orEmpty(),
+            kind = candidate.kind,
+            value = buildSubsonicCoverArtUrl(
+                baseUrl = candidate.value,
+                username = source.username,
+                credential = source.password,
+                authMode = source.authMode,
+                coverArtId = parsed.itemId,
+            ),
+        )
+    }
+}
+
 private suspend fun resolveNavidromeSource(
     database: LynMusicDatabase,
     secureCredentialStore: SecureCredentialStore,
     locator: String,
+    addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
 ): NavidromeResolvedSource? {
-    return resolveSubsonicCompatibleSource(database, secureCredentialStore, locator)
+    return resolveSubsonicCompatibleSource(database, secureCredentialStore, locator, addressSelector)
         ?.takeIf { it.sourceType == ImportSourceType.NAVIDROME }
 }
 
@@ -614,6 +723,7 @@ private suspend fun resolveSubsonicCompatibleSource(
     database: LynMusicDatabase,
     secureCredentialStore: SecureCredentialStore,
     locator: String,
+    addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
 ): NavidromeResolvedSource? {
     val parsed = parseSubsonicCompatibleSongLocator(locator)
         ?: parseSubsonicCompatibleCoverLocator(locator)
@@ -628,11 +738,18 @@ private suspend fun resolveSubsonicCompatibleSource(
     val credential = entity.credentialKey?.let { secureCredentialStore.get(it) }.orEmpty()
     if (authMode == SubsonicAuthMode.PASSWORD && (username.isBlank() || credential.isBlank())) return null
     if (authMode == SubsonicAuthMode.API_KEY && credential.isBlank()) return null
+    val serverLabel = if (sourceType == ImportSourceType.NAVIDROME) "Navidrome" else "Subsonic"
+    val (lanBaseUrl, wanBaseUrl) = normalizeRemoteSourceBaseUrls(
+        sourceType = sourceType,
+        lanBaseUrl = entity.rootReference,
+        wanBaseUrl = entity.wanRootReference,
+        normalizeBaseUrl = { normalizeSubsonicBaseUrl(rawUrl = it, serverLabel = serverLabel) },
+    )
     return NavidromeResolvedSource(
-        baseUrl = normalizeSubsonicBaseUrl(
-            rawUrl = entity.rootReference,
-            serverLabel = if (sourceType == ImportSourceType.NAVIDROME) "Navidrome" else "Subsonic",
-        ),
+        baseUrl = lanBaseUrl,
+        wanBaseUrl = wanBaseUrl,
+        sourceId = entity.id,
+        addressSelector = addressSelector,
         username = username,
         password = credential,
         authMode = authMode,
@@ -743,6 +860,48 @@ internal suspend fun requestNavidromeJson(
     logger: DiagnosticLogger = NoopDiagnosticLogger,
     logContext: String? = null,
 ): JsonObject {
+    val selector = source.addressSelector
+    val sourceId = source.sourceId
+    if (selector != null && sourceId != null) {
+        return selector.withAddressFallback(
+            sourceId = sourceId,
+            sourceType = source.sourceType,
+            lanBaseUrl = source.baseUrl,
+            wanBaseUrl = source.wanBaseUrl,
+            normalizeBaseUrl = ::normalizeSubsonicBaseUrl,
+        ) { candidate ->
+            requestNavidromeJsonWithoutAddressFallback(
+                httpClient = httpClient,
+                source = source.copy(
+                    baseUrl = candidate.value,
+                    wanBaseUrl = null,
+                    addressSelector = null,
+                ),
+                endpoint = endpoint,
+                parameters = parameters,
+                logger = logger,
+                logContext = logContext,
+            )
+        }
+    }
+    return requestNavidromeJsonWithoutAddressFallback(
+        httpClient = httpClient,
+        source = source,
+        endpoint = endpoint,
+        parameters = parameters,
+        logger = logger,
+        logContext = logContext,
+    )
+}
+
+private suspend fun requestNavidromeJsonWithoutAddressFallback(
+    httpClient: LyricsHttpClient,
+    source: NavidromeResolvedSource,
+    endpoint: String,
+    parameters: Map<String, String>,
+    logger: DiagnosticLogger,
+    logContext: String?,
+): JsonObject {
     val request = LyricsRequest(
         method = RequestMethod.GET,
         url = buildSubsonicRestUrl(
@@ -805,6 +964,36 @@ internal suspend fun requestNavidromeJson(
         error(message)
     }
     return payload
+}
+
+private fun NavidromeResolvedSource.preferredBaseUrl(): String {
+    val selector = addressSelector
+    val sourceId = sourceId
+    if (selector != null && sourceId != null) {
+        return selector.orderedBaseUrls(
+            sourceId = sourceId,
+            sourceType = sourceType,
+            lanBaseUrl = baseUrl,
+            wanBaseUrl = wanBaseUrl,
+            normalizeBaseUrl = ::normalizeSubsonicBaseUrl,
+        ).first().value
+    }
+    return normalizeSubsonicBaseUrl(baseUrl)
+}
+
+private fun NavidromeResolvedSource.addressCandidates(): List<RemoteSourceBaseUrl> {
+    val selector = addressSelector
+    val sourceId = sourceId
+    if (selector != null && sourceId != null) {
+        return selector.orderedBaseUrls(
+            sourceId = sourceId,
+            sourceType = sourceType,
+            lanBaseUrl = baseUrl,
+            wanBaseUrl = wanBaseUrl,
+            normalizeBaseUrl = ::normalizeSubsonicBaseUrl,
+        )
+    }
+    return listOf(RemoteSourceBaseUrl(RemoteSourceAddressKind.LAN, normalizeSubsonicBaseUrl(baseUrl)))
 }
 
 private fun formatNavidromeLyricsContext(

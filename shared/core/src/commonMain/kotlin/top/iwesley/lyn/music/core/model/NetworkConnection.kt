@@ -1,20 +1,35 @@
 package top.iwesley.lyn.music.core.model
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
 enum class NetworkConnectionType {
     WIFI,
     MOBILE,
 }
 
+data class NetworkConnectionState(
+    val type: NetworkConnectionType,
+    val version: Long = 0L,
+)
+
 interface NetworkConnectionTypeProvider {
-    fun currentNetworkConnectionType(): NetworkConnectionType
+    val networkConnectionState: StateFlow<NetworkConnectionState>
+
+    fun currentNetworkConnectionType(): NetworkConnectionType = networkConnectionState.value.type
+
+    fun currentNetworkVersion(): Long = networkConnectionState.value.version
 }
 
 object MobileNetworkConnectionTypeProvider : NetworkConnectionTypeProvider {
-    override fun currentNetworkConnectionType(): NetworkConnectionType = NetworkConnectionType.MOBILE
+    private val state = MutableStateFlow(NetworkConnectionState(NetworkConnectionType.MOBILE))
+    override val networkConnectionState: StateFlow<NetworkConnectionState> = state.asStateFlow()
 }
 
 object WifiNetworkConnectionTypeProvider : NetworkConnectionTypeProvider {
-    override fun currentNetworkConnectionType(): NetworkConnectionType = NetworkConnectionType.WIFI
+    private val state = MutableStateFlow(NetworkConnectionState(NetworkConnectionType.WIFI))
+    override val networkConnectionState: StateFlow<NetworkConnectionState> = state.asStateFlow()
 }
 
 fun resolveNavidromeAudioQualityForCurrentNetwork(

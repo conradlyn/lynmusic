@@ -85,7 +85,9 @@ import top.iwesley.lyn.music.core.model.AppThemeTokens
 import top.iwesley.lyn.music.core.model.defaultCustomThemeTokens
 import top.iwesley.lyn.music.core.model.defaultThemeTextPalettePreferences
 import top.iwesley.lyn.music.core.model.inferArtworkFileExtension
+import top.iwesley.lyn.music.core.model.isCompleteArtworkPayload
 import top.iwesley.lyn.music.core.model.normalizePlaybackVolume
+import top.iwesley.lyn.music.core.model.RemotePlaybackUrlCandidate
 import top.iwesley.lyn.music.core.model.stableArtworkBytesHash
 import top.iwesley.lyn.music.core.model.withThemePalette
 import top.iwesley.lyn.music.core.model.SambaSourceDraft
@@ -95,6 +97,7 @@ import top.iwesley.lyn.music.core.model.SubsonicSourceDraft
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.VlcPathPickerPlatformService
 import top.iwesley.lyn.music.core.model.WebDavSourceDraft
+import top.iwesley.lyn.music.core.model.WifiNetworkConnectionTypeProvider
 import top.iwesley.lyn.music.core.model.buildSambaLocator
 import top.iwesley.lyn.music.core.model.debug
 import top.iwesley.lyn.music.core.model.error
@@ -120,7 +123,13 @@ import top.iwesley.lyn.music.data.repository.DailyRecommendationDateChangeNotifi
 import top.iwesley.lyn.music.data.repository.DailyRecommendationDateKeyProvider
 import top.iwesley.lyn.music.data.repository.PlayerRuntimeServices
 import top.iwesley.lyn.music.domain.resolveNavidromeStreamUrl
+import top.iwesley.lyn.music.domain.resolveNavidromeStreamUrlCandidates
 import top.iwesley.lyn.music.domain.resolveEmbyStreamUrl
+import top.iwesley.lyn.music.domain.resolveEmbyStreamUrlCandidates
+import top.iwesley.lyn.music.domain.RemoteSourceAddressSelector
+import top.iwesley.lyn.music.domain.RemoteSourceResolvedUrl
+import top.iwesley.lyn.music.domain.isRemoteSourceAddressFallbackAllowed
+import top.iwesley.lyn.music.domain.readRemotePlaybackUrlCandidateWithFallback
 import top.iwesley.lyn.music.domain.scanEmbyLibrary
 import top.iwesley.lyn.music.domain.scanNavidromeLibrary
 import top.iwesley.lyn.music.domain.scanSubsonicLibrary
@@ -168,12 +177,14 @@ fun createJvmAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
     val secureStore = createJvmSecureCredentialStore(logger).withSecureInMemoryCache()
     val appPreferencesStore = JvmAppPreferencesStore()
     val lyricsShareFontLibraryPlatformService = JvmLyricsShareFontLibraryPlatformService()
+    val remoteSourceAddressSelector = RemoteSourceAddressSelector(WifiNetworkConnectionTypeProvider)
     val playbackGateway = JvmPlaybackGateway(
         database = database,
         secureCredentialStore = secureStore,
         playbackPreferencesStore = appPreferencesStore,
         desktopVlcPreferencesStore = appPreferencesStore,
         logger = logger,
+        addressSelector = remoteSourceAddressSelector,
     )
     val navidromeHttpClient = JvmLyricsHttpClient()
     val platform = PlatformDescriptor(
@@ -200,6 +211,8 @@ fun createJvmAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
             desktopLyricsPreferencesStore = appPreferencesStore,
             autoPlayOnStartupPreferencesStore = appPreferencesStore,
             desktopVlcPreferencesStore = appPreferencesStore,
+            networkConnectionTypeProvider = WifiNetworkConnectionTypeProvider,
+            remoteSourceAddressSelector = remoteSourceAddressSelector,
             librarySourceFilterPreferencesStore = appPreferencesStore,
             lyricsShareFontLibraryPlatformService = lyricsShareFontLibraryPlatformService,
             lyricsShareFontPreferencesStore = appPreferencesStore,
@@ -210,6 +223,7 @@ fun createJvmAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
                 database = database,
                 secureCredentialStore = secureStore,
                 logger = logger,
+                addressSelector = remoteSourceAddressSelector,
             ),
             deviceInfoGateway = createJvmDeviceInfoGateway(),
             audioTagGateway = JvmAudioTagGateway(
@@ -703,18 +717,22 @@ private class JvmAudioTagEditorPlatformService : AudioTagEditorPlatformService {
             if (rawTarget.isBlank()) {
                 null
             } else {
-                val target = if (
+                val remoteCoverCandidates = if (
                     parseSubsonicCompatibleCoverLocator(rawTarget) != null ||
                     parseEmbyCoverLocator(rawTarget) != null
                 ) {
-                    NavidromeLocatorRuntime.resolveCoverArtUrl(rawTarget).orEmpty()
+                    NavidromeLocatorRuntime.resolveCoverArtUrlCandidates(rawTarget).orEmpty()
                 } else {
-                    rawTarget
+                    emptyList()
                 }
+                val target = remoteCoverCandidates.firstOrNull()?.value ?: rawTarget
                 when {
                     target.isBlank() -> null
                     target.startsWith("http://", ignoreCase = true) || target.startsWith("https://", ignoreCase = true) ->
-                        URL(target).openStream().use { it.readBytes() }
+                        loadRemoteArtworkBytes(
+                            remoteCoverCandidates.takeIf { it.isNotEmpty() }
+                                ?: listOf(RemotePlaybackUrlCandidate(value = target)),
+                        )
 
                     target.startsWith("file://", ignoreCase = true) ->
                         Files.readAllBytes(Path.of(URI(target)))
@@ -723,6 +741,18 @@ private class JvmAudioTagEditorPlatformService : AudioTagEditorPlatformService {
                 }
             }
         }
+    }
+
+    private suspend fun loadRemoteArtworkBytes(
+        targets: List<RemotePlaybackUrlCandidate>,
+    ): ByteArray? {
+        val resolved = readRemotePlaybackUrlCandidateWithFallback(
+            candidates = targets,
+            read = { target -> URL(target.value).openStream().use { it.readBytes() } },
+            isValidPayload = ::isCompleteArtworkPayload,
+        ) ?: return null
+        NavidromeLocatorRuntime.markResolvedUrlSuccess(resolved.first)
+        return resolved.second
     }
 }
 
@@ -1277,12 +1307,24 @@ private fun readJvmSambaRemoteMetadata(
     )
 }
 
+private data class JvmRemotePlaybackFallback(
+    val candidates: List<RemoteSourceResolvedUrl>,
+    val selectedIndex: Int,
+    val track: Track,
+    val sourceReference: String,
+    val playWhenReady: Boolean,
+    val loadToken: PlaybackLoadToken,
+) {
+    fun currentCandidate(): RemoteSourceResolvedUrl? = candidates.getOrNull(selectedIndex)
+}
+
 internal class JvmPlaybackGateway(
     private val database: LynMusicDatabase,
     private val secureCredentialStore: SecureCredentialStore,
     private val playbackPreferencesStore: PlaybackPreferencesStore,
     private val desktopVlcPreferencesStore: DesktopVlcPreferencesStore,
     private val logger: DiagnosticLogger,
+    private val addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(WifiNetworkConnectionTypeProvider),
     private val runtimeInitializer: suspend () -> JvmVlcRuntimeInitializationResult = {
         createJvmVlcRuntimeInitializationResult(
             desktopVlcPreferencesStore = desktopVlcPreferencesStore,
@@ -1310,6 +1352,8 @@ internal class JvmPlaybackGateway(
     private var currentSourceReference: String? = null
     @Volatile
     private var currentTrackForMetadata: Track? = null
+    @Volatile
+    private var currentRemotePlaybackFallback: JvmRemotePlaybackFallback? = null
     private val nativeLogListener = object : LogEventListener {
         override fun log(
             level: LogLevel,
@@ -1406,6 +1450,11 @@ internal class JvmPlaybackGateway(
             }
 
             override fun playing(mediaPlayer: MediaPlayer?) {
+                currentRemotePlaybackFallback?.currentCandidate()?.let { candidate ->
+                    candidate.sourceId.takeIf { it.isNotBlank() }?.let { sourceId ->
+                        addressSelector.markSuccess(sourceId, candidate.kind)
+                    }
+                }
                 mutableState.update {
                     it.copy(
                         isPlaying = true,
@@ -1472,8 +1521,12 @@ internal class JvmPlaybackGateway(
             }
 
             override fun error(mediaPlayer: MediaPlayer?) {
+                val recentLogs = recentVlcLogSummary()
                 logger.error(VLC_LOG_TAG) {
-                    "playback-error target=${currentPlaybackTarget.orEmpty()} source=${currentSourceReference.orEmpty()} recentLogs=${recentVlcLogSummary()}"
+                    "playback-error target=${currentPlaybackTarget.orEmpty()} source=${currentSourceReference.orEmpty()} recentLogs=$recentLogs"
+                }
+                if (tryScheduleRemoteAddressFallback(recentLogs)) {
+                    return
                 }
                 mutableState.update {
                     it.copy(
@@ -1482,6 +1535,122 @@ internal class JvmPlaybackGateway(
                         errorRevision = it.errorRevision + 1L,
                     )
                 }
+            }
+        }
+    }
+
+    private fun tryScheduleRemoteAddressFallback(errorDetail: String): Boolean {
+        val fallback = currentRemotePlaybackFallback ?: return false
+        if (!fallback.loadToken.isCurrent()) return false
+        if (!isJvmRemotePlaybackFallbackAllowed(errorDetail)) return false
+        val nextIndex = fallback.selectedIndex + 1
+        val nextCandidate = fallback.candidates.getOrNull(nextIndex) ?: return false
+        val runtime = synchronized(runtimeLock) {
+            (runtimeState as? JvmVlcRuntimeState.Ready)?.runtime
+        } ?: return false
+        val retryPositionMs = mutableState.value.positionMs.coerceAtLeast(0L)
+        val retryPlayWhenReady = mutableState.value.isPlaying || fallback.playWhenReady
+        val nextFallback = fallback.copy(
+            selectedIndex = nextIndex,
+            playWhenReady = retryPlayWhenReady,
+        )
+        currentRemotePlaybackFallback = nextFallback
+        logger.warn(VLC_LOG_TAG) {
+            "remote-address-fallback retry index=$nextIndex url=${nextCandidate.value} recentLogs=$errorDetail"
+        }
+        mutableState.update { it.copy(errorMessage = null) }
+        scope.launch {
+            applyRemoteAddressFallback(
+                runtime = runtime,
+                fallback = nextFallback,
+                candidate = nextCandidate,
+                retryPositionMs = retryPositionMs,
+                retryPlayWhenReady = retryPlayWhenReady,
+            )
+        }
+        return true
+    }
+
+    private suspend fun applyRemoteAddressFallback(
+        runtime: JvmVlcPlaybackRuntime,
+        fallback: JvmRemotePlaybackFallback,
+        candidate: RemoteSourceResolvedUrl,
+        retryPositionMs: Long,
+        retryPlayWhenReady: Boolean,
+    ) {
+        var pendingSeek: PendingInitialSeek? = null
+        var skipped = false
+        var started = false
+        try {
+            nativePlaybackMutex.withLock {
+                if (
+                    !fallback.loadToken.isCurrent() ||
+                    !isCurrentRuntime(runtime) ||
+                    currentRemotePlaybackFallback != fallback
+                ) {
+                    skipped = true
+                    return@withLock
+                }
+                runCatching { runtime.stop() }
+                clearRecentVlcLogs()
+                currentCallbackMedia = null
+                currentPlaybackTarget = candidate.value
+                currentSourceReference = fallback.sourceReference
+                currentTrackForMetadata = fallback.track
+                mutableState.update {
+                    it.copy(
+                        isPlaying = retryPlayWhenReady,
+                        canSeek = false,
+                        errorMessage = null,
+                    )
+                }
+                pendingSeek = if (retryPositionMs > 0L) {
+                    PendingInitialSeek(
+                        runtime = runtime,
+                        trackId = fallback.track.id,
+                        sourceReference = fallback.sourceReference,
+                        positionMs = retryPositionMs,
+                        loadToken = fallback.loadToken,
+                    )
+                } else {
+                    null
+                }
+                pendingSeek?.let(::replacePendingInitialSeek) ?: clearPendingInitialSeek()
+                val playbackMedia = JvmVlcPlaybackMedia.Source(candidate.value)
+                started = if (retryPlayWhenReady) {
+                    runtime.start(playbackMedia)
+                } else {
+                    runtime.startPaused(playbackMedia)
+                }
+            }
+            if (skipped) return
+            if (!started) {
+                pendingSeek?.let(::clearPendingInitialSeek)
+                logger.error(VLC_LOG_TAG) {
+                    "remote-address-fallback-start-failed target=${candidate.value} source=${fallback.sourceReference} recentLogs=${recentVlcLogSummary()}"
+                }
+                mutableState.update {
+                    it.copy(
+                        isPlaying = false,
+                        canSeek = false,
+                        errorMessage = "桌面播放器无法播放当前媒体。",
+                        errorRevision = it.errorRevision + 1L,
+                    )
+                }
+            }
+        } catch (throwable: Throwable) {
+            if (throwable is CancellationException) throw throwable
+            pendingSeek?.let(::clearPendingInitialSeek)
+            logger.error(VLC_LOG_TAG, throwable) {
+                "remote-address-fallback-failed target=${candidate.value} source=${fallback.sourceReference}"
+            }
+            mutableState.update {
+                it.copy(
+                    isPlaying = false,
+                    canSeek = false,
+                    errorMessage = buildJvmPlaybackLoadFailureMessage(throwable),
+                    errorRevision = it.errorRevision + 1L,
+                )
             }
         }
     }
@@ -1613,6 +1782,7 @@ internal class JvmPlaybackGateway(
                 currentPlaybackTarget = null
                 currentSourceReference = track.mediaLocator
                 currentTrackForMetadata = track
+                currentRemotePlaybackFallback = null
             }
 
             JvmVlcLoadDecision.Released -> Unit
@@ -1661,10 +1831,17 @@ internal class JvmPlaybackGateway(
                 } else {
                     null
                 }
+            val remotePlaybackCandidates = if (offlineTarget == null && webDavTarget == null && sambaTarget == null) {
+                resolveLocatorCandidates(track.mediaLocator)
+            } else {
+                null
+            }?.takeIf { it.isNotEmpty() }
+            val selectedRemotePlaybackCandidate = remotePlaybackCandidates?.firstOrNull()
             val actualPlaybackSource = when {
                 offlineTarget != null -> offlineTarget
                 sambaTarget != null -> sambaTarget.sourceReference
                 webDavTarget != null -> webDavTarget.requestUrl
+                selectedRemotePlaybackCandidate != null -> selectedRemotePlaybackCandidate.value
                 else -> resolveLocator(track.mediaLocator)
             }
             val sourceReference = when {
@@ -1683,6 +1860,7 @@ internal class JvmPlaybackGateway(
                 offlineTarget != null -> offlineTarget
                 webDavTarget != null -> "webdav-callback://${track.id}"
                 sambaTarget != null -> buildJvmSambaPlaybackTarget(track.id)
+                selectedRemotePlaybackCandidate != null -> selectedRemotePlaybackCandidate.value
                 else -> sourceReference
             }
             val playbackMedia = when {
@@ -1707,6 +1885,7 @@ internal class JvmPlaybackGateway(
                     return@withLock true
                 }
                 runCatching { runtime.stop() }
+                clearRecentVlcLogs()
                 if (!loadToken.isCurrent()) {
                     logger.debug(VLC_LOG_TAG) {
                         "load-discarded-stale request=${loadToken.requestId} track=${track.id} after-stop"
@@ -1724,9 +1903,20 @@ internal class JvmPlaybackGateway(
                 currentCallbackMedia = null
                 currentPlaybackTarget = null
                 currentSourceReference = null
+                currentRemotePlaybackFallback = null
                 currentTrackForMetadata = track
                 currentPlaybackTarget = playbackTarget
                 currentSourceReference = sourceReference
+                currentRemotePlaybackFallback = remotePlaybackCandidates?.let { candidates ->
+                    JvmRemotePlaybackFallback(
+                        candidates = candidates,
+                        selectedIndex = 0,
+                        track = track,
+                        sourceReference = sourceReference,
+                        playWhenReady = playWhenReady,
+                        loadToken = loadToken,
+                    )
+                }
                 currentCallbackMedia = webDavTarget?.media ?: sambaTarget?.media
                 mutableState.update {
                     it.copy(
@@ -1762,8 +1952,12 @@ internal class JvmPlaybackGateway(
             if (loadSkipped) return
             if (!started) {
                 initialSeekForLoad?.let(::clearPendingInitialSeek)
+                val recentLogs = recentVlcLogSummary()
                 logger.error(VLC_LOG_TAG) {
-                    "start-failed target=$playbackTarget source=$sourceReference playWhenReady=$playWhenReady recentLogs=${recentVlcLogSummary()}"
+                    "start-failed target=$playbackTarget source=$sourceReference playWhenReady=$playWhenReady recentLogs=$recentLogs"
+                }
+                if (tryScheduleRemoteAddressFallback(recentLogs)) {
+                    return
                 }
             }
             check(started) { "Unable to load media $playbackTarget" }
@@ -1883,6 +2077,7 @@ internal class JvmPlaybackGateway(
         currentCallbackMedia = null
         currentPlaybackTarget = null
         currentSourceReference = null
+        currentRemotePlaybackFallback = null
         clearPendingInitialSeek()
         if (runtime != null) {
             nativePlaybackMutex.withLock {
@@ -2038,6 +2233,7 @@ internal class JvmPlaybackGateway(
         currentPlaybackTarget = null
         currentSourceReference = pending.track.mediaLocator
         currentTrackForMetadata = pending.track
+        currentRemotePlaybackFallback = null
         mutableState.update { state ->
             val message = if (pending.playWhenReady) DESKTOP_VLC_INITIALIZING_MESSAGE else null
             state.copy(
@@ -2068,9 +2264,35 @@ internal class JvmPlaybackGateway(
         }
     }
 
+    private suspend fun resolveLocatorCandidates(locator: String): List<RemoteSourceResolvedUrl>? {
+        resolveNavidromeStreamUrlCandidates(
+            database = database,
+            secureCredentialStore = secureCredentialStore,
+            locator = locator,
+            addressSelector = addressSelector,
+        )?.let { return it }
+        resolveEmbyStreamUrlCandidates(
+            database = database,
+            secureCredentialStore = secureCredentialStore,
+            locator = locator,
+            addressSelector = addressSelector,
+        )?.let { return it }
+        return null
+    }
+
     private suspend fun resolveLocator(locator: String): String {
-        resolveNavidromeStreamUrl(database, secureCredentialStore, locator)?.let { return it }
-        resolveEmbyStreamUrl(database, secureCredentialStore, locator)?.let { return it }
+        resolveNavidromeStreamUrl(
+            database = database,
+            secureCredentialStore = secureCredentialStore,
+            locator = locator,
+            addressSelector = addressSelector,
+        )?.let { return it }
+        resolveEmbyStreamUrl(
+            database = database,
+            secureCredentialStore = secureCredentialStore,
+            locator = locator,
+            addressSelector = addressSelector,
+        )?.let { return it }
         val samba = parseSambaLocator(locator) ?: return locator
         val source = database.importSourceDao().getById(samba.first)?.takeIf { it.enabled }
             ?: error("Samba 来源不可用。")
@@ -2151,6 +2373,12 @@ internal class JvmPlaybackGateway(
                 recentVlcLogs.removeFirst()
             }
             recentVlcLogs.addLast(entry)
+        }
+    }
+
+    private fun clearRecentVlcLogs() {
+        synchronized(recentVlcLogs) {
+            recentVlcLogs.clear()
         }
     }
 
@@ -2597,3 +2825,7 @@ private val INTERNAL_VLC_TITLE_PREFIXES = listOf(
     "imem://",
     "fd://",
 )
+
+internal fun isJvmRemotePlaybackFallbackAllowed(errorDetail: String): Boolean {
+    return isRemoteSourceAddressFallbackAllowed(IllegalStateException(errorDetail))
+}

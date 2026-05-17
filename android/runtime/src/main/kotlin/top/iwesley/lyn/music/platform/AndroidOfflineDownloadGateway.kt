@@ -15,6 +15,7 @@ import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -39,20 +40,25 @@ import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleSongLocator
 import top.iwesley.lyn.music.core.model.parseSambaLocator
 import top.iwesley.lyn.music.core.model.parseWebDavLocator
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
-import top.iwesley.lyn.music.domain.resolveEmbyDownloadUrl
-import top.iwesley.lyn.music.domain.resolveNavidromeDownloadUrl
-import top.iwesley.lyn.music.domain.resolveNavidromeStreamUrl
+import top.iwesley.lyn.music.domain.RemoteSourceResolvedUrl
+import top.iwesley.lyn.music.domain.RemoteSourceAddressSelector
+import top.iwesley.lyn.music.domain.isRemoteSourceAddressFallbackAllowed
+import top.iwesley.lyn.music.domain.resolveEmbyDownloadUrlCandidates
+import top.iwesley.lyn.music.domain.resolveNavidromeDownloadUrlCandidates
+import top.iwesley.lyn.music.domain.resolveNavidromeStreamUrlCandidates
 
 fun createAndroidOfflineDownloadGateway(
     context: Context,
     database: LynMusicDatabase,
     secureCredentialStore: SecureCredentialStore,
     logger: DiagnosticLogger,
+    addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
 ): OfflineDownloadGateway = AndroidOfflineDownloadGateway(
     context = context.applicationContext,
     database = database,
     secureCredentialStore = secureCredentialStore,
     logger = logger,
+    addressSelector = addressSelector,
 )
 
 private class AndroidOfflineDownloadGateway(
@@ -60,6 +66,7 @@ private class AndroidOfflineDownloadGateway(
     private val database: LynMusicDatabase,
     private val secureCredentialStore: SecureCredentialStore,
     private val logger: DiagnosticLogger,
+    private val addressSelector: RemoteSourceAddressSelector,
 ) : OfflineDownloadGateway {
     private val rootDirectory = File(context.filesDir, "offline")
     private val defaultClient = OkHttpClient()
@@ -82,13 +89,13 @@ private class AndroidOfflineDownloadGateway(
         try {
             val totalBytes = when {
                 parseSubsonicCompatibleSongLocator(track.mediaLocator) != null -> {
-                    val requestUrl = if (quality == NavidromeAudioQuality.Original) {
-                        resolveNavidromeDownloadUrl(database, secureCredentialStore, track.mediaLocator)
+                    val requestUrls = if (quality == NavidromeAudioQuality.Original) {
+                        resolveNavidromeDownloadUrlCandidates(database, secureCredentialStore, track.mediaLocator, addressSelector)
                     } else {
-                        resolveNavidromeStreamUrl(database, secureCredentialStore, track.mediaLocator, quality)
+                        resolveNavidromeStreamUrlCandidates(database, secureCredentialStore, track.mediaLocator, quality, addressSelector)
                     } ?: error("Subsonic-compatible 来源不可用。")
-                    downloadHttpFile(
-                        requestUrl = requestUrl,
+                    downloadHttpFileWithAddressFallback(
+                        requestUrls = requestUrls,
                         authorizationHeader = null,
                         allowInsecureTls = false,
                         target = partFile,
@@ -97,10 +104,10 @@ private class AndroidOfflineDownloadGateway(
                 }
 
                 parseEmbySongLocator(track.mediaLocator) != null -> {
-                    val requestUrl = resolveEmbyDownloadUrl(database, secureCredentialStore, track.mediaLocator)
+                    val requestUrls = resolveEmbyDownloadUrlCandidates(database, secureCredentialStore, track.mediaLocator, addressSelector)
                         ?: error("Emby 来源不可用。")
-                    downloadHttpFile(
-                        requestUrl = requestUrl,
+                    downloadHttpFileWithAddressFallback(
+                        requestUrls = requestUrls,
                         authorizationHeader = null,
                         allowInsecureTls = false,
                         target = partFile,
@@ -165,6 +172,41 @@ private class AndroidOfflineDownloadGateway(
                 .filter { it.isFile && it.name.endsWith(".part") }
                 .forEach { it.delete() }
         }
+    }
+
+    private suspend fun downloadHttpFileWithAddressFallback(
+        requestUrls: List<RemoteSourceResolvedUrl>,
+        authorizationHeader: String?,
+        allowInsecureTls: Boolean,
+        target: File,
+        onProgress: suspend (OfflineDownloadProgress) -> Unit,
+    ): Long? {
+        var lastFailure: Throwable? = null
+        requestUrls.forEachIndexed { index, requestUrl ->
+            try {
+                target.delete()
+                val totalBytes = downloadHttpFile(
+                    requestUrl = requestUrl.value,
+                    authorizationHeader = authorizationHeader,
+                    allowInsecureTls = allowInsecureTls,
+                    target = target,
+                    onProgress = onProgress,
+                )
+                if (requestUrl.sourceId.isNotBlank()) {
+                    addressSelector.markSuccess(requestUrl.sourceId, requestUrl.kind)
+                }
+                return totalBytes
+            } catch (throwable: Throwable) {
+                if (throwable is CancellationException) throw throwable
+                target.delete()
+                lastFailure = throwable
+                val hasFallback = index < requestUrls.lastIndex
+                if (!hasFallback || !isRemoteSourceAddressFallbackAllowed(throwable)) {
+                    throw throwable
+                }
+            }
+        }
+        throw lastFailure ?: IllegalStateException("远程来源缺少可用下载地址。")
     }
 
     private suspend fun downloadWebDav(

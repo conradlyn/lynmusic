@@ -142,6 +142,7 @@ data class ImportSource(
     val enabled: Boolean = true,
     val lastScannedAt: Long? = null,
     val createdAt: Long = 0L,
+    val wanRootReference: String? = null,
 )
 
 data class ImportIndexState(
@@ -187,6 +188,7 @@ data class WebDavSourceDraft(
 data class NavidromeSourceDraft(
     val label: String,
     val baseUrl: String,
+    val wanBaseUrl: String = "",
     val username: String,
     val password: String,
 )
@@ -194,6 +196,7 @@ data class NavidromeSourceDraft(
 data class SubsonicSourceDraft(
     val label: String,
     val baseUrl: String,
+    val wanBaseUrl: String = "",
     val username: String = "",
     val credential: String,
     val authMode: SubsonicAuthMode = SubsonicAuthMode.PASSWORD,
@@ -202,6 +205,7 @@ data class SubsonicSourceDraft(
 data class EmbySourceDraft(
     val label: String,
     val baseUrl: String,
+    val wanBaseUrl: String = "",
     val username: String,
     val password: String,
 )
@@ -569,9 +573,29 @@ object UnsupportedVlcPathPickerPlatformService : VlcPathPickerPlatformService {
     override suspend fun pickVlcDirectory(): Result<String?> = Result.failure(error)
 }
 
+data class RemotePlaybackUrlCandidate(
+    val sourceId: String = "",
+    val addressKind: String = "",
+    val value: String,
+)
+
 interface NavidromeLocatorResolver {
     suspend fun resolveStreamUrl(locator: String, audioQuality: NavidromeAudioQuality): String?
+    suspend fun resolveStreamUrlCandidates(
+        locator: String,
+        audioQuality: NavidromeAudioQuality,
+    ): List<RemotePlaybackUrlCandidate>? {
+        return resolveStreamUrl(locator, audioQuality)
+            ?.let { listOf(RemotePlaybackUrlCandidate(value = it)) }
+    }
+
     suspend fun resolveCoverArtUrl(locator: String): String?
+    suspend fun resolveCoverArtUrlCandidates(locator: String): List<RemotePlaybackUrlCandidate>? {
+        return resolveCoverArtUrl(locator)
+            ?.let { listOf(RemotePlaybackUrlCandidate(value = it)) }
+    }
+
+    fun markResolvedUrlSuccess(candidate: RemotePlaybackUrlCandidate) = Unit
 }
 
 object NavidromeLocatorRuntime {
@@ -587,5 +611,17 @@ object NavidromeLocatorRuntime {
         audioQuality: NavidromeAudioQuality = NavidromeAudioQuality.Original,
     ): String? = resolver?.resolveStreamUrl(locator, audioQuality)
 
+    suspend fun resolveStreamUrlCandidates(
+        locator: String,
+        audioQuality: NavidromeAudioQuality = NavidromeAudioQuality.Original,
+    ): List<RemotePlaybackUrlCandidate>? = resolver?.resolveStreamUrlCandidates(locator, audioQuality)
+
     suspend fun resolveCoverArtUrl(locator: String): String? = resolver?.resolveCoverArtUrl(locator)
+
+    suspend fun resolveCoverArtUrlCandidates(locator: String): List<RemotePlaybackUrlCandidate>? =
+        resolver?.resolveCoverArtUrlCandidates(locator)
+
+    fun markResolvedUrlSuccess(candidate: RemotePlaybackUrlCandidate) {
+        resolver?.markResolvedUrlSuccess(candidate)
+    }
 }

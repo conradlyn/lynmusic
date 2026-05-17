@@ -12,21 +12,35 @@ import top.iwesley.lyn.music.core.model.NetworkConnectionTypeProvider
 import top.iwesley.lyn.music.core.model.PlaybackGateway
 import top.iwesley.lyn.music.core.model.PlaybackGatewayState
 import top.iwesley.lyn.music.core.model.PlaybackLoadToken
+import top.iwesley.lyn.music.core.model.RemotePlaybackUrlCandidate
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.UnsupportedNavidromeAudioQualityPreferencesStore
 import top.iwesley.lyn.music.core.model.WifiNetworkConnectionTypeProvider
 import top.iwesley.lyn.music.core.model.parseEmbySongLocator
 import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleSongLocator
 import top.iwesley.lyn.music.core.model.resolveNavidromeAudioQualityForCurrentNetwork
+import top.iwesley.lyn.music.domain.RemoteSourceAddressKind
+import top.iwesley.lyn.music.domain.RemoteSourceAddressSelector
+import top.iwesley.lyn.music.domain.isRemoteSourceAddressFallbackAllowed
+
+private data class AppleRemotePlaybackFallback(
+    val candidates: List<RemotePlaybackUrlCandidate>,
+    val selectedIndex: Int,
+    val playWhenReady: Boolean,
+) {
+    fun currentCandidate(): RemotePlaybackUrlCandidate? = candidates.getOrNull(selectedIndex)
+}
 
 internal class ApplePlaybackGateway(
     private val platformLabel: String,
     private val navidromeAudioQualityPreferencesStore: NavidromeAudioQualityPreferencesStore =
         UnsupportedNavidromeAudioQualityPreferencesStore,
     private val networkConnectionTypeProvider: NetworkConnectionTypeProvider = WifiNetworkConnectionTypeProvider,
+    private val addressSelector: RemoteSourceAddressSelector? = null,
 ) : PlaybackGateway {
     private val player = AppleNativePlayer(platformLabel)
     private val mutableState = MutableStateFlow(PlaybackGatewayState(volume = 1f))
+    private var currentRemotePlaybackFallback: AppleRemotePlaybackFallback? = null
 
     override val state: StateFlow<PlaybackGatewayState> = mutableState.asStateFlow()
 
@@ -44,7 +58,10 @@ internal class ApplePlaybackGateway(
                 )
             }
         }
-        player.onFailed = { errorMessage ->
+        player.onFailed = onFailed@ { errorMessage ->
+            if (tryApplyRemoteAddressFallback(errorMessage)) {
+                return@onFailed
+            }
             publishState(errorOverride = errorMessage ?: "$platformLabel 播放失败。")
         }
     }
@@ -67,7 +84,17 @@ internal class ApplePlaybackGateway(
                 networkConnectionTypeProvider = networkConnectionTypeProvider,
             )
         }
+        val remotePlaybackCandidates = when {
+            subsonicCompatible != null -> NavidromeLocatorRuntime.resolveStreamUrlCandidates(
+                locator = track.mediaLocator,
+                audioQuality = requireNotNull(navidromeAudioQuality),
+            )
+
+            embySong != null -> NavidromeLocatorRuntime.resolveStreamUrlCandidates(track.mediaLocator)
+            else -> null
+        }?.takeIf { it.isNotEmpty() }
         val effectiveLocator = when {
+            remotePlaybackCandidates != null -> remotePlaybackCandidates.first().value
             subsonicCompatible != null -> NavidromeLocatorRuntime.resolveStreamUrl(
                 locator = track.mediaLocator,
                 audioQuality = requireNotNull(navidromeAudioQuality),
@@ -95,6 +122,13 @@ internal class ApplePlaybackGateway(
             else -> {
                 if (!loadToken.isCurrent()) {
                     return
+                }
+                currentRemotePlaybackFallback = remotePlaybackCandidates?.let { candidates ->
+                    AppleRemotePlaybackFallback(
+                        candidates = candidates,
+                        selectedIndex = 0,
+                        playWhenReady = playWhenReady,
+                    )
                 }
                 player.load(resolved)
                 if (startPositionMs > 0L) {
@@ -152,18 +186,23 @@ internal class ApplePlaybackGateway(
     }
 
     override suspend fun release() {
+        currentRemotePlaybackFallback = null
         player.release()
         AppleAudioSessionCoordinator.deactivate()
     }
 
     private fun stopAndResetForTrackSwitch() {
         player.stopAndClear()
+        currentRemotePlaybackFallback = null
         mutableState.update {
             it.resetForTrackSwitch(volumeOverride = player.volume())
         }
     }
 
     private fun publishState(errorOverride: String? = null) {
+        if (player.isPlaying()) {
+            markCurrentRemotePlaybackSuccess()
+        }
         mutableState.update {
             it.copy(
                 isPlaying = player.isPlaying(),
@@ -175,4 +214,48 @@ internal class ApplePlaybackGateway(
             )
         }
     }
+
+    private fun tryApplyRemoteAddressFallback(errorMessage: String?): Boolean {
+        val fallback = currentRemotePlaybackFallback ?: return false
+        if (!isAppleRemotePlaybackFallbackAllowed(errorMessage)) return false
+        val nextIndex = fallback.selectedIndex + 1
+        val nextCandidate = fallback.candidates.getOrNull(nextIndex) ?: return false
+        val resolved = AppleMediaLocatorResolver.resolve(nextCandidate.value)
+        if (resolved is AppleResolvedMediaLocator.Unsupported) return false
+        val retryPositionMs = player.positionMs().coerceAtLeast(0L)
+        val retryPlayWhenReady = player.isPlaying() || fallback.playWhenReady
+        currentRemotePlaybackFallback = fallback.copy(
+            selectedIndex = nextIndex,
+            playWhenReady = retryPlayWhenReady,
+        )
+        player.load(resolved)
+        if (retryPositionMs > 0L) {
+            player.seekTo(retryPositionMs)
+        }
+        if (retryPlayWhenReady) {
+            player.play()
+        } else {
+            player.pause()
+        }
+        mutableState.update {
+            it.copy(
+                isPlaying = retryPlayWhenReady,
+                positionMs = retryPositionMs,
+                canSeek = player.canSeek(),
+                errorMessage = null,
+            )
+        }
+        return true
+    }
+
+    private fun markCurrentRemotePlaybackSuccess() {
+        val candidate = currentRemotePlaybackFallback?.currentCandidate() ?: return
+        val kind = runCatching { RemoteSourceAddressKind.valueOf(candidate.addressKind) }.getOrNull() ?: return
+        candidate.sourceId.takeIf { it.isNotBlank() }?.let { sourceId ->
+            addressSelector?.markSuccess(sourceId, kind)
+        }
+    }
+
+    private fun isAppleRemotePlaybackFallbackAllowed(errorMessage: String?): Boolean =
+        isRemoteSourceAddressFallbackAllowed(IllegalStateException(errorMessage.orEmpty()))
 }

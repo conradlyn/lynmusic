@@ -11,9 +11,12 @@ import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import top.iwesley.lyn.music.core.model.AudioTagEditorPlatformService
 import top.iwesley.lyn.music.core.model.NavidromeLocatorRuntime
+import top.iwesley.lyn.music.core.model.RemotePlaybackUrlCandidate
+import top.iwesley.lyn.music.core.model.isCompleteArtworkPayload
 import top.iwesley.lyn.music.core.model.normalizeArtworkLocator
 import top.iwesley.lyn.music.core.model.parseEmbyCoverLocator
 import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleCoverLocator
+import top.iwesley.lyn.music.domain.readRemotePlaybackUrlCandidateWithFallback
 
 internal class AndroidAudioTagEditorPlatformService(
     activity: ComponentActivity,
@@ -53,18 +56,22 @@ internal class AndroidAudioTagEditorPlatformService(
         runCatching {
             val rawTarget = normalizeArtworkLocator(locator)?.trim().orEmpty()
             if (rawTarget.isBlank()) return@runCatching null
-            val target = if (
+            val remoteCoverCandidates = if (
                 parseSubsonicCompatibleCoverLocator(rawTarget) != null ||
                 parseEmbyCoverLocator(rawTarget) != null
             ) {
-                NavidromeLocatorRuntime.resolveCoverArtUrl(rawTarget).orEmpty()
+                NavidromeLocatorRuntime.resolveCoverArtUrlCandidates(rawTarget).orEmpty()
             } else {
-                rawTarget
+                emptyList()
             }
+            val target = remoteCoverCandidates.firstOrNull()?.value ?: rawTarget
             when {
                 target.isBlank() -> null
                 target.startsWith("http://", ignoreCase = true) || target.startsWith("https://", ignoreCase = true) ->
-                    URL(target).openStream().use { input -> input.readBytes() }
+                    loadRemoteArtworkBytes(
+                        remoteCoverCandidates.takeIf { it.isNotEmpty() }
+                            ?: listOf(RemotePlaybackUrlCandidate(value = target)),
+                    )
 
                 target.startsWith("content://", ignoreCase = true) ->
                     readBytes(context, Uri.parse(target))
@@ -79,6 +86,18 @@ internal class AndroidAudioTagEditorPlatformService(
                 }
             }
         }
+    }
+
+    private suspend fun loadRemoteArtworkBytes(
+        targets: List<RemotePlaybackUrlCandidate>,
+    ): ByteArray? {
+        val resolved = readRemotePlaybackUrlCandidateWithFallback(
+            candidates = targets,
+            read = { target -> URL(target.value).openStream().use { input -> input.readBytes() } },
+            isValidPayload = ::isCompleteArtworkPayload,
+        ) ?: return null
+        NavidromeLocatorRuntime.markResolvedUrlSuccess(resolved.first)
+        return resolved.second
     }
 
     private fun readBytes(context: Context, uri: Uri): ByteArray {

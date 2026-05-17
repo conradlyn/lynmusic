@@ -1303,9 +1303,13 @@ internal fun SourceCard(
 
                             top.iwesley.lyn.music.core.model.ImportSourceType.WEBDAV ->
                                 displayWebDavRootUrl(state.source.rootReference)
-                            top.iwesley.lyn.music.core.model.ImportSourceType.NAVIDROME -> state.source.rootReference
-                            top.iwesley.lyn.music.core.model.ImportSourceType.SUBSONIC -> state.source.rootReference
-                            top.iwesley.lyn.music.core.model.ImportSourceType.EMBY -> state.source.rootReference
+                            top.iwesley.lyn.music.core.model.ImportSourceType.NAVIDROME,
+                            top.iwesley.lyn.music.core.model.ImportSourceType.SUBSONIC,
+                            top.iwesley.lyn.music.core.model.ImportSourceType.EMBY,
+                            -> remoteSourceAddressSummary(
+                                lanRootReference = state.source.rootReference,
+                                wanRootReference = state.source.wanRootReference,
+                            )
                         },
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 2,
@@ -1366,6 +1370,20 @@ internal fun SourceCard(
                 )
             }
         }
+    }
+}
+
+private fun remoteSourceAddressSummary(
+    lanRootReference: String,
+    wanRootReference: String?,
+): String {
+    val lan = lanRootReference.takeIf { it.isNotBlank() }
+    val wan = wanRootReference?.takeIf { it.isNotBlank() }
+    return when {
+        lan != null && wan != null -> "局域网/首选: $lan\n广域网: $wan"
+        lan != null -> lan
+        wan != null -> "广域网: $wan"
+        else -> ""
     }
 }
 

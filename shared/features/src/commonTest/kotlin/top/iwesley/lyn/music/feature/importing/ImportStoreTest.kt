@@ -17,6 +17,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import top.iwesley.lyn.music.core.model.EmbySourceDraft
 import top.iwesley.lyn.music.core.model.ImportScanFailure
 import top.iwesley.lyn.music.core.model.ImportScanSummary
 import top.iwesley.lyn.music.core.model.ImportSource
@@ -246,6 +247,91 @@ class ImportStoreTest {
         assertEquals("来源已更新并重新扫描。发现 1 个音频文件，成功导入 1 首，0 个失败。", store.state.value.message)
         assertEquals(testScanSummary("nav-1"), store.state.value.latestScanSummariesBySourceId["nav-1"])
         harness.close()
+    }
+
+    @Test
+    fun `saving edited remote source preserves hidden wan address`() = runTest {
+        val navidromeRepository = FakeImportSourceRepository(
+            sources = listOf(
+                source(
+                    sourceId = "nav-1",
+                    type = ImportSourceType.NAVIDROME,
+                    label = "Navidrome",
+                    rootReference = "https://nav.lan",
+                    wanRootReference = "https://nav.wan",
+                    username = "demo",
+                    credentialKey = "credential-nav-1",
+                ),
+            ),
+        )
+        val navidromeHarness = createStore(navidromeRepository)
+        advanceUntilIdle()
+        navidromeHarness.store.dispatch(ImportIntent.OpenRemoteSourceEditor("nav-1"))
+        advanceUntilIdle()
+        navidromeHarness.store.dispatch(ImportIntent.RemoteSourceRootUrlChanged("https://nav2.lan"))
+        advanceUntilIdle()
+        navidromeHarness.store.dispatch(ImportIntent.SaveRemoteSource)
+        advanceUntilIdle()
+
+        assertEquals("https://nav.wan", navidromeRepository.lastUpdatedNavidromeDraft?.wanBaseUrl)
+        navidromeHarness.close()
+
+        val subsonicRepository = FakeImportSourceRepository(
+            sources = listOf(
+                source(
+                    sourceId = "sub-1",
+                    type = ImportSourceType.SUBSONIC,
+                    label = "Subsonic",
+                    rootReference = "https://sub.lan",
+                    wanRootReference = "https://sub.wan",
+                    username = "demo",
+                    credentialKey = "credential-sub-1",
+                    subsonicAuthMode = SubsonicAuthMode.PASSWORD,
+                ),
+            ),
+        )
+        val subsonicHarness = createStore(subsonicRepository)
+        advanceUntilIdle()
+        subsonicHarness.store.dispatch(ImportIntent.OpenRemoteSourceEditor("sub-1"))
+        advanceUntilIdle()
+        subsonicHarness.store.dispatch(ImportIntent.RemoteSourceRootUrlChanged("https://sub2.lan"))
+        advanceUntilIdle()
+        subsonicHarness.store.dispatch(ImportIntent.SaveRemoteSource)
+        advanceUntilIdle()
+
+        assertEquals("https://sub.wan", subsonicRepository.lastUpdatedSubsonicDraft?.wanBaseUrl)
+        subsonicHarness.close()
+
+        val embyRepository = FakeImportSourceRepository(
+            sources = listOf(
+                source(
+                    sourceId = "emby-1",
+                    type = ImportSourceType.EMBY,
+                    label = "Emby",
+                    rootReference = "https://emby.lan",
+                    wanRootReference = "https://emby.wan",
+                    username = "demo",
+                    credentialKey = "credential-emby-1",
+                ),
+            ),
+        )
+        val embyHarness = createStore(embyRepository)
+        advanceUntilIdle()
+        embyHarness.store.dispatch(ImportIntent.OpenRemoteSourceEditor("emby-1"))
+        advanceUntilIdle()
+        embyHarness.store.dispatch(ImportIntent.RemoteSourceRootUrlChanged("https://emby2.lan"))
+        advanceUntilIdle()
+        embyHarness.store.dispatch(ImportIntent.RemoteSourcePasswordChanged("secret"))
+        advanceUntilIdle()
+        embyHarness.store.dispatch(ImportIntent.SaveRemoteSource)
+        advanceUntilIdle()
+
+        val updatedEmbyDraft = assertNotNull(
+            embyRepository.lastUpdatedEmbyDraft,
+            embyHarness.store.state.value.message,
+        )
+        assertEquals("https://emby.wan", updatedEmbyDraft.wanBaseUrl)
+        embyHarness.close()
     }
 
     @Test
@@ -683,6 +769,7 @@ private fun source(
     type: ImportSourceType,
     label: String,
     rootReference: String,
+    wanRootReference: String? = null,
     server: String? = null,
     port: Int? = null,
     path: String? = null,
@@ -697,6 +784,7 @@ private fun source(
             type = type,
             label = label,
             rootReference = rootReference,
+            wanRootReference = wanRootReference,
             server = server,
             port = port,
             path = path,
@@ -733,6 +821,9 @@ private class FakeImportSourceRepository(
     var lastUpdatedSubsonicSourceId: String? = null
     var lastUpdatedSubsonicDraft: SubsonicSourceDraft? = null
     var lastUpdatedSubsonicKeepExisting: Boolean = false
+    var lastUpdatedEmbySourceId: String? = null
+    var lastUpdatedEmbyDraft: EmbySourceDraft? = null
+    var lastUpdatedEmbyKeepExisting: Boolean = false
     var lastLocalFolderMode: LocalFolderPickerMode? = null
 
     override fun observeSources(): Flow<List<SourceWithStatus>> = mutableSources.asStateFlow()
@@ -847,6 +938,17 @@ private class FakeImportSourceRepository(
         lastUpdatedSubsonicSourceId = sourceId
         lastUpdatedSubsonicDraft = draft
         lastUpdatedSubsonicKeepExisting = keepExistingCredentialWhenBlankCredential
+        return pendingResult?.await()?.map { testScanSummary(sourceId) } ?: Result.success(testScanSummary(sourceId))
+    }
+
+    override suspend fun updateEmbySource(
+        sourceId: String,
+        draft: EmbySourceDraft,
+        keepExistingCredentialWhenBlankPassword: Boolean,
+    ): Result<ImportScanSummary> {
+        lastUpdatedEmbySourceId = sourceId
+        lastUpdatedEmbyDraft = draft
+        lastUpdatedEmbyKeepExisting = keepExistingCredentialWhenBlankPassword
         return pendingResult?.await()?.map { testScanSummary(sourceId) } ?: Result.success(testScanSummary(sourceId))
     }
 

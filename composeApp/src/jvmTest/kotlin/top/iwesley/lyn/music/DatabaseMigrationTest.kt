@@ -18,6 +18,7 @@ import top.iwesley.lyn.music.data.db.MIGRATION_11_12
 import top.iwesley.lyn.music.data.db.MIGRATION_12_13
 import top.iwesley.lyn.music.data.db.MIGRATION_13_14
 import top.iwesley.lyn.music.data.db.MIGRATION_14_15
+import top.iwesley.lyn.music.data.db.MIGRATION_15_16
 
 class DatabaseMigrationTest {
 
@@ -414,6 +415,55 @@ class DatabaseMigrationTest {
         }
     }
 
+    @Test
+    fun `migration 15 to 16 adds import source wan root reference`() {
+        val databasePath = Files.createTempFile("lynmusic-migration", ".db")
+        val driver = BundledSQLiteDriver()
+
+        driver.open(databasePath.absolutePathString()).use { connection ->
+            connection.execSql(
+                """
+                CREATE TABLE import_source (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    rootReference TEXT NOT NULL,
+                    server TEXT,
+                    shareName TEXT,
+                    directoryPath TEXT,
+                    username TEXT,
+                    credentialKey TEXT,
+                    lastScannedAt INTEGER,
+                    createdAt INTEGER NOT NULL,
+                    allowInsecureTls INTEGER NOT NULL DEFAULT 0,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    port INTEGER,
+                    path TEXT,
+                    authMode TEXT NOT NULL DEFAULT 'PASSWORD'
+                )
+                """.trimIndent(),
+            )
+            connection.execSql(
+                """
+                INSERT INTO import_source (
+                    id, type, label, rootReference, server, shareName, directoryPath,
+                    username, credentialKey, lastScannedAt, createdAt, allowInsecureTls,
+                    enabled, port, path, authMode
+                ) VALUES (
+                    'nav-1', 'NAVIDROME', 'Navidrome', 'https://nav.example.com',
+                    NULL, NULL, NULL, 'demo', 'cred-1', NULL, 1, 0, 1, NULL, NULL, 'PASSWORD'
+                )
+                """.trimIndent(),
+            )
+
+            MIGRATION_15_16.migrate(connection)
+
+            assertTrue(connection.hasColumn("import_source", "wanRootReference"))
+            assertEquals("https://nav.example.com", connection.singleText("SELECT rootReference FROM import_source WHERE id = 'nav-1'"))
+            assertNull(connection.singleNullableText("SELECT wanRootReference FROM import_source WHERE id = 'nav-1'"))
+        }
+    }
+
     private fun SQLiteConnection.execSql(sql: String) {
         prepare(sql).use { statement ->
             statement.step()
@@ -442,6 +492,13 @@ class DatabaseMigrationTest {
         prepare(sql).use { statement ->
             check(statement.step()) { "Expected a row for query: $sql" }
             return statement.getText(0)
+        }
+    }
+
+    private fun SQLiteConnection.singleNullableText(sql: String): String? {
+        prepare(sql).use { statement ->
+            check(statement.step()) { "Expected a row for query: $sql" }
+            return if (statement.isNull(0)) null else statement.getText(0)
         }
     }
 

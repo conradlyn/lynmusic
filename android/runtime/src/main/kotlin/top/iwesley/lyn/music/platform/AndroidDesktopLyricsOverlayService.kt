@@ -42,6 +42,7 @@ import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.withSecureInMemoryCache
 import top.iwesley.lyn.music.data.repository.DefaultLyricsRepository
 import top.iwesley.lyn.music.data.repository.LyricsRepository
+import top.iwesley.lyn.music.domain.RemoteSourceAddressSelector
 import top.iwesley.lyn.music.feature.player.findDesktopLyricsHighlightedLine
 import top.iwesley.lyn.music.feature.player.resolveDesktopLyricsOverlayText
 import kotlin.math.abs
@@ -377,6 +378,8 @@ class AndroidDesktopLyricsOverlayService : Service() {
         val logger = AndroidDiagnosticLogger(enabled = true, label = "Android Desktop Lyrics")
         val database = openAndroidRuntimeDatabase(applicationContext)
         val secureStore = AndroidCredentialStore(applicationContext, logger).withSecureInMemoryCache()
+        val networkConnectionTypeProvider = AndroidNetworkConnectionTypeProvider.get(applicationContext)
+        val remoteSourceAddressSelector = RemoteSourceAddressSelector(networkConnectionTypeProvider)
         val httpClient = AndroidLyricsHttpClient()
         val artworkCacheStore = createAndroidArtworkCacheStore(applicationContext)
         return DefaultLyricsRepository(
@@ -397,6 +400,7 @@ class AndroidDesktopLyricsOverlayService : Service() {
             ),
             artworkCacheStore = artworkCacheStore,
             logger = logger,
+            addressSelector = remoteSourceAddressSelector,
         )
     }
 

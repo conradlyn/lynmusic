@@ -36,6 +36,7 @@ import top.iwesley.lyn.music.domain.NavidromeResolvedSource
 import top.iwesley.lyn.music.domain.isSubsonicCompatibleSourceType
 import top.iwesley.lyn.music.domain.normalizeSubsonicBaseUrl
 import top.iwesley.lyn.music.domain.requestNavidromeJson
+import top.iwesley.lyn.music.domain.RemoteSourceAddressSelector
 import top.iwesley.lyn.music.domain.resolveEmbySource
 import top.iwesley.lyn.music.domain.toSubsonicAuthMode
 
@@ -63,6 +64,7 @@ class RoomMyRepository(
     private val dailyRecommendationDateChangeNotifier: DailyRecommendationDateChangeNotifier =
         DefaultDailyRecommendationDateChangeNotifier(dailyRecommendationDateKeyProvider),
     private val dailyRecommendationLimit: Int = DEFAULT_DAILY_RECOMMENDATION_LIMIT,
+    private val addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
 ) : MyRepository {
     override val recentTracks: Flow<List<RecentTrack>> = combine(
         database.trackPlaybackStatsDao().observeAllByRecent(),
@@ -264,7 +266,7 @@ class RoomMyRepository(
     }
 
     private suspend fun refreshEmbyRecentPlays(source: ImportSourceEntity) {
-        val resolved = resolveEmbySource(database, secureCredentialStore, source.id)
+        val resolved = resolveEmbySource(database, secureCredentialStore, source.id, addressSelector)
             ?: error("Emby 来源缺少有效凭据。")
         val recentItems = fetchEmbyRecentTracks(
             httpClient = httpClient,
@@ -488,7 +490,10 @@ class RoomMyRepository(
         if (authMode == SubsonicAuthMode.PASSWORD && (username.isBlank() || credential.isBlank())) return null
         if (authMode == SubsonicAuthMode.API_KEY && credential.isBlank()) return null
         return NavidromeResolvedSource(
-            baseUrl = normalizeSubsonicBaseUrl(rootReference),
+            baseUrl = rootReference,
+            wanBaseUrl = wanRootReference,
+            sourceId = id,
+            addressSelector = addressSelector,
             username = username,
             password = credential,
             authMode = authMode,

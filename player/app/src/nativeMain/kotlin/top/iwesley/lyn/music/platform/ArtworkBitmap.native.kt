@@ -8,12 +8,17 @@ import androidx.compose.ui.graphics.toComposeImageBitmap
 import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.ObjCObjectVar
 import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.alloc
 import kotlinx.cinterop.convert
+import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.pointed
+import kotlinx.cinterop.ptr
 import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.toKString
 import kotlinx.cinterop.usePinned
+import kotlinx.cinterop.value
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.jetbrains.skia.Bitmap
@@ -22,6 +27,7 @@ import org.jetbrains.skia.Image
 import org.jetbrains.skia.Rect
 import platform.Foundation.NSCachesDirectory
 import platform.Foundation.NSData
+import platform.Foundation.NSError
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSURL
 import platform.Foundation.NSUUID
@@ -41,11 +47,14 @@ import platform.posix.opendir
 import platform.posix.readdir
 import platform.posix.remove
 import platform.posix.rename
+import top.iwesley.lyn.music.core.model.NavidromeLocatorRuntime
+import top.iwesley.lyn.music.core.model.RemotePlaybackUrlCandidate
 import top.iwesley.lyn.music.core.model.inferArtworkFileExtension
 import top.iwesley.lyn.music.core.model.isCompleteArtworkPayload
 import top.iwesley.lyn.music.core.model.normalizedArtworkCacheLocator
-import top.iwesley.lyn.music.core.model.resolveArtworkCacheTarget
+import top.iwesley.lyn.music.core.model.resolveArtworkCacheTargets
 import top.iwesley.lyn.music.core.model.stableArtworkCacheHash
+import top.iwesley.lyn.music.domain.readRemotePlaybackUrlCandidateWithFallback
 import kotlin.math.roundToInt
 
 @Composable
@@ -90,7 +99,8 @@ internal fun decodeNativeArtworkImageBitmap(bytes: ByteArray, maxDecodeSizePx: I
 private suspend fun loadNativeArtworkBytes(locator: String?, cacheRemote: Boolean): ByteArray? = withContext(Dispatchers.Default) {
     runCatching {
         val normalizedLocator = normalizedArtworkCacheLocator(locator) ?: return@runCatching null
-        val target = resolveArtworkCacheTarget(normalizedLocator) ?: return@runCatching null
+        val targets = resolveArtworkCacheTargets(normalizedLocator)
+        val target = targets.firstOrNull()?.value ?: return@runCatching null
         when {
             isRemoteArtworkTarget(target) -> {
                 val cacheDirectory = nativeArtworkCacheDirectory()
@@ -99,15 +109,16 @@ private suspend fun loadNativeArtworkBytes(locator: String?, cacheRemote: Boolea
                 if (existingCachePath != null) {
                     readLocalBytes(existingCachePath)
                 } else {
-                    val payload = readRemoteBytes(target)
-                    if (payload == null || !isCompleteArtworkPayload(payload)) return@runCatching null
+                    val (remoteTarget, payload) = readNativeRemoteArtworkPayload(targets)
+                        ?: return@runCatching null
                     if (cacheRemote) {
                         writeNativeArtworkCacheFileAtomically(
                             directory = cacheDirectory,
-                            fileName = "$cachePrefix${inferArtworkFileExtension(locator = target, bytes = payload)}",
+                            fileName = "$cachePrefix${inferArtworkFileExtension(locator = remoteTarget.value, bytes = payload)}",
                             payload = payload,
                         )
                     }
+                    NavidromeLocatorRuntime.markResolvedUrlSuccess(remoteTarget)
                     payload
                 }
             }
@@ -165,9 +176,21 @@ private fun findNativeArtworkCachePath(directory: String, cachePrefix: String): 
 }
 
 @OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
-private suspend fun readRemoteBytes(target: String): ByteArray? {
-    val url = NSURL.URLWithString(target) ?: return null
-    return NSData.create(contentsOfURL = url, options = 0u, error = null)?.toByteArray()
+private suspend fun readRemoteBytes(target: String): ByteArray {
+    val url = NSURL.URLWithString(target) ?: error("远端封面 URL 无效。")
+    return memScoped {
+        val error = alloc<ObjCObjectVar<NSError?>>()
+        NSData.create(contentsOfURL = url, options = 0u, error = error.ptr)?.toByteArray()
+            ?: throw IllegalStateException(nativeRemoteReadErrorMessage(error.value))
+    }
+}
+
+private fun nativeRemoteReadErrorMessage(error: NSError?): String {
+    return if (error == null) {
+        "远端封面读取失败。"
+    } else {
+        "NSError domain=${error.domain} code=${error.code} description=${error.localizedDescription}"
+    }
 }
 
 @OptIn(ExperimentalForeignApi::class)
@@ -214,6 +237,17 @@ private fun writeLocalBytes(path: String, bytes: ByteArray): Boolean {
 
 private fun isRemoteArtworkTarget(target: String): Boolean {
     return target.startsWith("http://", ignoreCase = true) || target.startsWith("https://", ignoreCase = true)
+}
+
+private suspend fun readNativeRemoteArtworkPayload(
+    targets: List<RemotePlaybackUrlCandidate>,
+): Pair<RemotePlaybackUrlCandidate, ByteArray>? {
+    return readRemotePlaybackUrlCandidateWithFallback(
+        candidates = targets,
+        isRemoteUrl = ::isRemoteArtworkTarget,
+        read = { target -> readRemoteBytes(target.value) },
+        isValidPayload = ::isCompleteArtworkPayload,
+    )
 }
 
 private fun writeNativeArtworkCacheFileAtomically(

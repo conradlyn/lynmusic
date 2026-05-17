@@ -107,8 +107,10 @@ import top.iwesley.lyn.music.domain.lyricsSourceIdFor
 import top.iwesley.lyn.music.domain.normalizeNavidromeBaseUrl
 import top.iwesley.lyn.music.domain.normalizeSubsonicBaseUrl
 import top.iwesley.lyn.music.domain.normalizeEmbyBaseUrl
+import top.iwesley.lyn.music.domain.normalizeRemoteSourceBaseUrls
 import top.iwesley.lyn.music.domain.requestNavidromeLyrics
 import top.iwesley.lyn.music.domain.requestEmbyLyricsDocument as requestEmbyServerLyricsDocument
+import top.iwesley.lyn.music.domain.RemoteSourceAddressSelector
 import top.iwesley.lyn.music.domain.resolveEmbyDeviceId
 import top.iwesley.lyn.music.domain.resolveNavidromeCoverArtUrl
 import top.iwesley.lyn.music.domain.resolveNavidromeStreamUrl
@@ -387,6 +389,7 @@ class RoomImportSourceRepository(
     private val gateway: ImportSourceGateway,
     private val secureCredentialStore: SecureCredentialStore,
     private val offlineDownloadGateway: OfflineDownloadGateway = UnsupportedOfflineDownloadGateway,
+    private val addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
 ) : ImportSourceRepository {
     override fun observeSources(): Flow<List<SourceWithStatus>> {
         return combine(
@@ -577,7 +580,17 @@ class RoomImportSourceRepository(
 
     override suspend fun testNavidromeSource(draft: NavidromeSourceDraft): Result<Unit> {
         return runCatching {
-            gateway.testNavidrome(prepareNavidromeDraft(draft))
+            val preparedDraft = prepareNavidromeDraft(draft)
+            addressSelector.invalidate("draft-navidrome")
+            addressSelector.withAddressFallback(
+                sourceId = "draft-navidrome",
+                sourceType = ImportSourceType.NAVIDROME,
+                lanBaseUrl = preparedDraft.baseUrl,
+                wanBaseUrl = preparedDraft.wanBaseUrl,
+                normalizeBaseUrl = ::normalizeNavidromeBaseUrl,
+            ) { candidate ->
+                gateway.testNavidrome(preparedDraft.copy(baseUrl = candidate.value))
+            }
         }
     }
 
@@ -588,6 +601,7 @@ class RoomImportSourceRepository(
     ): Result<Unit> {
         return runCatching {
             val existing = requireRemoteSource(sourceId, ImportSourceType.NAVIDROME)
+            addressSelector.invalidate(sourceId)
             val preparedDraft = prepareNavidromeDraft(draft)
             val password = resolveUpdatedPassword(
                 existingCredentialKey = existing.credentialKey,
@@ -597,7 +611,15 @@ class RoomImportSourceRepository(
             if (password.isBlank()) {
                 error("Navidrome 来源缺少有效密码。")
             }
-            gateway.testNavidrome(preparedDraft.copy(password = password))
+            addressSelector.withAddressFallback(
+                sourceId = sourceId,
+                sourceType = ImportSourceType.NAVIDROME,
+                lanBaseUrl = preparedDraft.baseUrl,
+                wanBaseUrl = preparedDraft.wanBaseUrl,
+                normalizeBaseUrl = ::normalizeNavidromeBaseUrl,
+            ) { candidate ->
+                gateway.testNavidrome(preparedDraft.copy(baseUrl = candidate.value, password = password))
+            }
         }
     }
 
@@ -610,7 +632,15 @@ class RoomImportSourceRepository(
             source.credentialKey?.let { secureCredentialStore.put(it, preparedDraft.password) }
             database.importSourceDao().upsert(source.toEntity())
             runScan(source) {
-                gateway.scanNavidrome(preparedDraft, sourceId)
+                addressSelector.withAddressFallback(
+                    sourceId = sourceId,
+                    sourceType = ImportSourceType.NAVIDROME,
+                    lanBaseUrl = preparedDraft.baseUrl,
+                    wanBaseUrl = preparedDraft.wanBaseUrl,
+                    normalizeBaseUrl = ::normalizeNavidromeBaseUrl,
+                ) { candidate ->
+                    gateway.scanNavidrome(preparedDraft.copy(baseUrl = candidate.value), sourceId)
+                }
             }
         }
     }
@@ -622,6 +652,7 @@ class RoomImportSourceRepository(
     ): Result<ImportScanSummary> {
         return runCatching {
             val existing = requireRemoteSource(sourceId, ImportSourceType.NAVIDROME)
+            addressSelector.invalidate(sourceId)
             val preparedDraft = prepareNavidromeDraft(draft)
             val updatedSource = createNavidromeSource(
                 sourceId = existing.id,
@@ -638,7 +669,15 @@ class RoomImportSourceRepository(
             if (password.isBlank()) {
                 error("Navidrome 来源缺少有效密码。")
             }
-            val report = gateway.scanNavidrome(preparedDraft.copy(password = password), sourceId)
+            val report = addressSelector.withAddressFallback(
+                sourceId = sourceId,
+                sourceType = ImportSourceType.NAVIDROME,
+                lanBaseUrl = preparedDraft.baseUrl,
+                wanBaseUrl = preparedDraft.wanBaseUrl,
+                normalizeBaseUrl = ::normalizeNavidromeBaseUrl,
+            ) { candidate ->
+                gateway.scanNavidrome(preparedDraft.copy(baseUrl = candidate.value, password = password), sourceId)
+            }
             val credentialKey = resolveUpdatedCredentialKey(
                 sourceId = sourceId,
                 existingCredentialKey = existing.credentialKey,
@@ -652,7 +691,17 @@ class RoomImportSourceRepository(
 
     override suspend fun testSubsonicSource(draft: SubsonicSourceDraft): Result<Unit> {
         return runCatching {
-            gateway.testSubsonic(prepareSubsonicDraft(draft))
+            val preparedDraft = prepareSubsonicDraft(draft)
+            addressSelector.invalidate("draft-subsonic")
+            addressSelector.withAddressFallback(
+                sourceId = "draft-subsonic",
+                sourceType = ImportSourceType.SUBSONIC,
+                lanBaseUrl = preparedDraft.baseUrl,
+                wanBaseUrl = preparedDraft.wanBaseUrl,
+                normalizeBaseUrl = ::normalizeSubsonicBaseUrl,
+            ) { candidate ->
+                gateway.testSubsonic(preparedDraft.copy(baseUrl = candidate.value))
+            }
         }
     }
 
@@ -663,6 +712,7 @@ class RoomImportSourceRepository(
     ): Result<Unit> {
         return runCatching {
             val existing = requireRemoteSource(sourceId, ImportSourceType.SUBSONIC)
+            addressSelector.invalidate(sourceId)
             val preparedDraft = prepareSubsonicDraft(draft)
             val credential = resolveUpdatedSubsonicCredential(
                 existing = existing,
@@ -672,7 +722,15 @@ class RoomImportSourceRepository(
             if (credential.isBlank()) {
                 error("Subsonic 来源缺少有效凭据。")
             }
-            gateway.testSubsonic(preparedDraft.copy(credential = credential))
+            addressSelector.withAddressFallback(
+                sourceId = sourceId,
+                sourceType = ImportSourceType.SUBSONIC,
+                lanBaseUrl = preparedDraft.baseUrl,
+                wanBaseUrl = preparedDraft.wanBaseUrl,
+                normalizeBaseUrl = ::normalizeSubsonicBaseUrl,
+            ) { candidate ->
+                gateway.testSubsonic(preparedDraft.copy(baseUrl = candidate.value, credential = credential))
+            }
         }
     }
 
@@ -685,7 +743,15 @@ class RoomImportSourceRepository(
             source.credentialKey?.let { secureCredentialStore.put(it, preparedDraft.credential) }
             database.importSourceDao().upsert(source.toEntity())
             runScan(source) {
-                gateway.scanSubsonic(preparedDraft, sourceId)
+                addressSelector.withAddressFallback(
+                    sourceId = sourceId,
+                    sourceType = ImportSourceType.SUBSONIC,
+                    lanBaseUrl = preparedDraft.baseUrl,
+                    wanBaseUrl = preparedDraft.wanBaseUrl,
+                    normalizeBaseUrl = ::normalizeSubsonicBaseUrl,
+                ) { candidate ->
+                    gateway.scanSubsonic(preparedDraft.copy(baseUrl = candidate.value), sourceId)
+                }
             }
         }
     }
@@ -697,6 +763,7 @@ class RoomImportSourceRepository(
     ): Result<ImportScanSummary> {
         return runCatching {
             val existing = requireRemoteSource(sourceId, ImportSourceType.SUBSONIC)
+            addressSelector.invalidate(sourceId)
             val preparedDraft = prepareSubsonicDraft(draft)
             val updatedSource = createSubsonicSource(
                 sourceId = existing.id,
@@ -713,7 +780,15 @@ class RoomImportSourceRepository(
             if (credential.isBlank()) {
                 error("Subsonic 来源缺少有效凭据。")
             }
-            val report = gateway.scanSubsonic(preparedDraft.copy(credential = credential), sourceId)
+            val report = addressSelector.withAddressFallback(
+                sourceId = sourceId,
+                sourceType = ImportSourceType.SUBSONIC,
+                lanBaseUrl = preparedDraft.baseUrl,
+                wanBaseUrl = preparedDraft.wanBaseUrl,
+                normalizeBaseUrl = ::normalizeSubsonicBaseUrl,
+            ) { candidate ->
+                gateway.scanSubsonic(preparedDraft.copy(baseUrl = candidate.value, credential = credential), sourceId)
+            }
             val credentialKey = resolveUpdatedCredentialKey(
                 sourceId = sourceId,
                 existingCredentialKey = existing.credentialKey,
@@ -727,10 +802,21 @@ class RoomImportSourceRepository(
 
     override suspend fun testEmbySource(draft: EmbySourceDraft): Result<Unit> {
         return runCatching {
-            gateway.testEmby(
-                draft = prepareEmbyDraft(draft),
-                deviceId = resolveEmbyDeviceId(secureCredentialStore),
-            )
+            val preparedDraft = prepareEmbyDraft(draft)
+            val deviceId = resolveEmbyDeviceId(secureCredentialStore)
+            addressSelector.invalidate("draft-emby")
+            addressSelector.withAddressFallback(
+                sourceId = "draft-emby",
+                sourceType = ImportSourceType.EMBY,
+                lanBaseUrl = preparedDraft.baseUrl,
+                wanBaseUrl = preparedDraft.wanBaseUrl,
+                normalizeBaseUrl = ::normalizeEmbyBaseUrl,
+            ) { candidate ->
+                gateway.testEmby(
+                    draft = preparedDraft.copy(baseUrl = candidate.value),
+                    deviceId = deviceId,
+                )
+            }
         }.map { }
     }
 
@@ -741,14 +827,31 @@ class RoomImportSourceRepository(
     ): Result<Unit> {
         return runCatching {
             val existing = requireRemoteSource(sourceId, ImportSourceType.EMBY)
+            addressSelector.invalidate(sourceId)
             val preparedDraft = prepareEmbyDraft(draft)
             val deviceId = resolveEmbyDeviceId(secureCredentialStore)
             if (preparedDraft.password.isNotBlank()) {
-                gateway.testEmby(preparedDraft, deviceId)
+                addressSelector.withAddressFallback(
+                    sourceId = sourceId,
+                    sourceType = ImportSourceType.EMBY,
+                    lanBaseUrl = preparedDraft.baseUrl,
+                    wanBaseUrl = preparedDraft.wanBaseUrl,
+                    normalizeBaseUrl = ::normalizeEmbyBaseUrl,
+                ) { candidate ->
+                    gateway.testEmby(preparedDraft.copy(baseUrl = candidate.value), deviceId)
+                }
             } else if (keepExistingCredentialWhenBlankPassword) {
                 val storedCredential = existing.credentialKey?.let { secureCredentialStore.get(it) }
                 val credential = parseEmbyCredential(storedCredential) ?: error("Emby 来源缺少有效凭据。")
-                gateway.testEmbyCredential(preparedDraft, credential, deviceId)
+                addressSelector.withAddressFallback(
+                    sourceId = sourceId,
+                    sourceType = ImportSourceType.EMBY,
+                    lanBaseUrl = preparedDraft.baseUrl,
+                    wanBaseUrl = preparedDraft.wanBaseUrl,
+                    normalizeBaseUrl = ::normalizeEmbyBaseUrl,
+                ) { candidate ->
+                    gateway.testEmbyCredential(preparedDraft.copy(baseUrl = candidate.value), credential, deviceId)
+                }
             } else {
                 error("Emby 来源缺少有效凭据。")
             }
@@ -760,13 +863,29 @@ class RoomImportSourceRepository(
             val sourceId = newId("emby")
             val preparedDraft = prepareEmbyDraft(draft)
             val deviceId = resolveEmbyDeviceId(secureCredentialStore)
-            val credential = gateway.testEmby(preparedDraft, deviceId)
+            val credential = addressSelector.withAddressFallback(
+                sourceId = sourceId,
+                sourceType = ImportSourceType.EMBY,
+                lanBaseUrl = preparedDraft.baseUrl,
+                wanBaseUrl = preparedDraft.wanBaseUrl,
+                normalizeBaseUrl = ::normalizeEmbyBaseUrl,
+            ) { candidate ->
+                gateway.testEmby(preparedDraft.copy(baseUrl = candidate.value), deviceId)
+            }
             val source = createEmbySource(sourceId, preparedDraft).copy(credentialKey = "credential-$sourceId")
             validateImportSourceCreation(label = source.label)
             source.credentialKey?.let { secureCredentialStore.put(it, serializeEmbyCredential(credential)) }
             database.importSourceDao().upsert(source.toEntity())
             runScan(source) {
-                gateway.scanEmby(preparedDraft, credential, sourceId, deviceId)
+                addressSelector.withAddressFallback(
+                    sourceId = sourceId,
+                    sourceType = ImportSourceType.EMBY,
+                    lanBaseUrl = preparedDraft.baseUrl,
+                    wanBaseUrl = preparedDraft.wanBaseUrl,
+                    normalizeBaseUrl = ::normalizeEmbyBaseUrl,
+                ) { candidate ->
+                    gateway.scanEmby(preparedDraft.copy(baseUrl = candidate.value), credential, sourceId, deviceId)
+                }
             }
         }
     }
@@ -778,6 +897,7 @@ class RoomImportSourceRepository(
     ): Result<ImportScanSummary> {
         return runCatching {
             val existing = requireRemoteSource(sourceId, ImportSourceType.EMBY)
+            addressSelector.invalidate(sourceId)
             val preparedDraft = prepareEmbyDraft(draft)
             val updatedSource = createEmbySource(
                 sourceId = existing.id,
@@ -788,16 +908,40 @@ class RoomImportSourceRepository(
             assertUniqueImportSourceLabel(updatedSource.label, excludingSourceId = existing.id)
             val deviceId = resolveEmbyDeviceId(secureCredentialStore)
             val credential = if (preparedDraft.password.isNotBlank()) {
-                gateway.testEmby(preparedDraft, deviceId)
+                addressSelector.withAddressFallback(
+                    sourceId = sourceId,
+                    sourceType = ImportSourceType.EMBY,
+                    lanBaseUrl = preparedDraft.baseUrl,
+                    wanBaseUrl = preparedDraft.wanBaseUrl,
+                    normalizeBaseUrl = ::normalizeEmbyBaseUrl,
+                ) { candidate ->
+                    gateway.testEmby(preparedDraft.copy(baseUrl = candidate.value), deviceId)
+                }
             } else if (keepExistingCredentialWhenBlankPassword) {
                 val existingCredential = parseEmbyCredential(existing.credentialKey?.let { secureCredentialStore.get(it) })
                     ?: error("Emby 来源缺少有效凭据。")
-                gateway.testEmbyCredential(preparedDraft, existingCredential, deviceId)
+                addressSelector.withAddressFallback(
+                    sourceId = sourceId,
+                    sourceType = ImportSourceType.EMBY,
+                    lanBaseUrl = preparedDraft.baseUrl,
+                    wanBaseUrl = preparedDraft.wanBaseUrl,
+                    normalizeBaseUrl = ::normalizeEmbyBaseUrl,
+                ) { candidate ->
+                    gateway.testEmbyCredential(preparedDraft.copy(baseUrl = candidate.value), existingCredential, deviceId)
+                }
                 existingCredential
             } else {
                 error("Emby 来源缺少有效凭据。")
             }
-            val report = gateway.scanEmby(preparedDraft, credential, sourceId, deviceId)
+            val report = addressSelector.withAddressFallback(
+                sourceId = sourceId,
+                sourceType = ImportSourceType.EMBY,
+                lanBaseUrl = preparedDraft.baseUrl,
+                wanBaseUrl = preparedDraft.wanBaseUrl,
+                normalizeBaseUrl = ::normalizeEmbyBaseUrl,
+            ) { candidate ->
+                gateway.scanEmby(preparedDraft.copy(baseUrl = candidate.value), credential, sourceId, deviceId)
+            }
             val credentialKey = existing.credentialKey ?: "credential-$sourceId"
             persistUpdatedCredential(
                 previousCredentialKey = existing.credentialKey,
@@ -857,45 +1001,72 @@ class RoomImportSourceRepository(
 
                     ImportSourceType.NAVIDROME -> {
                         val password = source.credentialKey?.let { secureCredentialStore.get(it) }.orEmpty()
-                        gateway.scanNavidrome(
-                            draft = NavidromeSourceDraft(
-                                label = source.label,
-                                baseUrl = normalizeNavidromeBaseUrl(source.rootReference),
-                                username = source.username.orEmpty(),
-                                password = password,
-                            ),
-                            sourceId = source.id,
+                        val draft = NavidromeSourceDraft(
+                            label = source.label,
+                            baseUrl = source.rootReference,
+                            wanBaseUrl = source.wanRootReference.orEmpty(),
+                            username = source.username.orEmpty(),
+                            password = password,
                         )
+                        val prepared = prepareNavidromeDraft(draft)
+                        addressSelector.withAddressFallback(
+                            sourceId = source.id,
+                            sourceType = ImportSourceType.NAVIDROME,
+                            lanBaseUrl = prepared.baseUrl,
+                            wanBaseUrl = prepared.wanBaseUrl,
+                            normalizeBaseUrl = ::normalizeNavidromeBaseUrl,
+                        ) { candidate ->
+                            gateway.scanNavidrome(prepared.copy(baseUrl = candidate.value), source.id)
+                        }
                     }
 
                     ImportSourceType.SUBSONIC -> {
                         val credential = source.credentialKey?.let { secureCredentialStore.get(it) }.orEmpty()
-                        gateway.scanSubsonic(
-                            draft = SubsonicSourceDraft(
-                                label = source.label,
-                                baseUrl = normalizeSubsonicBaseUrl(source.rootReference),
-                                username = source.username.orEmpty(),
-                                credential = credential,
-                                authMode = source.subsonicAuthMode,
-                            ),
-                            sourceId = source.id,
+                        val draft = SubsonicSourceDraft(
+                            label = source.label,
+                            baseUrl = source.rootReference,
+                            wanBaseUrl = source.wanRootReference.orEmpty(),
+                            username = source.username.orEmpty(),
+                            credential = credential,
+                            authMode = source.subsonicAuthMode,
                         )
+                        val prepared = prepareSubsonicDraft(draft)
+                        addressSelector.withAddressFallback(
+                            sourceId = source.id,
+                            sourceType = ImportSourceType.SUBSONIC,
+                            lanBaseUrl = prepared.baseUrl,
+                            wanBaseUrl = prepared.wanBaseUrl,
+                            normalizeBaseUrl = ::normalizeSubsonicBaseUrl,
+                        ) { candidate ->
+                            gateway.scanSubsonic(prepared.copy(baseUrl = candidate.value), source.id)
+                        }
                     }
 
                     ImportSourceType.EMBY -> {
                         val credential = parseEmbyCredential(source.credentialKey?.let { secureCredentialStore.get(it) })
                             ?: error("Emby 来源缺少有效凭据。")
-                        gateway.scanEmby(
-                            draft = EmbySourceDraft(
-                                label = source.label,
-                                baseUrl = normalizeEmbyBaseUrl(source.rootReference),
-                                username = source.username.orEmpty(),
-                                password = "",
-                            ),
-                            credential = credential,
-                            sourceId = source.id,
-                            deviceId = resolveEmbyDeviceId(secureCredentialStore),
+                        val draft = EmbySourceDraft(
+                            label = source.label,
+                            baseUrl = source.rootReference,
+                            wanBaseUrl = source.wanRootReference.orEmpty(),
+                            username = source.username.orEmpty(),
+                            password = "",
                         )
+                        val prepared = prepareEmbyDraft(draft)
+                        addressSelector.withAddressFallback(
+                            sourceId = source.id,
+                            sourceType = ImportSourceType.EMBY,
+                            lanBaseUrl = prepared.baseUrl,
+                            wanBaseUrl = prepared.wanBaseUrl,
+                            normalizeBaseUrl = ::normalizeEmbyBaseUrl,
+                        ) { candidate ->
+                            gateway.scanEmby(
+                                draft = prepared.copy(baseUrl = candidate.value),
+                                credential = credential,
+                                sourceId = source.id,
+                                deviceId = resolveEmbyDeviceId(secureCredentialStore),
+                            )
+                        }
                     }
                 }
             }
@@ -928,6 +1099,7 @@ class RoomImportSourceRepository(
             database.lyricsCacheDao().deleteByTrackIdPrefix(trackIdPrefix(source.id))
             database.importIndexStateDao().deleteBySourceId(source.id)
             database.importSourceDao().deleteById(source.id)
+            addressSelector.invalidate(source.id)
             rebuildLibrarySummaries()
         }
     }
@@ -974,14 +1146,27 @@ class RoomImportSourceRepository(
     }
 
     private fun prepareNavidromeDraft(draft: NavidromeSourceDraft): NavidromeSourceDraft {
+        val (baseUrl, wanBaseUrl) = normalizeRemoteSourceBaseUrls(
+            sourceType = ImportSourceType.NAVIDROME,
+            lanBaseUrl = draft.baseUrl,
+            wanBaseUrl = draft.wanBaseUrl,
+            normalizeBaseUrl = ::normalizeNavidromeBaseUrl,
+        )
         return draft.copy(
             label = draft.label.trim(),
-            baseUrl = normalizeNavidromeBaseUrl(draft.baseUrl),
+            baseUrl = baseUrl,
+            wanBaseUrl = wanBaseUrl.orEmpty(),
             username = draft.username.trim(),
         )
     }
 
     private fun prepareSubsonicDraft(draft: SubsonicSourceDraft): SubsonicSourceDraft {
+        val (baseUrl, wanBaseUrl) = normalizeRemoteSourceBaseUrls(
+            sourceType = ImportSourceType.SUBSONIC,
+            lanBaseUrl = draft.baseUrl,
+            wanBaseUrl = draft.wanBaseUrl,
+            normalizeBaseUrl = ::normalizeSubsonicBaseUrl,
+        )
         val apiKeyMode = draft.authMode == SubsonicAuthMode.API_KEY
         val credential = if (apiKeyMode) {
             draft.credential.trim()
@@ -990,16 +1175,24 @@ class RoomImportSourceRepository(
         }
         return draft.copy(
             label = draft.label.trim(),
-            baseUrl = normalizeSubsonicBaseUrl(draft.baseUrl),
+            baseUrl = baseUrl,
+            wanBaseUrl = wanBaseUrl.orEmpty(),
             username = if (apiKeyMode) "" else draft.username.trim(),
             credential = credential,
         )
     }
 
     private fun prepareEmbyDraft(draft: EmbySourceDraft): EmbySourceDraft {
+        val (baseUrl, wanBaseUrl) = normalizeRemoteSourceBaseUrls(
+            sourceType = ImportSourceType.EMBY,
+            lanBaseUrl = draft.baseUrl,
+            wanBaseUrl = draft.wanBaseUrl,
+            normalizeBaseUrl = ::normalizeEmbyBaseUrl,
+        )
         return draft.copy(
             label = draft.label.trim(),
-            baseUrl = normalizeEmbyBaseUrl(draft.baseUrl),
+            baseUrl = baseUrl,
+            wanBaseUrl = wanBaseUrl.orEmpty(),
             username = draft.username.trim(),
         )
     }
@@ -1056,12 +1249,13 @@ class RoomImportSourceRepository(
         createdAt: Long = now(),
         enabled: Boolean = true,
     ): ImportSource {
-        val label = draft.label.ifBlank { draft.baseUrl }
+        val label = draft.label.ifBlank { draft.baseUrl.ifBlank { draft.wanBaseUrl } }
         return ImportSource(
             id = sourceId,
             type = ImportSourceType.NAVIDROME,
             label = label,
             rootReference = draft.baseUrl,
+            wanRootReference = draft.wanBaseUrl.takeIf { it.isNotBlank() },
             username = draft.username,
             createdAt = createdAt,
             enabled = enabled,
@@ -1074,12 +1268,13 @@ class RoomImportSourceRepository(
         createdAt: Long = now(),
         enabled: Boolean = true,
     ): ImportSource {
-        val label = draft.label.ifBlank { draft.baseUrl }
+        val label = draft.label.ifBlank { draft.baseUrl.ifBlank { draft.wanBaseUrl } }
         return ImportSource(
             id = sourceId,
             type = ImportSourceType.SUBSONIC,
             label = label,
             rootReference = draft.baseUrl,
+            wanRootReference = draft.wanBaseUrl.takeIf { it.isNotBlank() },
             username = draft.username.takeIf { draft.authMode == SubsonicAuthMode.PASSWORD },
             subsonicAuthMode = draft.authMode,
             createdAt = createdAt,
@@ -1093,12 +1288,13 @@ class RoomImportSourceRepository(
         createdAt: Long = now(),
         enabled: Boolean = true,
     ): ImportSource {
-        val label = draft.label.ifBlank { draft.baseUrl }
+        val label = draft.label.ifBlank { draft.baseUrl.ifBlank { draft.wanBaseUrl } }
         return ImportSource(
             id = sourceId,
             type = ImportSourceType.EMBY,
             label = label,
             rootReference = draft.baseUrl,
+            wanRootReference = draft.wanBaseUrl.takeIf { it.isNotBlank() },
             username = draft.username,
             createdAt = createdAt,
             enabled = enabled,
@@ -1674,6 +1870,7 @@ class DefaultLyricsRepository(
         override suspend fun cache(locator: String, cacheKey: String, replaceExisting: Boolean): String? = locator
     },
     private val logger: DiagnosticLogger = NoopDiagnosticLogger,
+    private val addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
 ) : LyricsRepository {
     override suspend fun getLyrics(track: Track): ResolvedLyricsResult? {
         val trackLabel = track.logIdentity()
@@ -1923,11 +2120,10 @@ class DefaultLyricsRepository(
         return requestNavidromeLyrics(
             httpClient = httpClient,
             source = NavidromeResolvedSource(
-                baseUrl = if (sourceType == ImportSourceType.NAVIDROME) {
-                    normalizeNavidromeBaseUrl(source.rootReference)
-                } else {
-                    normalizeSubsonicBaseUrl(source.rootReference)
-                },
+                baseUrl = source.rootReference,
+                wanBaseUrl = source.wanRootReference,
+                sourceId = source.id,
+                addressSelector = addressSelector,
                 username = username,
                 password = credential,
                 authMode = authMode,
@@ -1941,7 +2137,7 @@ class DefaultLyricsRepository(
     private suspend fun requestEmbyLyricsDocument(track: Track): LyricsDocument? {
         val locator = parseEmbySongLocator(track.mediaLocator) ?: return null
         if (locator.first != track.sourceId) return null
-        val source = resolveEmbySource(database, secureCredentialStore, locator.first) ?: return null
+        val source = resolveEmbySource(database, secureCredentialStore, locator.first, addressSelector) ?: return null
         return requestEmbyServerLyricsDocument(
             httpClient = httpClient,
             source = source,
@@ -3243,6 +3439,7 @@ private fun ImportSourceEntity.toDomain(): ImportSource {
         type = type.toImportSourceType(),
         label = label,
         rootReference = rootReference,
+        wanRootReference = wanRootReference,
         server = server,
         port = parsedPort,
         path = migratedPath.ifBlank { null }.takeIf { type.toImportSourceType() == ImportSourceType.SAMBA },
@@ -3262,6 +3459,7 @@ private fun ImportSource.toEntity(): ImportSourceEntity {
         type = type.name,
         label = label,
         rootReference = rootReference,
+        wanRootReference = wanRootReference?.trim()?.takeIf { it.isNotBlank() },
         server = server,
         shareName = port?.toString().takeIf { type == ImportSourceType.SAMBA },
         directoryPath = normalizeSambaPath(path).ifBlank { null }.takeIf { type == ImportSourceType.SAMBA },

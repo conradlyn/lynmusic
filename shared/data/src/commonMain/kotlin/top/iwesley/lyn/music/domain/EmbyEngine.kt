@@ -50,6 +50,8 @@ internal const val EMBY_DEVICE_ID_CREDENTIAL_KEY = "emby-device-id"
 data class EmbyResolvedSource(
     val sourceId: String,
     val baseUrl: String,
+    val wanBaseUrl: String? = null,
+    val addressSelector: RemoteSourceAddressSelector? = null,
     val credential: EmbyCredential,
     val deviceId: String,
 )
@@ -268,14 +270,23 @@ internal suspend fun resolveEmbySource(
     database: LynMusicDatabase,
     secureCredentialStore: SecureCredentialStore,
     sourceId: String,
+    addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
 ): EmbyResolvedSource? {
     val source = database.importSourceDao().getById(sourceId)
         ?.takeIf { it.type == ImportSourceType.EMBY.name && it.enabled }
         ?: return null
     val credential = parseEmbyCredential(source.credentialKey?.let { secureCredentialStore.get(it) }) ?: return null
+    val (lanBaseUrl, wanBaseUrl) = normalizeRemoteSourceBaseUrls(
+        sourceType = ImportSourceType.EMBY,
+        lanBaseUrl = source.rootReference,
+        wanBaseUrl = source.wanRootReference,
+        normalizeBaseUrl = ::normalizeEmbyBaseUrl,
+    )
     return EmbyResolvedSource(
         sourceId = source.id,
-        baseUrl = normalizeEmbyBaseUrl(source.rootReference),
+        baseUrl = lanBaseUrl,
+        wanBaseUrl = wanBaseUrl,
+        addressSelector = addressSelector,
         credential = credential,
         deviceId = resolveEmbyDeviceId(secureCredentialStore),
     )
@@ -285,42 +296,108 @@ suspend fun resolveEmbyStreamUrl(
     database: LynMusicDatabase,
     secureCredentialStore: SecureCredentialStore,
     locator: String,
+    addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
 ): String? {
     val parsed = parseEmbySongLocator(locator) ?: return null
-    val source = resolveEmbySource(database, secureCredentialStore, parsed.first) ?: return null
+    val source = resolveEmbySource(database, secureCredentialStore, parsed.first, addressSelector) ?: return null
     return buildEmbyStreamUrl(
-        baseUrl = source.baseUrl,
+        baseUrl = source.preferredBaseUrl(),
         itemId = parsed.second,
         accessToken = source.credential.accessToken,
     )
+}
+
+suspend fun resolveEmbyStreamUrlCandidates(
+    database: LynMusicDatabase,
+    secureCredentialStore: SecureCredentialStore,
+    locator: String,
+    addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
+): List<RemoteSourceResolvedUrl>? {
+    val parsed = parseEmbySongLocator(locator) ?: return null
+    val source = resolveEmbySource(database, secureCredentialStore, parsed.first, addressSelector) ?: return null
+    return source.addressCandidates().map { candidate ->
+        RemoteSourceResolvedUrl(
+            sourceId = source.sourceId,
+            kind = candidate.kind,
+            value = buildEmbyStreamUrl(
+                baseUrl = candidate.value,
+                itemId = parsed.second,
+                accessToken = source.credential.accessToken,
+            ),
+        )
+    }
 }
 
 suspend fun resolveEmbyDownloadUrl(
     database: LynMusicDatabase,
     secureCredentialStore: SecureCredentialStore,
     locator: String,
+    addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
 ): String? {
     val parsed = parseEmbySongLocator(locator) ?: return null
-    val source = resolveEmbySource(database, secureCredentialStore, parsed.first) ?: return null
+    val source = resolveEmbySource(database, secureCredentialStore, parsed.first, addressSelector) ?: return null
     return buildEmbyDownloadUrl(
-        baseUrl = source.baseUrl,
+        baseUrl = source.preferredBaseUrl(),
         itemId = parsed.second,
         accessToken = source.credential.accessToken,
     )
+}
+
+suspend fun resolveEmbyDownloadUrlCandidates(
+    database: LynMusicDatabase,
+    secureCredentialStore: SecureCredentialStore,
+    locator: String,
+    addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
+): List<RemoteSourceResolvedUrl>? {
+    val parsed = parseEmbySongLocator(locator) ?: return null
+    val source = resolveEmbySource(database, secureCredentialStore, parsed.first, addressSelector) ?: return null
+    return source.addressCandidates().map { candidate ->
+        RemoteSourceResolvedUrl(
+            sourceId = source.sourceId,
+            kind = candidate.kind,
+            value = buildEmbyDownloadUrl(
+                baseUrl = candidate.value,
+                itemId = parsed.second,
+                accessToken = source.credential.accessToken,
+            ),
+        )
+    }
 }
 
 suspend fun resolveEmbyCoverArtUrl(
     database: LynMusicDatabase,
     secureCredentialStore: SecureCredentialStore,
     locator: String,
+    addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
 ): String? {
     val parsed = parseEmbyCoverLocator(locator) ?: return null
-    val source = resolveEmbySource(database, secureCredentialStore, parsed.first) ?: return null
+    val source = resolveEmbySource(database, secureCredentialStore, parsed.first, addressSelector) ?: return null
     return buildEmbyCoverArtUrl(
-        baseUrl = source.baseUrl,
+        baseUrl = source.preferredBaseUrl(),
         itemId = parsed.second,
         accessToken = source.credential.accessToken,
     )
+}
+
+suspend fun resolveEmbyCoverArtUrlCandidates(
+    database: LynMusicDatabase,
+    secureCredentialStore: SecureCredentialStore,
+    locator: String,
+    addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
+): List<RemoteSourceResolvedUrl>? {
+    val parsed = parseEmbyCoverLocator(locator) ?: return null
+    val source = resolveEmbySource(database, secureCredentialStore, parsed.first, addressSelector) ?: return null
+    return source.addressCandidates().map { candidate ->
+        RemoteSourceResolvedUrl(
+            sourceId = source.sourceId,
+            kind = candidate.kind,
+            value = buildEmbyCoverArtUrl(
+                baseUrl = candidate.value,
+                itemId = parsed.second,
+                accessToken = source.credential.accessToken,
+            ),
+        )
+    }
 }
 
 fun buildEmbyStreamUrl(
@@ -639,12 +716,12 @@ internal suspend fun requestEmbyLyricsDocument(
     itemId: String,
     logger: DiagnosticLogger = NoopDiagnosticLogger,
 ): LyricsDocument? {
-    val payload = requestEmbyTextOrNull(
+    val payload = requestEmbyTextWithSourceAddressFallback(
         httpClient = httpClient,
-        credential = source.credential,
-        deviceId = source.deviceId,
-        url = buildEmbyApiUrl(source.baseUrl, "Items", itemId, "Lyrics"),
+        source = source,
         method = RequestMethod.GET,
+        pathSegments = arrayOf("Items", itemId, "Lyrics"),
+        parameters = emptyMap(),
         body = null,
         operation = "Lyrics",
         logger = logger,
@@ -780,16 +857,17 @@ private suspend fun requestEmbyJson(
     operation: String,
     logger: DiagnosticLogger,
 ): JsonObject {
-    val payload = requestEmbyText(
+    val payload = requestEmbyTextWithSourceAddressFallback(
         httpClient = httpClient,
-        credential = source.credential,
-        deviceId = source.deviceId,
-        url = buildEmbyApiUrl(source.baseUrl, *pathSegments, parameters = parameters),
+        source = source,
         method = method,
+        pathSegments = pathSegments,
+        parameters = parameters,
         body = body,
         operation = operation,
         logger = logger,
-    )
+        notFoundAsNull = false,
+    ) ?: error("Emby $operation 返回为空。")
     return parseEmbyObject(payload, operation)
 }
 
@@ -803,7 +881,53 @@ private suspend fun requestEmbyUnit(
     operation: String,
     logger: DiagnosticLogger,
 ) {
-    requestEmbyText(
+    requestEmbyTextWithSourceAddressFallback(
+        httpClient = httpClient,
+        source = source,
+        method = method,
+        pathSegments = pathSegments,
+        parameters = parameters,
+        body = body,
+        operation = operation,
+        logger = logger,
+        notFoundAsNull = false,
+    )
+}
+
+private suspend fun requestEmbyTextWithSourceAddressFallback(
+    httpClient: LyricsHttpClient,
+    source: EmbyResolvedSource,
+    method: RequestMethod,
+    pathSegments: Array<String>,
+    parameters: Map<String, String>,
+    body: String?,
+    operation: String,
+    logger: DiagnosticLogger,
+    notFoundAsNull: Boolean,
+): String? {
+    val selector = source.addressSelector
+    if (selector != null) {
+        return selector.withAddressFallback(
+            sourceId = source.sourceId,
+            sourceType = ImportSourceType.EMBY,
+            lanBaseUrl = source.baseUrl,
+            wanBaseUrl = source.wanBaseUrl,
+            normalizeBaseUrl = ::normalizeEmbyBaseUrl,
+        ) { candidate ->
+            requestEmbyTextOrNull(
+                httpClient = httpClient,
+                credential = source.credential,
+                deviceId = source.deviceId,
+                url = buildEmbyApiUrl(candidate.value, *pathSegments, parameters = parameters),
+                method = method,
+                body = body,
+                operation = operation,
+                logger = logger,
+                notFoundAsNull = notFoundAsNull,
+            )
+        }
+    }
+    return requestEmbyTextOrNull(
         httpClient = httpClient,
         credential = source.credential,
         deviceId = source.deviceId,
@@ -812,6 +936,7 @@ private suspend fun requestEmbyUnit(
         body = body,
         operation = operation,
         logger = logger,
+        notFoundAsNull = notFoundAsNull,
     )
 }
 
@@ -907,6 +1032,34 @@ private fun buildEmbyApiUrl(
             }
         }
     }.buildString()
+}
+
+private fun EmbyResolvedSource.preferredBaseUrl(): String {
+    val selector = addressSelector
+    if (selector != null) {
+        return selector.orderedBaseUrls(
+            sourceId = sourceId,
+            sourceType = ImportSourceType.EMBY,
+            lanBaseUrl = baseUrl,
+            wanBaseUrl = wanBaseUrl,
+            normalizeBaseUrl = ::normalizeEmbyBaseUrl,
+        ).first().value
+    }
+    return normalizeEmbyBaseUrl(baseUrl)
+}
+
+private fun EmbyResolvedSource.addressCandidates(): List<RemoteSourceBaseUrl> {
+    val selector = addressSelector
+    if (selector != null) {
+        return selector.orderedBaseUrls(
+            sourceId = sourceId,
+            sourceType = ImportSourceType.EMBY,
+            lanBaseUrl = baseUrl,
+            wanBaseUrl = wanBaseUrl,
+            normalizeBaseUrl = ::normalizeEmbyBaseUrl,
+        )
+    }
+    return listOf(RemoteSourceBaseUrl(RemoteSourceAddressKind.LAN, normalizeEmbyBaseUrl(baseUrl)))
 }
 
 private fun embyAuthorizationHeader(deviceId: String, credential: EmbyCredential? = null): String {

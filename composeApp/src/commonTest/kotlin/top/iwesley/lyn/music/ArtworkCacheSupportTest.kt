@@ -7,10 +7,12 @@ import kotlinx.coroutines.test.runTest
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.NavidromeLocatorResolver
 import top.iwesley.lyn.music.core.model.NavidromeLocatorRuntime
+import top.iwesley.lyn.music.core.model.RemotePlaybackUrlCandidate
 import top.iwesley.lyn.music.core.model.buildNavidromeCoverLocator
 import top.iwesley.lyn.music.core.model.inferArtworkFileExtension
 import top.iwesley.lyn.music.platform.artworkCacheExtension
 import top.iwesley.lyn.music.platform.resolveArtworkCacheTarget
+import top.iwesley.lyn.music.platform.resolveArtworkCacheTargets
 import top.iwesley.lyn.music.platform.stableArtworkCacheHash
 
 class ArtworkCacheSupportTest {
@@ -35,6 +37,45 @@ class ArtworkCacheSupportTest {
         assertEquals(
             "https://demo.example.com/rest/getCoverArt.view?id=cover-123",
             resolved,
+        )
+    }
+
+    @Test
+    fun `navidrome cover locator exposes all runtime candidates`() = runTest {
+        NavidromeLocatorRuntime.install(
+            object : NavidromeLocatorResolver {
+                override suspend fun resolveStreamUrl(
+                    locator: String,
+                    audioQuality: NavidromeAudioQuality,
+                ): String? = null
+
+                override suspend fun resolveCoverArtUrl(locator: String): String? = null
+
+                override suspend fun resolveCoverArtUrlCandidates(locator: String): List<RemotePlaybackUrlCandidate> {
+                    return listOf(
+                        RemotePlaybackUrlCandidate(
+                            sourceId = "nav-source",
+                            addressKind = "LAN",
+                            value = "http://lan.example/rest/getCoverArt.view?id=cover-123",
+                        ),
+                        RemotePlaybackUrlCandidate(
+                            sourceId = "nav-source",
+                            addressKind = "WAN",
+                            value = "https://wan.example/rest/getCoverArt.view?id=cover-123",
+                        ),
+                    )
+                }
+            },
+        )
+
+        val resolved = resolveArtworkCacheTargets(buildNavidromeCoverLocator("nav-source", "cover-123"))
+
+        assertEquals(
+            listOf(
+                "http://lan.example/rest/getCoverArt.view?id=cover-123",
+                "https://wan.example/rest/getCoverArt.view?id=cover-123",
+            ),
+            resolved.map { it.value },
         )
     }
 
