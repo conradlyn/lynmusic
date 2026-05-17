@@ -74,3 +74,6 @@ LynMusic 是一款面向个人音乐收藏场景打造的跨平台本地音乐�
 
 ## 公众号
  ![/锋风](./doc/weixin.jpeg) 
+
+## Star History
+[![Star History Chart](https://api.star-history.com/svg?repos=wesley666/LynMusic&type=Date)](https://star-history.com/#wesley666/LynMusic&Date)
