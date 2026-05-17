@@ -14,6 +14,7 @@ plugins {
 android {
     namespace = "top.iwesley.lyn.music.automotive"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
+    ndkVersion = libs.versions.android.ndk.get()
 
     defaultConfig {
         applicationId = "top.iwesley.lyn.music.automotive"
@@ -35,6 +36,9 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
             excludes += "/META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+        }
+        jniLibs {
+            keepDebugSymbols.clear()
         }
     }
     configureLynReleaseSigning(rootProject)
