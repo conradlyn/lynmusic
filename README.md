@@ -7,19 +7,43 @@ LynMusic是基于 Kotlin Multiplatform 的跨平台本地音乐播放器项目�
 第一，很多本地播放器搜索歌词太难用了，有些歌还不一定能搜到，比如 Bobby Chen、Mr Li；第二，想学习一下 KMP；第三，因为有了 codex 这样的编程工具，实现难度大大下降；第四，可以自主决策功能和界面。
 
 ## 先看 UI
+### 电脑或者平板
 ![pc_main_ui](./doc/pc_main_ui.png)
-
 ![pc_player_ui](./doc/pc_player_ui.png)
-
-![pc_music_tag_editor](./doc/pc_music_tag_editor.png)
-
-![pc_lrc_share_note](./doc/pc_lrc_share_note.png)
-
-![pc_lrc_share_cover_color](./doc/pc_lrc_share_cover_color.png)
-
-![pc_lrc_search](./doc/pc_lrc_search.png)
-
+![pc_player_full_ui](./doc/pc_player_full_ui.png)
+![pc_recommend_ui](./doc/pc_recommend_ui.png)
 ![pc_lrc_apply](./doc/pc_lrc_apply.png)
+![pc_lrc_search](./doc/pc_lrc_search.png)
+![pc_lrc_share_cover_color](./doc/pc_lrc_share_cover_color.png)
+![pc_lrc_share_note](./doc/pc_lrc_share_note.png)
+![pc_music_tag_editor](./doc/pc_music_tag_editor.png)
+![lyrics-note_share](./doc/lyrics-note_share.png)
+![lyrics-share_cover2](./doc/lyrics-share_cover2.png)
+![lyrics-share_note2](./doc/lyrics-share_note2.png)
+![lyrics-share](./doc/lyrics-share.png)
+![lyrics-share2](./doc/lyrics-share2.png)
+
+### 手机
+![phone_main_ui](./doc/phone_main_ui.jpg)
+![phone_player_ui](./doc/phone_player_ui.png)
+![phone_player_lrc_ui](./doc/phone_player_lrc_ui.png)
+![phone_player_lrc_share_ui](./doc/phone_player_lrc_share_ui.png)
+![phone_player_pop_ui](./doc/phone_player_pop_ui.png)
+![phone_player_recommend_ui](./doc/phone_player_recommend_ui.png)
+![phone_player_setting_ui2](./doc/phone_player_setting_ui2.png)
+![phone_setting_ui](./doc/phone_setting_ui.png)
+
+### TV
+![tv_main_ui](./doc/tv_main_ui.png)
+![tv_main_ui2](./doc/tv_main_ui2.png)
+![tv_main_like_ui](./doc/tv_main_like_ui.png)
+![tv_cast_paler_ui](./doc/tv_cast_paler_ui.png)
+![tv_player_ui](./doc/tv_player_ui.png)
+
+### 车机
+![car_main_ui](./doc/car_main_ui.png)
+![car_my_ui](./doc/car_my_ui.png)
+![car_player_ui](./doc/car_player_ui.png)
 
 
 ## 介绍
