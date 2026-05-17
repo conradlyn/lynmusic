@@ -12,12 +12,14 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
+import top.iwesley.lyn.music.core.model.EmbyCredential
 import top.iwesley.lyn.music.core.model.LyricsHttpClient
 import top.iwesley.lyn.music.core.model.LyricsHttpResponse
 import top.iwesley.lyn.music.core.model.LyricsRequest
 import top.iwesley.lyn.music.core.model.NoopDiagnosticLogger
 import top.iwesley.lyn.music.core.model.SecureCredentialStore
 import top.iwesley.lyn.music.core.model.Track
+import top.iwesley.lyn.music.core.model.buildEmbySongLocator
 import top.iwesley.lyn.music.core.model.buildNavidromeSongLocator
 import top.iwesley.lyn.music.data.db.ImportSourceEntity
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
@@ -25,6 +27,7 @@ import top.iwesley.lyn.music.data.db.LyricsCacheEntity
 import top.iwesley.lyn.music.data.db.PlaylistTrackEntity
 import top.iwesley.lyn.music.data.db.TrackEntity
 import top.iwesley.lyn.music.data.db.buildLynMusicDatabase
+import top.iwesley.lyn.music.domain.serializeEmbyCredential
 
 class PlaylistsRepositoryTest {
 
@@ -181,6 +184,103 @@ class PlaylistsRepositoryTest {
         assertTrue(httpClient.requestedEndpoints.contains("createPlaylist"))
         assertTrue(httpClient.requestedEndpoints.contains("updatePlaylist"))
         assertTrue(httpClient.requestedEndpoints.contains("getPlaylist"))
+    }
+
+    @Test
+    fun `adding and removing emby track writes remote playlist membership`() = runTest {
+        val database = createPlaylistTestDatabase()
+        seedEmbySource(database)
+        database.trackDao().upsertAll(listOf(embyTrackEntity(itemId = "song-e1")))
+        val httpClient = RecordingEmbyPlaylistsHttpClient()
+        val repository = RoomPlaylistRepository(
+            database = database,
+            secureCredentialStore = MapPlaylistSecureCredentialStore(
+                mutableMapOf("emby-cred" to serializeEmbyCredential(EmbyCredential("user-1", "token"))),
+            ),
+            httpClient = httpClient,
+            logger = NoopDiagnosticLogger,
+        )
+
+        val playlist = repository.createPlaylist("Road Trip").getOrThrow()
+        repository.addTrackToPlaylist(playlist.id, embyTrack(itemId = "song-e1")).getOrThrow()
+
+        assertNotNull(database.playlistRemoteBindingDao().getByPlaylistIdAndSourceId(playlist.id, "emby-source"))
+        assertEquals(listOf(embyTrack(itemId = "song-e1").id), repository.observePlaylistDetail(playlist.id).first()?.tracks?.map { it.track.id })
+        assertTrue(httpClient.requestPaths.contains("/emby/Playlists/pl-1/Items"))
+
+        repository.removeTrackFromPlaylist(playlist.id, embyTrack(itemId = "song-e1").id).getOrThrow()
+
+        assertEquals(emptyList(), repository.observePlaylistDetail(playlist.id).first()?.tracks?.map { it.track.id })
+        assertTrue(httpClient.requestPaths.contains("/emby/Playlists/pl-1/Items/Delete"))
+        assertEquals(emptyList(), httpClient.playlistItemIds)
+    }
+
+    @Test
+    fun `removing emby track verifies stale remote ordinal before deleting`() = runTest {
+        val database = createPlaylistTestDatabase()
+        seedEmbySource(database)
+        database.trackDao().upsertAll(
+            listOf(
+                embyTrackEntity(itemId = "song-e1"),
+                embyTrackEntity(itemId = "song-e2"),
+            ),
+        )
+        val httpClient = RecordingEmbyPlaylistsHttpClient()
+        val repository = RoomPlaylistRepository(
+            database = database,
+            secureCredentialStore = MapPlaylistSecureCredentialStore(
+                mutableMapOf("emby-cred" to serializeEmbyCredential(EmbyCredential("user-1", "token"))),
+            ),
+            httpClient = httpClient,
+            logger = NoopDiagnosticLogger,
+        )
+
+        val playlist = repository.createPlaylist("Road Trip").getOrThrow()
+        repository.addTrackToPlaylist(playlist.id, embyTrack(itemId = "song-e1")).getOrThrow()
+        repository.addTrackToPlaylist(playlist.id, embyTrack(itemId = "song-e2")).getOrThrow()
+        httpClient.playlistItemIds.apply {
+            clear()
+            addAll(listOf("song-e2", "song-e1"))
+        }
+
+        repository.removeTrackFromPlaylist(playlist.id, embyTrack(itemId = "song-e1").id).getOrThrow()
+
+        assertEquals(listOf("song-e2"), httpClient.playlistItemIds)
+        assertEquals(
+            listOf(embyTrack(itemId = "song-e2").id),
+            repository.observePlaylistDetail(playlist.id).first()?.tracks?.map { it.track.id },
+        )
+    }
+
+    @Test
+    fun `renaming emby playlist writes remote item name`() = runTest {
+        val database = createPlaylistTestDatabase()
+        seedEmbySource(database)
+        database.trackDao().upsertAll(listOf(embyTrackEntity(itemId = "song-e1")))
+        val httpClient = RecordingEmbyPlaylistsHttpClient()
+        val repository = RoomPlaylistRepository(
+            database = database,
+            secureCredentialStore = MapPlaylistSecureCredentialStore(
+                mutableMapOf("emby-cred" to serializeEmbyCredential(EmbyCredential("user-1", "token"))),
+            ),
+            httpClient = httpClient,
+            logger = NoopDiagnosticLogger,
+        )
+
+        val playlist = repository.createPlaylist("Road Trip").getOrThrow()
+        repository.addTrackToPlaylist(playlist.id, embyTrack(itemId = "song-e1")).getOrThrow()
+        repository.renamePlaylist(playlist.id, "Renamed Trip").getOrThrow()
+
+        assertEquals("Renamed Trip", httpClient.playlistName)
+        assertTrue(httpClient.requestPaths.contains("/emby/Users/user-1/Items/pl-1"))
+        assertTrue(httpClient.requestPaths.contains("/emby/Items/pl-1"))
+        assertEquals("Renamed Trip", repository.observePlaylistDetail(playlist.id).first()?.name)
+        assertEquals(
+            "Renamed Trip",
+            database.playlistRemoteBindingDao()
+                .getByPlaylistIdAndSourceId(playlist.id, "emby-source")
+                ?.remoteName,
+        )
     }
 
     @Test
@@ -490,6 +590,25 @@ private suspend fun seedNavidromeSource(
     )
 }
 
+private suspend fun seedEmbySource(database: LynMusicDatabase) {
+    database.importSourceDao().upsert(
+        ImportSourceEntity(
+            id = "emby-source",
+            type = "EMBY",
+            label = "Emby",
+            rootReference = "https://emby.example.com/emby",
+            server = null,
+            shareName = null,
+            directoryPath = null,
+            username = "demo",
+            credentialKey = "emby-cred",
+            allowInsecureTls = false,
+            lastScannedAt = null,
+            createdAt = 1L,
+        ),
+    )
+}
+
 private fun localSourceEntity(
     sourceId: String = "local-1",
     enabled: Boolean = true,
@@ -567,6 +686,39 @@ private fun playlistTrackEntity(
     )
 }
 
+private fun embyTrack(itemId: String): Track {
+    return Track(
+        id = embyTrackIdFor("emby-source", itemId),
+        sourceId = "emby-source",
+        title = "Song $itemId",
+        artistName = "Artist Emby",
+        albumTitle = "Album Emby",
+        durationMs = 215_000L,
+        mediaLocator = buildEmbySongLocator("emby-source", itemId),
+        relativePath = "Artist Emby/Album Emby/Song $itemId.flac",
+    )
+}
+
+private fun embyTrackEntity(itemId: String): TrackEntity {
+    return TrackEntity(
+        id = embyTrackIdFor("emby-source", itemId),
+        sourceId = "emby-source",
+        title = "Song $itemId",
+        artistId = "artist:emby",
+        artistName = "Artist Emby",
+        albumId = "album:emby",
+        albumTitle = "Album Emby",
+        durationMs = 215_000L,
+        trackNumber = 1,
+        discNumber = 1,
+        mediaLocator = buildEmbySongLocator("emby-source", itemId),
+        relativePath = "Artist Emby/Album Emby/Song $itemId.flac",
+        artworkLocator = null,
+        sizeBytes = 0L,
+        modifiedAt = 0L,
+    )
+}
+
 private fun navidromeTrack(sourceId: String, songId: String): Track {
     return Track(
         id = navidromeTrackIdFor(sourceId, songId),
@@ -633,6 +785,7 @@ private class RecordingPlaylistsHttpClient(
                 "updatePlaylist" -> {
                     val playlistId = url.parameters["playlistId"].orEmpty()
                     val playlist = playlists.getValue(playlistId)
+                    url.parameters["name"]?.let { playlist.name = it }
                     url.parameters["songIdToAdd"]?.let { playlist.songIds += it }
                     url.parameters["songIndexToRemove"]?.toIntOrNull()?.let { index ->
                         if (index in playlist.songIds.indices) {
@@ -702,9 +855,66 @@ private class RecordingPlaylistsHttpClient(
     }
 }
 
+private class RecordingEmbyPlaylistsHttpClient : LyricsHttpClient {
+    val requestPaths = mutableListOf<String>()
+    val playlistItemIds = mutableListOf<String>()
+    var playlistName: String = "Road Trip"
+
+    override suspend fun request(request: LyricsRequest): Result<LyricsHttpResponse> {
+        val url = requireNotNull(parseUrl(request.url))
+        requestPaths += url.encodedPath
+        val body = when (url.encodedPath) {
+            "/emby/Users/user-1/Items" -> """{"Items":[],"TotalRecordCount":0}"""
+            "/emby/Users/user-1/Items/pl-1" -> """{"Id":"pl-1","Name":"$playlistName","Type":"Playlist"}"""
+            "/emby/Playlists" -> {
+                playlistName = url.parameters["Name"] ?: playlistName
+                """{"Id":"pl-1","Name":"$playlistName"}"""
+            }
+
+            "/emby/Playlists/pl-1/Items" -> when (request.method.name) {
+                "POST" -> {
+                    playlistItemIds += url.parameters["Ids"].orEmpty()
+                    ""
+                }
+
+                "GET" -> {
+                    val items = playlistItemIds.mapIndexed { index, itemId ->
+                        """{"Id":"$itemId","PlaylistItemId":"entry-$index"}"""
+                    }.joinToString(",")
+                    """{"Items":[$items],"TotalRecordCount":${playlistItemIds.size}}"""
+                }
+
+                else -> error("Unexpected Emby playlist method: ${request.method}")
+            }
+
+            "/emby/Playlists/pl-1/Items/Delete" -> {
+                val index = url.parameters["EntryIds"].orEmpty().removePrefix("entry-").toInt()
+                playlistItemIds.removeAt(index)
+                ""
+            }
+
+            "/emby/Items/pl-1" -> when (request.method.name) {
+                "POST" -> {
+                    playlistName = request.body
+                        ?.substringAfter("\"Name\":\"", missingDelimiterValue = playlistName)
+                        ?.substringBefore('"')
+                        ?: playlistName
+                    ""
+                }
+
+                "DELETE" -> ""
+                else -> error("Unexpected Emby playlist item method: ${request.method}")
+            }
+
+            else -> error("Unexpected Emby playlist request: ${request.method} ${request.url}")
+        }
+        return Result.success(LyricsHttpResponse(200, body))
+    }
+}
+
 private data class RemotePlaylistState(
     val id: String,
-    val name: String,
+    var name: String,
     val songIds: MutableList<String>,
 )
 

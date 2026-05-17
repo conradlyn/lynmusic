@@ -26,6 +26,8 @@ import top.iwesley.lyn.music.buildPlayerAppComponent
 import top.iwesley.lyn.music.buildSharedGraph
 import top.iwesley.lyn.music.core.model.ConsoleDiagnosticLogger
 import top.iwesley.lyn.music.core.model.CompactPlayerLyricsPreferencesStore
+import top.iwesley.lyn.music.core.model.EmbyCredential
+import top.iwesley.lyn.music.core.model.EmbySourceDraft
 import top.iwesley.lyn.music.core.model.ImportScanReport
 import top.iwesley.lyn.music.core.model.ImportSourceGateway
 import top.iwesley.lyn.music.core.model.LocalFolderSelection
@@ -66,8 +68,10 @@ import top.iwesley.lyn.music.data.db.openLynMusicDatabase
 import top.iwesley.lyn.music.data.repository.DailyRecommendationDateChangeNotifier
 import top.iwesley.lyn.music.data.repository.DailyRecommendationDateKeyProvider
 import top.iwesley.lyn.music.data.repository.PlayerRuntimeServices
+import top.iwesley.lyn.music.domain.scanEmbyLibrary
 import top.iwesley.lyn.music.domain.scanNavidromeLibrary
 import top.iwesley.lyn.music.domain.scanSubsonicLibrary
+import top.iwesley.lyn.music.domain.testEmbyConnection
 import top.iwesley.lyn.music.domain.testNavidromeConnection
 import top.iwesley.lyn.music.domain.testSubsonicConnection
 import top.iwesley.lyn.music.feature.library.LibrarySourceFilter
@@ -252,6 +256,7 @@ private class IosLyricsHttpClient : LyricsHttpClient {
                 this.method = when (request.method) {
                     RequestMethod.GET -> HttpMethod.Get
                     RequestMethod.POST -> HttpMethod.Post
+                    RequestMethod.DELETE -> HttpMethod.Delete
                 }
                 request.headers.forEach { (key, value) -> headers.append(key, value) }
                 request.body?.let { setBody(it) }
@@ -611,6 +616,34 @@ private class IosImportSourceGateway(
     override suspend fun scanSubsonic(draft: SubsonicSourceDraft, sourceId: String): ImportScanReport {
         return scanSubsonicLibrary(
             draft = draft,
+            sourceId = sourceId,
+            httpClient = navidromeHttpClient,
+            supportedImportExtensions = IOS_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
+        )
+    }
+
+    override suspend fun testEmby(draft: EmbySourceDraft, deviceId: String): EmbyCredential {
+        return testEmbyConnection(draft, deviceId, navidromeHttpClient)
+    }
+
+    override suspend fun testEmbyCredential(
+        draft: EmbySourceDraft,
+        credential: EmbyCredential,
+        deviceId: String,
+    ) {
+        testEmbyConnection(draft, credential, deviceId, navidromeHttpClient)
+    }
+
+    override suspend fun scanEmby(
+        draft: EmbySourceDraft,
+        credential: EmbyCredential,
+        sourceId: String,
+        deviceId: String,
+    ): ImportScanReport {
+        return scanEmbyLibrary(
+            draft = draft,
+            credential = credential,
+            deviceId = deviceId,
             sourceId = sourceId,
             httpClient = navidromeHttpClient,
             supportedImportExtensions = IOS_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,

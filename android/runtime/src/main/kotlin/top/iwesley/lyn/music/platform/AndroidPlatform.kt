@@ -71,6 +71,8 @@ import top.iwesley.lyn.music.core.model.DEFAULT_ANDROID_EXTENSION_DECODER_ENABLE
 import top.iwesley.lyn.music.core.model.DEFAULT_SAMBA_PORT
 import top.iwesley.lyn.music.core.model.DesktopLyricsPreferencesStore
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
+import top.iwesley.lyn.music.core.model.EmbyCredential
+import top.iwesley.lyn.music.core.model.EmbySourceDraft
 import top.iwesley.lyn.music.core.model.GlobalDiagnosticLogger
 import top.iwesley.lyn.music.core.model.ImportScanFailure
 import top.iwesley.lyn.music.core.model.ImportScanReport
@@ -126,6 +128,7 @@ import top.iwesley.lyn.music.core.model.formatSambaEndpoint
 import top.iwesley.lyn.music.core.model.info
 import top.iwesley.lyn.music.core.model.joinSambaPath
 import top.iwesley.lyn.music.core.model.normalizeSambaPath
+import top.iwesley.lyn.music.core.model.parseEmbySongLocator
 import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleSongLocator
 import top.iwesley.lyn.music.core.model.parseSambaLocator
 import top.iwesley.lyn.music.core.model.parseSambaPath
@@ -139,8 +142,11 @@ import top.iwesley.lyn.music.data.repository.DailyRecommendationDateChangeNotifi
 import top.iwesley.lyn.music.data.repository.DailyRecommendationDateKeyProvider
 import top.iwesley.lyn.music.data.repository.PlayerRuntimeServices
 import top.iwesley.lyn.music.domain.resolveNavidromeStreamUrl
+import top.iwesley.lyn.music.domain.resolveEmbyStreamUrl
+import top.iwesley.lyn.music.domain.scanEmbyLibrary
 import top.iwesley.lyn.music.domain.scanNavidromeLibrary
 import top.iwesley.lyn.music.domain.scanSubsonicLibrary
+import top.iwesley.lyn.music.domain.testEmbyConnection
 import top.iwesley.lyn.music.domain.testNavidromeConnection
 import top.iwesley.lyn.music.domain.testSubsonicConnection
 import top.iwesley.lyn.music.feature.library.LibrarySourceFilter
@@ -393,6 +399,7 @@ internal class AndroidLyricsHttpClient : LyricsHttpClient {
                 this.method = when (request.method) {
                     RequestMethod.GET -> HttpMethod.Get
                     RequestMethod.POST -> HttpMethod.Post
+                    RequestMethod.DELETE -> HttpMethod.Delete
                 }
                 request.headers.forEach { (key, value) -> headers.append(key, value) }
                 request.body?.let { setBody(it) }
@@ -1401,6 +1408,35 @@ private class AndroidImportSourceGateway(
         )
     }
 
+    override suspend fun testEmby(draft: EmbySourceDraft, deviceId: String): EmbyCredential {
+        return testEmbyConnection(draft, deviceId, navidromeHttpClient, logger)
+    }
+
+    override suspend fun testEmbyCredential(
+        draft: EmbySourceDraft,
+        credential: EmbyCredential,
+        deviceId: String,
+    ) {
+        testEmbyConnection(draft, credential, deviceId, navidromeHttpClient, logger)
+    }
+
+    override suspend fun scanEmby(
+        draft: EmbySourceDraft,
+        credential: EmbyCredential,
+        sourceId: String,
+        deviceId: String,
+    ): ImportScanReport {
+        return scanEmbyLibrary(
+            draft = draft,
+            credential = credential,
+            deviceId = deviceId,
+            sourceId = sourceId,
+            httpClient = navidromeHttpClient,
+            supportedImportExtensions = ANDROID_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
+            logger = logger,
+        )
+    }
+
     private fun scanLocalTree(treeUri: Uri): ImportScanReport {
         val root = DocumentFile.fromTreeUri(activity, treeUri) ?: error("Cannot open tree uri: $treeUri")
         val tracks = mutableListOf<top.iwesley.lyn.music.core.model.ImportedTrackCandidate>()
@@ -2159,8 +2195,16 @@ internal class AndroidPlaybackGateway(
                         ImportSourceType.NAVIDROME -> "Navidrome"
                         ImportSourceType.SUBSONIC -> "Subsonic"
                         else -> null
+                    } ?: if (parseEmbySongLocator(track.mediaLocator) != null) {
+                        "Emby"
+                    } else {
+                        null
                     }
-                    currentRemoteLabel = if (subsonicCompatible != null) track.mediaLocator else null
+                    currentRemoteLabel = if (subsonicCompatible != null || parseEmbySongLocator(track.mediaLocator) != null) {
+                        track.mediaLocator
+                    } else {
+                        null
+                    }
                     player.setMediaItem(MediaItem.fromUri(checkNotNull(resolvedUri)))
                 }
                 mutableState.update {
@@ -2306,6 +2350,11 @@ internal class AndroidPlaybackGateway(
             secureCredentialStore = secureCredentialStore,
             locator = locator,
             audioQuality = navidromeAudioQuality ?: NavidromeAudioQuality.Original,
+        )?.let { return Uri.parse(it) }
+        resolveEmbyStreamUrl(
+            database = database,
+            secureCredentialStore = secureCredentialStore,
+            locator = locator,
         )?.let { return Uri.parse(it) }
         val samba = parseSambaLocator(locator) ?: return Uri.parse(locator)
         if (!playbackPreferencesStore.useSambaCache.value) {

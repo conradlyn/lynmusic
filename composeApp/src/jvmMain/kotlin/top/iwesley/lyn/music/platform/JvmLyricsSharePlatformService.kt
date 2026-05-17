@@ -25,6 +25,7 @@ import top.iwesley.lyn.music.core.model.LyricsSharePlatformService
 import top.iwesley.lyn.music.core.model.LyricsShareSaveResult
 import top.iwesley.lyn.music.core.model.UnsupportedLyricsShareFontLibraryPlatformService
 import top.iwesley.lyn.music.core.model.normalizedArtworkCacheLocator
+import top.iwesley.lyn.music.core.model.parseEmbyCoverLocator
 import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleCoverLocator
 import top.iwesley.lyn.music.core.model.resolveArtworkCacheTarget
 
@@ -127,6 +128,7 @@ private suspend fun readJvmLyricsShareArtworkTargetBytes(target: String): ByteAr
 
 private fun shouldCacheLyricsShareArtwork(normalizedLocator: String): Boolean {
     return parseSubsonicCompatibleCoverLocator(normalizedLocator) != null ||
+        parseEmbyCoverLocator(normalizedLocator) != null ||
         normalizedLocator.startsWith("http://", ignoreCase = true) ||
         normalizedLocator.startsWith("https://", ignoreCase = true)
 }

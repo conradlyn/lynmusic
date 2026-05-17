@@ -8,6 +8,8 @@ private const val NAVIDROME_SCHEME = "lynmusic-navidrome://"
 private const val NAVIDROME_COVER_SCHEME = "lynmusic-navidrome-cover://"
 private const val SUBSONIC_SCHEME = "lynmusic-subsonic://"
 private const val SUBSONIC_COVER_SCHEME = "lynmusic-subsonic-cover://"
+private const val EMBY_SCHEME = "lynmusic-emby://"
+private const val EMBY_COVER_SCHEME = "lynmusic-emby-cover://"
 const val DEFAULT_SAMBA_PORT = 445
 
 data class SubsonicCompatibleLocator(
@@ -180,7 +182,27 @@ fun parseSubsonicCompatibleCoverLocator(locator: String): SubsonicCompatibleLoca
     return null
 }
 
+fun buildEmbySongLocator(sourceId: String, itemId: String): String {
+    return EMBY_SCHEME + sourceId.encodeURLParameter() + "/" + itemId.encodeURLParameter()
+}
+
+fun parseEmbySongLocator(locator: String): Pair<String, String>? {
+    return parseEmbyLocator(locator, EMBY_SCHEME)
+}
+
+fun buildEmbyCoverLocator(sourceId: String, itemId: String): String {
+    return EMBY_COVER_SCHEME + sourceId.encodeURLParameter() + "/" + itemId.encodeURLParameter()
+}
+
+fun parseEmbyCoverLocator(locator: String): Pair<String, String>? {
+    return parseEmbyLocator(locator, EMBY_COVER_SCHEME)
+}
+
 private fun parseNavidromeLocator(locator: String, scheme: String): Pair<String, String>? {
+    return parseSubsonicLocator(locator, scheme)
+}
+
+private fun parseEmbyLocator(locator: String, scheme: String): Pair<String, String>? {
     return parseSubsonicLocator(locator, scheme)
 }
 

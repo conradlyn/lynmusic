@@ -9,6 +9,8 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
+import top.iwesley.lyn.music.core.model.EmbyCredential
+import top.iwesley.lyn.music.core.model.EmbySourceDraft
 import top.iwesley.lyn.music.core.model.ImportScanFailure
 import top.iwesley.lyn.music.core.model.ImportScanReport
 import top.iwesley.lyn.music.core.model.ImportSourceGateway
@@ -21,10 +23,13 @@ import top.iwesley.lyn.music.core.model.SecureCredentialStore
 import top.iwesley.lyn.music.core.model.SubsonicAuthMode
 import top.iwesley.lyn.music.core.model.SubsonicSourceDraft
 import top.iwesley.lyn.music.core.model.WebDavSourceDraft
+import top.iwesley.lyn.music.core.model.buildEmbySongLocator
 import top.iwesley.lyn.music.core.model.normalizeWebDavRootUrl
 import top.iwesley.lyn.music.data.db.ImportSourceEntity
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
 import top.iwesley.lyn.music.data.db.buildLynMusicDatabase
+import top.iwesley.lyn.music.domain.EMBY_DEVICE_ID_CREDENTIAL_KEY
+import top.iwesley.lyn.music.domain.serializeEmbyCredential
 
 class ImportSourceRepositoryTest {
 
@@ -496,6 +501,109 @@ class ImportSourceRepositoryTest {
     }
 
     @Test
+    fun `adding emby source stores token credential and imports tracks`() = runTest {
+        val database = createImportTestDatabase()
+        val gateway = RecordingImportSourceGateway(
+            embyScanReportFactory = { sourceId ->
+                ImportScanReport(
+                    tracks = listOf(
+                        ImportedTrackCandidate(
+                            title = "Emby Song",
+                            mediaLocator = buildEmbySongLocator(sourceId, "song-1"),
+                            relativePath = "Artist/Album/Emby Song.flac",
+                        ),
+                    ),
+                    discoveredAudioFileCount = 1,
+                )
+            },
+        )
+        val credentials = ImportTestSecureCredentialStore()
+        val repository = RoomImportSourceRepository(
+            database = database,
+            gateway = gateway,
+            secureCredentialStore = credentials,
+        )
+
+        val summary = repository.addEmbySource(
+            EmbySourceDraft(
+                label = " Emby ",
+                baseUrl = "https://emby.example.com/",
+                username = " demo ",
+                password = "secret",
+            ),
+        ).getOrThrow()
+
+        assertEquals(1, gateway.embyTestCount)
+        assertEquals(1, gateway.embyScanCount)
+        assertEquals("https://emby.example.com", gateway.lastEmbyScanDraft?.baseUrl)
+        assertEquals(EmbyCredential(userId = "user-1", accessToken = "emby-token"), gateway.lastEmbyScanCredential)
+        assertNotNull(gateway.lastEmbyTestDeviceId)
+        assertEquals(gateway.lastEmbyTestDeviceId, gateway.lastEmbyScanDeviceId)
+        assertEquals(gateway.lastEmbyTestDeviceId, credentials.get(EMBY_DEVICE_ID_CREDENTIAL_KEY))
+        val stored = assertNotNull(database.importSourceDao().getById(summary.sourceId))
+        assertEquals(ImportSourceType.EMBY.name, stored.type)
+        assertEquals("Emby", stored.label)
+        assertEquals("https://emby.example.com", stored.rootReference)
+        assertEquals("demo", stored.username)
+        assertEquals(
+            serializeEmbyCredential(EmbyCredential(userId = "user-1", accessToken = "emby-token")),
+            credentials.get("credential-${summary.sourceId}"),
+        )
+        val track = database.trackDao().getAll().single()
+        assertEquals("track:${summary.sourceId}:emby:song-1", track.id)
+        assertEquals(buildEmbySongLocator(summary.sourceId, "song-1"), track.mediaLocator)
+    }
+
+    @Test
+    fun `testing updated emby source with retained credential validates token against updated draft`() = runTest {
+        val database = createImportTestDatabase()
+        val storedCredential = EmbyCredential(userId = "user-1", accessToken = "old-token")
+        val credentials = ImportTestSecureCredentialStore(
+            mutableMapOf("credential-emby-1" to serializeEmbyCredential(storedCredential)),
+        )
+        database.importSourceDao().upsert(
+            ImportSourceEntity(
+                id = "emby-1",
+                type = ImportSourceType.EMBY.name,
+                label = "Emby",
+                rootReference = "https://old.example.com",
+                server = null,
+                shareName = null,
+                directoryPath = null,
+                username = "demo",
+                credentialKey = "credential-emby-1",
+                allowInsecureTls = false,
+                lastScannedAt = null,
+                createdAt = 1L,
+            ),
+        )
+        val gateway = RecordingImportSourceGateway()
+        val repository = createRepository(
+            database = database,
+            gateway = gateway,
+            secureCredentialStore = credentials,
+        )
+
+        val result = repository.testUpdatedEmbySource(
+            sourceId = "emby-1",
+            draft = EmbySourceDraft(
+                label = " Emby ",
+                baseUrl = " https://new.example.com/base/ ",
+                username = " demo ",
+                password = "",
+            ),
+            keepExistingCredentialWhenBlankPassword = true,
+        )
+
+        assertTrue(result.isSuccess)
+        assertEquals(0, gateway.embyTestCount)
+        assertEquals(1, gateway.embyCredentialTestCount)
+        assertEquals("https://new.example.com/base", gateway.lastEmbyCredentialTestDraft?.baseUrl)
+        assertEquals(storedCredential, gateway.lastEmbyCredentialTestCredential)
+        assertEquals(credentials.get(EMBY_DEVICE_ID_CREDENTIAL_KEY), gateway.lastEmbyCredentialTestDeviceId)
+    }
+
+    @Test
     fun `rescanning navidrome source returns scan summary with failures`() = runTest {
         val database = createImportTestDatabase()
         val gateway = RecordingImportSourceGateway(
@@ -624,6 +732,7 @@ private fun importSourceEntity(
 private class RecordingImportSourceGateway(
     var nextLocalFolderSelection: LocalFolderSelection? = null,
     private val scanReport: ImportScanReport = ImportScanReport(tracks = emptyList()),
+    private val embyScanReportFactory: ((String) -> ImportScanReport)? = null,
 ) : ImportSourceGateway {
     var localFolderScanCount: Int = 0
     var sambaTestCount: Int = 0
@@ -636,6 +745,17 @@ private class RecordingImportSourceGateway(
     var subsonicTestCount: Int = 0
     var subsonicScanCount: Int = 0
     var lastSubsonicScanDraft: SubsonicSourceDraft? = null
+    var embyTestCount: Int = 0
+    var embyCredentialTestCount: Int = 0
+    var embyScanCount: Int = 0
+    var lastEmbyTestDraft: EmbySourceDraft? = null
+    var lastEmbyTestDeviceId: String? = null
+    var lastEmbyCredentialTestDraft: EmbySourceDraft? = null
+    var lastEmbyCredentialTestCredential: EmbyCredential? = null
+    var lastEmbyCredentialTestDeviceId: String? = null
+    var lastEmbyScanDraft: EmbySourceDraft? = null
+    var lastEmbyScanCredential: EmbyCredential? = null
+    var lastEmbyScanDeviceId: String? = null
 
     override suspend fun pickLocalFolder(): LocalFolderSelection? = nextLocalFolderSelection
 
@@ -680,6 +800,37 @@ private class RecordingImportSourceGateway(
         subsonicScanCount += 1
         lastSubsonicScanDraft = draft
         return scanReport
+    }
+
+    override suspend fun testEmby(draft: EmbySourceDraft, deviceId: String): EmbyCredential {
+        embyTestCount += 1
+        lastEmbyTestDraft = draft
+        lastEmbyTestDeviceId = deviceId
+        return EmbyCredential(userId = "user-1", accessToken = "emby-token")
+    }
+
+    override suspend fun testEmbyCredential(
+        draft: EmbySourceDraft,
+        credential: EmbyCredential,
+        deviceId: String,
+    ) {
+        embyCredentialTestCount += 1
+        lastEmbyCredentialTestDraft = draft
+        lastEmbyCredentialTestCredential = credential
+        lastEmbyCredentialTestDeviceId = deviceId
+    }
+
+    override suspend fun scanEmby(
+        draft: EmbySourceDraft,
+        credential: EmbyCredential,
+        sourceId: String,
+        deviceId: String,
+    ): ImportScanReport {
+        embyScanCount += 1
+        lastEmbyScanDraft = draft
+        lastEmbyScanCredential = credential
+        lastEmbyScanDeviceId = deviceId
+        return embyScanReportFactory?.invoke(sourceId) ?: scanReport
     }
 }
 

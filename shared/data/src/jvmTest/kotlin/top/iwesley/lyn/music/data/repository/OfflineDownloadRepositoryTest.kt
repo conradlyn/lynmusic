@@ -15,6 +15,7 @@ import top.iwesley.lyn.music.core.model.OfflineDownloadProgress
 import top.iwesley.lyn.music.core.model.OfflineDownloadResult
 import top.iwesley.lyn.music.core.model.OfflineDownloadStatus
 import top.iwesley.lyn.music.core.model.Track
+import top.iwesley.lyn.music.core.model.buildEmbySongLocator
 import top.iwesley.lyn.music.core.model.buildNavidromeSongLocator
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
 import top.iwesley.lyn.music.data.db.OfflineDownloadEntity
@@ -65,6 +66,27 @@ class OfflineDownloadRepositoryTest {
         assertTrue(result.isFailure)
         assertNull(database.offlineDownloadDao().getByTrackId("local-track"))
         assertEquals(emptyList(), gateway.downloadRequests)
+    }
+
+    @Test
+    fun `emby track downloads as original quality even when transcoded quality requested`() = runTest {
+        val database = createOfflineTestDatabase()
+        val gateway = RecordingOfflineDownloadGateway(
+            result = OfflineDownloadResult(
+                localMediaLocator = "offline://emby.flac",
+                sizeBytes = 4096L,
+                totalBytes = 4096L,
+            ),
+        )
+        val repository = DefaultOfflineDownloadRepository(database, gateway)
+
+        val result = repository.download(embyTrack(), NavidromeAudioQuality.Kbps192)
+
+        assertTrue(result.isSuccess)
+        val row = database.offlineDownloadDao().getByTrackId("emby-track")
+        assertEquals(OfflineDownloadStatus.Completed.name, row?.status)
+        assertEquals(NavidromeAudioQuality.Original.name, row?.quality)
+        assertEquals(listOf(NavidromeAudioQuality.Original), gateway.downloadRequests.map { it.second })
     }
 
     @Test
@@ -267,6 +289,18 @@ private fun localTrack(): Track {
         title = "Local",
         mediaLocator = "file:///music/local.flac",
         relativePath = "local.flac",
+        sizeBytes = 100L,
+        modifiedAt = 1L,
+    )
+}
+
+private fun embyTrack(): Track {
+    return Track(
+        id = "emby-track",
+        sourceId = "emby-source",
+        title = "Emby",
+        mediaLocator = buildEmbySongLocator("emby-source", "song-1"),
+        relativePath = "Artist/Album/Emby.flac",
         sizeBytes = 100L,
         modifiedAt = 1L,
     )

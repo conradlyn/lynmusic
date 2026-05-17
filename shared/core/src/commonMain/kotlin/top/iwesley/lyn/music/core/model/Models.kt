@@ -27,6 +27,7 @@ enum class ImportSourceType {
     WEBDAV,
     NAVIDROME,
     SUBSONIC,
+    EMBY,
 }
 
 enum class SubsonicAuthMode {
@@ -44,6 +45,7 @@ enum class LyricsResponseFormat {
 enum class RequestMethod {
     GET,
     POST,
+    DELETE,
 }
 
 data class Artist(
@@ -189,6 +191,13 @@ data class SubsonicSourceDraft(
     val username: String = "",
     val credential: String,
     val authMode: SubsonicAuthMode = SubsonicAuthMode.PASSWORD,
+)
+
+data class EmbySourceDraft(
+    val label: String,
+    val baseUrl: String,
+    val username: String,
+    val password: String,
 )
 
 data class ImportedTrackCandidate(
@@ -430,6 +439,7 @@ data class PlatformCapabilities(
     val supportsNavidromeImport: Boolean,
     val supportsSystemMediaControls: Boolean,
     val supportsSubsonicImport: Boolean = supportsNavidromeImport,
+    val supportsEmbyImport: Boolean = supportsNavidromeImport,
     val supportsAppDisplayScaleAdjustment: Boolean = false,
     val supportsAndroidExtensionDecoder: Boolean = false,
     val supportsDesktopLyrics: Boolean = false,
@@ -457,7 +467,26 @@ interface ImportSourceGateway {
     suspend fun scanSubsonic(draft: SubsonicSourceDraft, sourceId: String): ImportScanReport {
         throw UnsupportedOperationException("Subsonic import is not supported on this platform.")
     }
+    suspend fun testEmby(draft: EmbySourceDraft, deviceId: String): EmbyCredential {
+        throw UnsupportedOperationException("Emby import is not supported on this platform.")
+    }
+    suspend fun testEmbyCredential(draft: EmbySourceDraft, credential: EmbyCredential, deviceId: String) {
+        throw UnsupportedOperationException("Emby import is not supported on this platform.")
+    }
+    suspend fun scanEmby(
+        draft: EmbySourceDraft,
+        credential: EmbyCredential,
+        sourceId: String,
+        deviceId: String,
+    ): ImportScanReport {
+        throw UnsupportedOperationException("Emby import is not supported on this platform.")
+    }
 }
+
+data class EmbyCredential(
+    val userId: String,
+    val accessToken: String,
+)
 
 interface SecureCredentialStore {
     suspend fun put(key: String, value: String)

@@ -1305,6 +1305,7 @@ internal fun SourceCard(
                                 displayWebDavRootUrl(state.source.rootReference)
                             top.iwesley.lyn.music.core.model.ImportSourceType.NAVIDROME -> state.source.rootReference
                             top.iwesley.lyn.music.core.model.ImportSourceType.SUBSONIC -> state.source.rootReference
+                            top.iwesley.lyn.music.core.model.ImportSourceType.EMBY -> state.source.rootReference
                         },
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 2,

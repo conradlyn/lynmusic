@@ -17,11 +17,13 @@ import top.iwesley.lyn.music.core.model.LocalFolderSelection
 import top.iwesley.lyn.music.core.model.LyricsHttpClient
 import top.iwesley.lyn.music.core.model.LyricsHttpResponse
 import top.iwesley.lyn.music.core.model.LyricsRequest
+import top.iwesley.lyn.music.core.model.EmbyCredential
 import top.iwesley.lyn.music.core.model.NavidromeSourceDraft
 import top.iwesley.lyn.music.core.model.NoopDiagnosticLogger
 import top.iwesley.lyn.music.core.model.SambaSourceDraft
 import top.iwesley.lyn.music.core.model.SecureCredentialStore
 import top.iwesley.lyn.music.core.model.Track
+import top.iwesley.lyn.music.core.model.buildEmbySongLocator
 import top.iwesley.lyn.music.core.model.WebDavSourceDraft
 import top.iwesley.lyn.music.core.model.buildNavidromeSongLocator
 import top.iwesley.lyn.music.data.db.FavoriteTrackEntity
@@ -29,6 +31,7 @@ import top.iwesley.lyn.music.data.db.ImportSourceEntity
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
 import top.iwesley.lyn.music.data.db.TrackEntity
 import top.iwesley.lyn.music.data.db.buildLynMusicDatabase
+import top.iwesley.lyn.music.domain.serializeEmbyCredential
 
 class FavoritesRepositoryTest {
 
@@ -320,6 +323,72 @@ class FavoritesRepositoryTest {
     }
 
     @Test
+    fun `emby toggle favorite writes remote before updating local cache`() = runTest {
+        val database = createTestDatabase()
+        seedEmbySource(database)
+        val httpClient = RecordingEmbyFavoritesHttpClient()
+        val repository = RoomFavoritesRepository(
+            database = database,
+            secureCredentialStore = MapSecureCredentialStore(
+                mutableMapOf("emby-cred" to serializeEmbyCredential(EmbyCredential("user-1", "token"))),
+            ),
+            httpClient = httpClient,
+            logger = NoopDiagnosticLogger,
+        )
+        val track = embyTrack(itemId = "song-8")
+
+        assertEquals(true, repository.toggleFavorite(track).getOrThrow())
+        assertEquals("song-8", database.favoriteTrackDao().getByTrackId(track.id)?.remoteSongId)
+
+        assertEquals(false, repository.toggleFavorite(track).getOrThrow())
+        assertNull(database.favoriteTrackDao().getByTrackId(track.id))
+        assertEquals(
+            listOf(
+                "/emby/Users/user-1/FavoriteItems/song-8",
+                "/emby/Users/user-1/FavoriteItems/song-8/Delete",
+            ),
+            httpClient.requestPaths,
+        )
+    }
+
+    @Test
+    fun `emby refresh maps favorite items to local track ids`() = runTest {
+        val database = createTestDatabase()
+        seedEmbySource(database)
+        database.trackDao().upsertAll(
+            listOf(
+                embyTrackEntity(itemId = "song-1"),
+                embyTrackEntity(itemId = "song-2"),
+            ),
+        )
+        val repository = RoomFavoritesRepository(
+            database = database,
+            secureCredentialStore = MapSecureCredentialStore(
+                mutableMapOf("emby-cred" to serializeEmbyCredential(EmbyCredential("user-1", "token"))),
+            ),
+            httpClient = RecordingEmbyFavoritesHttpClient(favoriteItemIds = listOf("song-2", "song-1")),
+            logger = NoopDiagnosticLogger,
+        )
+
+        repository.refreshNavidromeFavorites().getOrThrow()
+
+        assertEquals(
+            setOf(
+                embyTrackIdFor("emby-source", "song-1"),
+                embyTrackIdFor("emby-source", "song-2"),
+            ),
+            database.favoriteTrackDao().getBySourceId("emby-source").mapTo(linkedSetOf()) { it.trackId },
+        )
+        assertEquals(
+            listOf(
+                embyTrackIdFor("emby-source", "song-2"),
+                embyTrackIdFor("emby-source", "song-1"),
+            ),
+            repository.favoriteTracks.first().map { it.id },
+        )
+    }
+
+    @Test
     fun `source deletion and local rescan prune invalid favorites`() = runTest {
         val database = createTestDatabase()
         database.importSourceDao().upsert(localSourceEntity())
@@ -382,6 +451,25 @@ private suspend fun seedNavidromeSource(database: LynMusicDatabase) {
     )
 }
 
+private suspend fun seedEmbySource(database: LynMusicDatabase) {
+    database.importSourceDao().upsert(
+        ImportSourceEntity(
+            id = "emby-source",
+            type = "EMBY",
+            label = "Emby",
+            rootReference = "https://emby.example.com/emby",
+            server = null,
+            shareName = null,
+            directoryPath = null,
+            username = "demo",
+            credentialKey = "emby-cred",
+            allowInsecureTls = false,
+            lastScannedAt = null,
+            createdAt = 1L,
+        ),
+    )
+}
+
 private fun localSourceEntity(sourceId: String = "local-1"): ImportSourceEntity {
     return ImportSourceEntity(
         id = sourceId,
@@ -426,6 +514,39 @@ private fun localTrackEntity(): TrackEntity {
         discNumber = 1,
         mediaLocator = "file:///music/morning-light.mp3",
         relativePath = "Artist A/Morning Light.mp3",
+        artworkLocator = null,
+        sizeBytes = 0L,
+        modifiedAt = 0L,
+    )
+}
+
+private fun embyTrack(itemId: String): Track {
+    return Track(
+        id = embyTrackIdFor("emby-source", itemId),
+        sourceId = "emby-source",
+        title = "Emby $itemId",
+        artistName = "Artist E",
+        albumTitle = "Album E",
+        durationMs = 215_000L,
+        mediaLocator = buildEmbySongLocator("emby-source", itemId),
+        relativePath = "Artist E/Album E/Emby $itemId.flac",
+    )
+}
+
+private fun embyTrackEntity(itemId: String): TrackEntity {
+    return TrackEntity(
+        id = embyTrackIdFor("emby-source", itemId),
+        sourceId = "emby-source",
+        title = "Emby $itemId",
+        artistId = "artist:artist e",
+        artistName = "Artist E",
+        albumId = "album:artist e:album e",
+        albumTitle = "Album E",
+        durationMs = 215_000L,
+        trackNumber = 1,
+        discNumber = 1,
+        mediaLocator = buildEmbySongLocator("emby-source", itemId),
+        relativePath = "Artist E/Album E/Emby $itemId.flac",
         artworkLocator = null,
         sizeBytes = 0L,
         modifiedAt = 0L,
@@ -509,6 +630,29 @@ private class RecordingFavoritesHttpClient(
               }
             }
         """.trimIndent()
+    }
+}
+
+private class RecordingEmbyFavoritesHttpClient(
+    private val favoriteItemIds: List<String> = emptyList(),
+) : LyricsHttpClient {
+    val requestPaths = mutableListOf<String>()
+
+    override suspend fun request(request: LyricsRequest): Result<LyricsHttpResponse> {
+        val url = requireNotNull(parseUrl(request.url))
+        requestPaths += url.encodedPath
+        val body = when {
+            url.encodedPath.endsWith("/FavoriteItems/song-8") -> ""
+            url.encodedPath.endsWith("/FavoriteItems/song-8/Delete") -> ""
+            url.encodedPath.endsWith("/Users/user-1/Items") -> favoriteItemsBody()
+            else -> error("Unexpected Emby request: ${request.method} ${request.url}")
+        }
+        return Result.success(LyricsHttpResponse(statusCode = 200, body = body))
+    }
+
+    private fun favoriteItemsBody(): String {
+        val items = favoriteItemIds.joinToString(",") { itemId -> """{"Id":"$itemId"}""" }
+        return """{"Items":[$items],"TotalRecordCount":${favoriteItemIds.size}}"""
     }
 }
 

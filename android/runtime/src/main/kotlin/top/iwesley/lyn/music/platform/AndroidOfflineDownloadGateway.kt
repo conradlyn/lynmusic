@@ -34,10 +34,12 @@ import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.buildBasicAuthorizationHeader
 import top.iwesley.lyn.music.core.model.buildWebDavTrackUrl
 import top.iwesley.lyn.music.core.model.info
+import top.iwesley.lyn.music.core.model.parseEmbySongLocator
 import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleSongLocator
 import top.iwesley.lyn.music.core.model.parseSambaLocator
 import top.iwesley.lyn.music.core.model.parseWebDavLocator
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
+import top.iwesley.lyn.music.domain.resolveEmbyDownloadUrl
 import top.iwesley.lyn.music.domain.resolveNavidromeDownloadUrl
 import top.iwesley.lyn.music.domain.resolveNavidromeStreamUrl
 
@@ -85,6 +87,18 @@ private class AndroidOfflineDownloadGateway(
                     } else {
                         resolveNavidromeStreamUrl(database, secureCredentialStore, track.mediaLocator, quality)
                     } ?: error("Subsonic-compatible 来源不可用。")
+                    downloadHttpFile(
+                        requestUrl = requestUrl,
+                        authorizationHeader = null,
+                        allowInsecureTls = false,
+                        target = partFile,
+                        onProgress = onProgress,
+                    )
+                }
+
+                parseEmbySongLocator(track.mediaLocator) != null -> {
+                    val requestUrl = resolveEmbyDownloadUrl(database, secureCredentialStore, track.mediaLocator)
+                        ?: error("Emby 来源不可用。")
                     downloadHttpFile(
                         requestUrl = requestUrl,
                         authorizationHeader = null,

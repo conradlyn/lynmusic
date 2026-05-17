@@ -31,10 +31,12 @@ import top.iwesley.lyn.music.data.db.ImportSourceEntity
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
 import top.iwesley.lyn.music.data.db.TrackEntity
 import top.iwesley.lyn.music.data.db.TrackPlaybackStatsEntity
+import top.iwesley.lyn.music.domain.fetchEmbyRecentTracks
 import top.iwesley.lyn.music.domain.NavidromeResolvedSource
 import top.iwesley.lyn.music.domain.isSubsonicCompatibleSourceType
 import top.iwesley.lyn.music.domain.normalizeSubsonicBaseUrl
 import top.iwesley.lyn.music.domain.requestNavidromeJson
+import top.iwesley.lyn.music.domain.resolveEmbySource
 import top.iwesley.lyn.music.domain.toSubsonicAuthMode
 
 interface MyRepository {
@@ -164,10 +166,14 @@ class RoomMyRepository(
         return runCatching {
             val failures = mutableListOf<Throwable>()
             database.importSourceDao().getAll()
-                .filter { it.subsonicCompatibleSourceType() != null && it.enabled }
+                .filter { (it.subsonicCompatibleSourceType() != null || it.isEmbySource()) && it.enabled }
                 .forEach { source ->
                     runCatching {
-                        refreshSubsonicCompatibleRecentPlays(source)
+                        if (source.isEmbySource()) {
+                            refreshEmbyRecentPlays(source)
+                        } else {
+                            refreshSubsonicCompatibleRecentPlays(source)
+                        }
                     }.onFailure { throwable ->
                         if (throwable is CancellationException) throw throwable
                         failures += throwable
@@ -255,6 +261,69 @@ class RoomMyRepository(
             nowMs = generatedAt,
             limit = dailyRecommendationLimit,
         )
+    }
+
+    private suspend fun refreshEmbyRecentPlays(source: ImportSourceEntity) {
+        val resolved = resolveEmbySource(database, secureCredentialStore, source.id)
+            ?: error("Emby 来源缺少有效凭据。")
+        val recentItems = fetchEmbyRecentTracks(
+            httpClient = httpClient,
+            source = resolved,
+            limit = max(recentTrackLimit, recentAlbumLimit).coerceAtLeast(DEFAULT_RECENT_ITEM_LIMIT) * 2,
+            logger = logger,
+        )
+        if (recentItems.isEmpty()) return
+        val trackIds = recentItems
+            .map { item -> embyTrackIdFor(source.id, item.itemId) }
+            .distinct()
+        val localTracksById = database.trackDao()
+            .getByIds(trackIds)
+            .associateBy { it.id }
+        if (localTracksById.isEmpty()) return
+        val existingTrackStatsById = database.trackPlaybackStatsDao()
+            .getByTrackIds(localTracksById.keys.toList())
+            .associateBy { it.trackId }
+        val candidateAlbumIds = localTracksById.values
+            .mapNotNull { it.albumId?.takeIf(String::isNotBlank) }
+            .distinct()
+        val existingAlbumStatsById = if (candidateAlbumIds.isEmpty()) {
+            emptyMap()
+        } else {
+            database.albumPlaybackStatsDao()
+                .getByAlbumIds(candidateAlbumIds)
+                .associateBy { it.albumId }
+        }
+        val albumUpdates = mutableMapOf<String, EmbyAlbumRecentSync>()
+        recentItems.forEach { item ->
+            val playedAt = item.playedAt ?: return@forEach
+            val trackId = embyTrackIdFor(source.id, item.itemId)
+            val localTrack = localTracksById[trackId] ?: return@forEach
+            database.trackPlaybackStatsDao().setPlayStats(
+                trackId = localTrack.id,
+                sourceId = localTrack.sourceId,
+                playCount = resolveSyncedPlayCount(
+                    remotePlayCount = item.playCount,
+                    existingPlayCount = existingTrackStatsById[trackId]?.playCount,
+                ),
+                lastPlayedAt = playedAt,
+            )
+            val albumId = localTrack.albumId?.takeIf(String::isNotBlank) ?: return@forEach
+            val current = albumUpdates[albumId]
+            albumUpdates[albumId] = EmbyAlbumRecentSync(
+                lastPlayedAt = maxOf(current?.lastPlayedAt ?: Long.MIN_VALUE, playedAt),
+                playCount = listOfNotNull(current?.playCount, item.playCount).maxOrNull(),
+            )
+        }
+        albumUpdates.forEach { (albumId, update) ->
+            database.albumPlaybackStatsDao().setPlayStats(
+                albumId = albumId,
+                playCount = resolveSyncedPlayCount(
+                    remotePlayCount = update.playCount,
+                    existingPlayCount = existingAlbumStatsById[albumId]?.playCount,
+                ),
+                lastPlayedAt = update.lastPlayedAt,
+            )
+        }
     }
 
     private suspend fun refreshSubsonicCompatibleRecentPlays(source: ImportSourceEntity) {
@@ -430,6 +499,10 @@ class RoomMyRepository(
     private fun ImportSourceEntity.subsonicCompatibleSourceType(): ImportSourceType? {
         val sourceType = runCatching { ImportSourceType.valueOf(type) }.getOrNull() ?: return null
         return sourceType.takeIf(::isSubsonicCompatibleSourceType)
+    }
+
+    private fun ImportSourceEntity.isEmbySource(): Boolean {
+        return type == ImportSourceType.EMBY.name
     }
 }
 
@@ -633,6 +706,11 @@ private data class NavidromeAlbumDetailPayload(
 private data class NavidromeRecentSongPayload(
     val songId: String,
     val playedAt: Long?,
+    val playCount: Int?,
+)
+
+private data class EmbyAlbumRecentSync(
+    val lastPlayedAt: Long,
     val playCount: Int?,
 )
 

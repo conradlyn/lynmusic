@@ -34,6 +34,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.List
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Sync
@@ -704,6 +705,9 @@ internal fun PlaylistsTab(
                     onRefresh = { onPlaylistsIntent(PlaylistsIntent.Refresh) },
                     onSourceFilterChanged = { onPlaylistsIntent(PlaylistsIntent.SourceFilterChanged(it)) },
                     onCreate = { showCreateDialog = true },
+                    onRename = { playlistId, name ->
+                        onPlaylistsIntent(PlaylistsIntent.RenamePlaylist(playlistId, name))
+                    },
                     onDelete = { onPlaylistsIntent(PlaylistsIntent.DeletePlaylist(it)) },
                     onSelect = { onPlaylistsIntent(PlaylistsIntent.SelectPlaylist(it)) },
                     modifier = Modifier.weight(0.36f).fillMaxHeight(),
@@ -749,6 +753,9 @@ internal fun PlaylistsTab(
                 onRefresh = { onPlaylistsIntent(PlaylistsIntent.Refresh) },
                 onSourceFilterChanged = { onPlaylistsIntent(PlaylistsIntent.SourceFilterChanged(it)) },
                 onCreate = { showCreateDialog = true },
+                onRename = { playlistId, name ->
+                    onPlaylistsIntent(PlaylistsIntent.RenamePlaylist(playlistId, name))
+                },
                 onDelete = { onPlaylistsIntent(PlaylistsIntent.DeletePlaylist(it)) },
                 onSelect = { onPlaylistsIntent(PlaylistsIntent.SelectPlaylist(it)) },
                 modifier = Modifier.fillMaxSize(),
@@ -822,6 +829,7 @@ private fun PlaylistListPane(
     onRefresh: () -> Unit,
     onSourceFilterChanged: (LibrarySourceFilter) -> Unit,
     onCreate: () -> Unit,
+    onRename: (String, String) -> Unit,
     onDelete: (String) -> Unit,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -829,10 +837,21 @@ private fun PlaylistListPane(
     var sourceFilterMenuExpanded by remember { mutableStateOf(false) }
     val mobilePlatform = currentPlatformDescriptor.isMobilePlatform()
     var menuPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingRenamePlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingRenamePlaylistName by rememberSaveable { mutableStateOf("") }
     var pendingDeletePlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingDeletePlaylistName by rememberSaveable { mutableStateOf("") }
+    val pendingRenamePlaylist = remember(playlists, pendingRenamePlaylistId) {
+        playlists.firstOrNull { it.id == pendingRenamePlaylistId }
+    }
     val pendingDeletePlaylist = remember(playlists, pendingDeletePlaylistId) {
         playlists.firstOrNull { it.id == pendingDeletePlaylistId }
+    }
+    LaunchedEffect(pendingRenamePlaylistId, pendingRenamePlaylist) {
+        if (pendingRenamePlaylistId != null && pendingRenamePlaylist == null) {
+            pendingRenamePlaylistId = null
+            pendingRenamePlaylistName = ""
+        }
     }
     LaunchedEffect(pendingDeletePlaylistId, pendingDeletePlaylist) {
         if (pendingDeletePlaylistId != null && pendingDeletePlaylist == null) {
@@ -944,6 +963,11 @@ private fun PlaylistListPane(
                                 menuPlaylistId = null
                             }
                         },
+                        onRequestRename = {
+                            menuPlaylistId = null
+                            pendingRenamePlaylistId = playlist.id
+                            pendingRenamePlaylistName = playlist.name
+                        },
                         onRequestDelete = {
                             menuPlaylistId = null
                             pendingDeletePlaylistId = playlist.id
@@ -952,6 +976,23 @@ private fun PlaylistListPane(
                     )
                 }
             }
+        }
+
+        pendingRenamePlaylist?.let { playlist ->
+            PlaylistNameDialog(
+                title = "重命名歌单",
+                initialName = pendingRenamePlaylistName.ifBlank { playlist.name },
+                confirmText = "保存",
+                onDismiss = {
+                    pendingRenamePlaylistId = null
+                    pendingRenamePlaylistName = ""
+                },
+                onConfirm = { name ->
+                    pendingRenamePlaylistId = null
+                    pendingRenamePlaylistName = ""
+                    onRename(playlist.id, name)
+                },
+            )
         }
 
         pendingDeletePlaylist?.let { playlist ->
@@ -981,6 +1022,7 @@ private fun PlaylistSummaryCard(
     onClick: () -> Unit,
     onOpenMenu: () -> Unit,
     onDismissMenu: () -> Unit,
+    onRequestRename: () -> Unit,
     onRequestDelete: () -> Unit,
 ) {
     val shellColors = mainShellColors
@@ -1059,6 +1101,16 @@ private fun PlaylistSummaryCard(
             onDismissRequest = onDismissMenu,
             containerColor = shellColors.navContainer,
         ) {
+            DropdownMenuItem(
+                text = { Text("重命名") },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Rounded.Edit,
+                        contentDescription = null,
+                    )
+                },
+                onClick = onRequestRename,
+            )
             DropdownMenuItem(
                 text = {
                     Text(
@@ -1404,6 +1456,7 @@ private fun playlistSourceFilterButtonLabel(filter: LibrarySourceFilter): String
         LibrarySourceFilter.WEBDAV -> "WebDAV"
         LibrarySourceFilter.NAVIDROME -> "Navidrome"
         LibrarySourceFilter.SUBSONIC -> "Subsonic"
+        LibrarySourceFilter.EMBY -> "Emby"
         LibrarySourceFilter.DOWNLOADED -> "已下载"
     }
 }
@@ -1506,10 +1559,12 @@ private fun PlaylistTrackRow(
 private fun PlaylistNameDialog(
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
+    title: String = "新建歌单",
+    initialName: String = "",
     confirmText: String = "创建",
 ) {
     val shellColors = mainShellColors
-    var name by rememberSaveable { mutableStateOf("") }
+    var name by rememberSaveable(initialName) { mutableStateOf(initialName) }
     val fieldColors = OutlinedTextFieldDefaults.colors(
         focusedBorderColor = shellColors.cardBorder,
         unfocusedBorderColor = shellColors.cardBorder,
@@ -1525,7 +1580,7 @@ private fun PlaylistNameDialog(
         shape = RoundedCornerShape(28.dp),
         title = {
             Text(
-                text = "新建歌单",
+                text = title,
                 style = MaterialTheme.typography.titleMedium.copy(
                     fontSize = 18.sp,
                     lineHeight = 24.sp,

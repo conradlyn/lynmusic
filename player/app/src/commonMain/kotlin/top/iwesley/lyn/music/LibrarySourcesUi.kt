@@ -158,7 +158,7 @@ internal fun LibraryTab(
             sectionSubtitle = "",
             songsIcon = Icons.Rounded.LibraryMusic,
             emptyCollectionTitle = "曲库还是空的",
-            emptyCollectionBody = "先到“来源”页导入本地文件夹、Samba、WebDAV、Navidrome 或 Subsonic，扫描完成后会出现在这里。",
+            emptyCollectionBody = "先到“来源”页导入本地文件夹、Samba、WebDAV、Navidrome、Subsonic 或 Emby，扫描完成后会出现在这里。",
             emptyFilterBody = "试试切回“全部来源”、更换过滤项，或调整搜索词。",
             emptySearchBody = "试试调整搜索词，或切换来源过滤。",
             trackLabel = "歌曲",
@@ -1267,6 +1267,7 @@ private fun librarySourceFilterButtonLabel(filter: LibrarySourceFilter): String 
         LibrarySourceFilter.WEBDAV -> "WebDAV"
         LibrarySourceFilter.NAVIDROME -> "Navidrome"
         LibrarySourceFilter.SUBSONIC -> "Subsonic"
+        LibrarySourceFilter.EMBY -> "Emby"
         LibrarySourceFilter.DOWNLOADED -> "已下载"
     }
 }
@@ -1465,6 +1466,7 @@ internal fun SourcesTab(
     val isLocalFolderScanning = activeScanOperation == ImportScanOperation.CreateLocalFolder
     val isNavidromeCreating = activeScanOperation == ImportScanOperation.CreateRemote(ImportSourceType.NAVIDROME)
     val isSubsonicCreating = activeScanOperation == ImportScanOperation.CreateRemote(ImportSourceType.SUBSONIC)
+    val isEmbyCreating = activeScanOperation == ImportScanOperation.CreateRemote(ImportSourceType.EMBY)
     val isSambaCreating = activeScanOperation == ImportScanOperation.CreateRemote(ImportSourceType.SAMBA)
     val isWebDavCreating = activeScanOperation == ImportScanOperation.CreateRemote(ImportSourceType.WEBDAV)
     state.editingSource?.let { editingSource ->
@@ -1564,7 +1566,7 @@ internal fun SourcesTab(
         ) {
             SectionTitle(
                 title = "导入来源",
-                subtitle = "本地文件夹原地索引，Samba、WebDAV、Navidrome 与 Subsonic/OpenSubsonic 作为远程音乐库。"
+                subtitle = "本地文件夹原地索引，Samba、WebDAV、Navidrome、Subsonic/OpenSubsonic 与 Emby 作为远程音乐库。"
             )
             state.message?.let { message ->
                 BannerCard(message = message, onDismiss = { onImportIntent(ImportIntent.ClearMessage) })
@@ -1594,6 +1596,72 @@ internal fun SourcesTab(
                     }
                     Spacer(Modifier.width(8.dp))
                     Text(if (isLocalFolderScanning) "扫描中" else "选择文件夹")
+                }
+            }
+        }
+            MainShellElevatedCard(shape = RoundedCornerShape(28.dp)) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                Text("Emby", fontWeight = FontWeight.Bold)
+                if (!state.capabilities.supportsEmbyImport) {
+                    Text("当前平台暂未开放应用内 Emby 导入。")
+                }
+                ImeAwareOutlinedTextField(
+                    value = state.embyLabel,
+                    onValueChange = { onImportIntent(ImportIntent.EmbyLabelChanged(it)) },
+                    label = { Text("名称") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = importFieldColors,
+                )
+                ImeAwareOutlinedTextField(
+                    value = state.embyBaseUrl,
+                    onValueChange = { onImportIntent(ImportIntent.EmbyBaseUrlChanged(it)) },
+                    label = { Text("服务器地址") },
+                    placeholder = { Text("https://emby.example.com") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = importFieldColors,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    ImeAwareOutlinedTextField(
+                        value = state.embyUsername,
+                        onValueChange = { onImportIntent(ImportIntent.EmbyUsernameChanged(it)) },
+                        label = { Text("用户名") },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(18.dp),
+                        colors = importFieldColors,
+                    )
+                    ImeAwareOutlinedTextField(
+                        value = state.embyPassword,
+                        onValueChange = { onImportIntent(ImportIntent.EmbyPasswordChanged(it)) },
+                        label = { Text("密码") },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(18.dp),
+                        colors = importFieldColors,
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedButton(
+                        onClick = { onImportIntent(ImportIntent.TestEmbySource) },
+                        enabled = state.capabilities.supportsEmbyImport && !state.isWorking,
+                    ) {
+                        Text("测试连接")
+                    }
+                    Button(
+                        onClick = { onImportIntent(ImportIntent.AddEmbySource) },
+                        enabled = state.capabilities.supportsEmbyImport && !state.isWorking,
+                    ) {
+                        if (isEmbyCreating) {
+                            ButtonLoadingIndicator()
+                        } else {
+                            Icon(Icons.Rounded.CloudSync, null)
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (isEmbyCreating) "同步中" else "连接并同步")
+                    }
                 }
             }
         }
@@ -2055,6 +2123,7 @@ private fun RemoteSourceEditorDialog(
                                 ImportSourceType.WEBDAV -> "编辑 WebDAV 来源"
                                 ImportSourceType.NAVIDROME -> "编辑 Navidrome 来源"
                                 ImportSourceType.SUBSONIC -> "编辑 Subsonic 来源"
+                                ImportSourceType.EMBY -> "编辑 Emby 来源"
                                 ImportSourceType.LOCAL_FOLDER -> "编辑来源"
                             },
                             color = MaterialTheme.colorScheme.onSurface,
@@ -2116,6 +2185,7 @@ private fun RemoteSourceEditorDialog(
                                 ImportSourceType.WEBDAV,
                                 ImportSourceType.NAVIDROME,
                                 ImportSourceType.SUBSONIC,
+                                ImportSourceType.EMBY,
                                 -> {
                                     ImeAwareOutlinedTextField(
                                         value = state.rootUrl,

@@ -76,6 +76,7 @@ class DefaultOfflineDownloadRepository(
             require(sourceType != null && sourceType != ImportSourceType.LOCAL_FOLDER) {
                 "本地音乐不需要离线下载。"
             }
+            val effectiveQuality = sourceType.effectiveOfflineDownloadQuality(quality)
             val existing = database.offlineDownloadDao().getByTrackId(track.id)
             val existingLocal = existing?.localMediaLocator?.takeIf { gateway.exists(it) }
             database.offlineDownloadDao().upsert(
@@ -84,7 +85,7 @@ class DefaultOfflineDownloadRepository(
                     sourceId = track.sourceId,
                     originalMediaLocator = track.mediaLocator,
                     localMediaLocator = existingLocal,
-                    quality = quality.name,
+                    quality = effectiveQuality.name,
                     status = OfflineDownloadStatus.Pending.name,
                     downloadedBytes = 0L,
                     totalBytes = null,
@@ -93,7 +94,7 @@ class DefaultOfflineDownloadRepository(
                 ),
             )
             try {
-                val result = gateway.download(track, quality) { progress ->
+                val result = gateway.download(track, effectiveQuality) { progress ->
                     updateProgress(track.id, progress)
                 }
                 existingLocal
@@ -105,7 +106,7 @@ class DefaultOfflineDownloadRepository(
                         sourceId = track.sourceId,
                         originalMediaLocator = track.mediaLocator,
                         localMediaLocator = result.localMediaLocator,
-                        quality = quality.name,
+                        quality = effectiveQuality.name,
                         status = OfflineDownloadStatus.Completed.name,
                         downloadedBytes = result.sizeBytes,
                         totalBytes = result.totalBytes ?: result.sizeBytes,
@@ -121,7 +122,7 @@ class DefaultOfflineDownloadRepository(
                         sourceId = track.sourceId,
                         originalMediaLocator = track.mediaLocator,
                         localMediaLocator = existingLocal,
-                        quality = quality.name,
+                        quality = effectiveQuality.name,
                         status = OfflineDownloadStatus.Failed.name,
                         downloadedBytes = 0L,
                         totalBytes = null,
@@ -199,6 +200,16 @@ private val incompleteStatuses = setOf(
     OfflineDownloadStatus.Pending.name,
     OfflineDownloadStatus.Downloading.name,
 )
+
+private fun ImportSourceType.effectiveOfflineDownloadQuality(
+    requested: NavidromeAudioQuality,
+): NavidromeAudioQuality {
+    return if (this == ImportSourceType.NAVIDROME || this == ImportSourceType.SUBSONIC) {
+        requested
+    } else {
+        NavidromeAudioQuality.Original
+    }
+}
 
 internal fun OfflineDownloadEntity.toDomain(): OfflineDownload {
     return OfflineDownload(

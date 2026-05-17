@@ -113,7 +113,11 @@ class FavoritesStore(
                     sourceTypesById = enabledSources.associate { it.id to it.type },
                     availableSourceFilters = buildAvailableSourceFilters(sources.filter { it.source.enabled }),
                     navidromeSourceIds = enabledSources
-                        .filter { it.type == ImportSourceType.NAVIDROME || it.type == ImportSourceType.SUBSONIC }
+                        .filter {
+                            it.type == ImportSourceType.NAVIDROME ||
+                                it.type == ImportSourceType.SUBSONIC ||
+                                it.type == ImportSourceType.EMBY
+                        }
                         .mapTo(linkedSetOf()) { it.id },
                 )
             }
@@ -310,6 +314,7 @@ class FavoritesStore(
             LibrarySourceFilter.WEBDAV,
             LibrarySourceFilter.NAVIDROME,
             LibrarySourceFilter.SUBSONIC,
+            LibrarySourceFilter.EMBY,
         )
     }
 }

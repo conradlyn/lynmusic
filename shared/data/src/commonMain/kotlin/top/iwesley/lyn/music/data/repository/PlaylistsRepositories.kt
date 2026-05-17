@@ -21,17 +21,26 @@ import top.iwesley.lyn.music.core.model.SubsonicAuthMode
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.error
 import top.iwesley.lyn.music.core.model.normalizeArtworkLocator
+import top.iwesley.lyn.music.core.model.parseEmbySongLocator
 import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleSongLocator
 import top.iwesley.lyn.music.data.db.ImportSourceEntity
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
 import top.iwesley.lyn.music.data.db.PlaylistEntity
 import top.iwesley.lyn.music.data.db.PlaylistRemoteBindingEntity
 import top.iwesley.lyn.music.data.db.PlaylistTrackEntity
+import top.iwesley.lyn.music.domain.addEmbyPlaylistItem
+import top.iwesley.lyn.music.domain.createEmbyPlaylist
+import top.iwesley.lyn.music.domain.deleteEmbyPlaylist
+import top.iwesley.lyn.music.domain.fetchEmbyPlaylistEntries
+import top.iwesley.lyn.music.domain.fetchEmbyPlaylists
 import top.iwesley.lyn.music.domain.NavidromeResolvedSource
 import top.iwesley.lyn.music.domain.isSubsonicCompatibleSourceType
 import top.iwesley.lyn.music.domain.normalizeSubsonicBaseUrl
+import top.iwesley.lyn.music.domain.removeEmbyPlaylistEntries
 import top.iwesley.lyn.music.domain.requestNavidromeJson
+import top.iwesley.lyn.music.domain.resolveEmbySource
 import top.iwesley.lyn.music.domain.toSubsonicAuthMode
+import top.iwesley.lyn.music.domain.updateEmbyPlaylistName
 
 class RoomPlaylistRepository(
     private val database: LynMusicDatabase,
@@ -117,21 +126,93 @@ class RoomPlaylistRepository(
         }
     }
 
+    override suspend fun renamePlaylist(playlistId: String, name: String): Result<PlaylistSummary> {
+        return runCatching {
+            val playlist = database.playlistDao().getById(playlistId) ?: error("歌单不存在。")
+            val displayName = name.trim()
+            require(displayName.isNotBlank()) { "歌单名称不能为空。" }
+            val normalizedName = normalizePlaylistName(displayName)
+            val duplicate = database.playlistDao().getByNormalizedName(normalizedName)
+            require(duplicate == null || duplicate.id == playlistId) { "歌单已存在。" }
+
+            val bindings = database.playlistRemoteBindingDao().getByPlaylistId(playlistId)
+            bindings.forEach { binding ->
+                if (database.importSourceDao().getById(binding.sourceId)?.isEmbySource() == true) {
+                    val resolvedSource = resolveEmbySource(database, secureCredentialStore, binding.sourceId)
+                        ?: error("Emby 来源不可用，无法重命名歌单。")
+                    updateEmbyPlaylistName(
+                        httpClient = httpClient,
+                        source = resolvedSource,
+                        playlistId = binding.remotePlaylistId,
+                        name = displayName,
+                        logger = logger,
+                    )
+                } else {
+                    val resolvedSource = resolveSubsonicCompatibleSource(binding.sourceId)
+                        ?: error("Subsonic-compatible 来源不可用，无法重命名歌单。")
+                    requestNavidromeJson(
+                        httpClient = httpClient,
+                        source = resolvedSource,
+                        endpoint = "updatePlaylist",
+                        parameters = mapOf(
+                            "playlistId" to binding.remotePlaylistId,
+                            "name" to displayName,
+                        ),
+                        logger = logger,
+                        logContext = "playlist=\"${playlist.name}\" rename remotePlaylist=${binding.remotePlaylistId}",
+                    )
+                }
+            }
+
+            val updatedAt = now()
+            val updatedPlaylist = playlist.copy(
+                name = displayName,
+                normalizedName = normalizedName,
+                updatedAt = updatedAt,
+            )
+            database.playlistDao().upsert(updatedPlaylist)
+            bindings.forEach { binding ->
+                database.playlistRemoteBindingDao().upsert(
+                    binding.copy(
+                        remoteName = displayName,
+                        lastSyncedAt = updatedAt,
+                    ),
+                )
+            }
+            updatedPlaylist.toSummary(
+                memberTrackIds = database.playlistTrackDao()
+                    .getByPlaylistId(playlistId)
+                    .mapTo(linkedSetOf()) { it.trackId },
+            )
+        }
+    }
+
     override suspend fun deletePlaylist(playlistId: String): Result<Unit> {
         return runCatching {
             val playlist = database.playlistDao().getById(playlistId) ?: error("歌单不存在。")
             val bindings = database.playlistRemoteBindingDao().getByPlaylistId(playlistId)
             bindings.forEach { binding ->
-                val resolvedSource = resolveSubsonicCompatibleSource(binding.sourceId)
-                    ?: error("Subsonic-compatible 来源不可用，无法删除歌单。")
-                requestNavidromeJson(
-                    httpClient = httpClient,
-                    source = resolvedSource,
-                    endpoint = "deletePlaylist",
-                    parameters = mapOf("id" to binding.remotePlaylistId),
-                    logger = logger,
-                    logContext = "playlist=\"${playlist.name}\" delete remotePlaylist=${binding.remotePlaylistId}",
-                )
+                if (database.importSourceDao().getById(binding.sourceId)?.isEmbySource() == true) {
+                    val resolvedSource = resolveEmbySource(database, secureCredentialStore, binding.sourceId)
+                        ?: error("Emby 来源不可用，无法删除歌单。")
+                    deleteEmbyPlaylist(
+                        httpClient = httpClient,
+                        source = resolvedSource,
+                        playlistId = binding.remotePlaylistId,
+                        logger = logger,
+                    )
+                } else {
+                    val resolvedSource = resolveSubsonicCompatibleSource(binding.sourceId)
+                        ?: error("Subsonic-compatible 来源不可用，无法删除歌单。")
+                    requestNavidromeJson(
+                        httpClient = httpClient,
+                        source = resolvedSource,
+                        endpoint = "deletePlaylist",
+                        parameters = mapOf("id" to binding.remotePlaylistId),
+                        logger = logger,
+                        logContext = "playlist=\"${playlist.name}\" delete remotePlaylist=${binding.remotePlaylistId}",
+                    )
+                }
             }
             deleteLocalPlaylist(playlistId)
         }
@@ -148,7 +229,13 @@ class RoomPlaylistRepository(
             if (subsonicSong != null) {
                 addSubsonicCompatibleTrackToPlaylist(playlist, track, subsonicSong.itemId)
             } else {
-                addLocalTrackToPlaylist(playlist, track)
+                val embySong = parseEmbySongLocator(track.mediaLocator)
+                    ?.takeIf { it.first == track.sourceId }
+                if (embySong != null) {
+                    addEmbyTrackToPlaylist(playlist, track, embySong.second)
+                } else {
+                    addLocalTrackToPlaylist(playlist, track)
+                }
             }
         }
     }
@@ -159,25 +246,33 @@ class RoomPlaylistRepository(
             val row = database.playlistTrackDao().getByPlaylistIdAndTrackId(playlistId, trackId) ?: return@runCatching
             val binding = database.playlistRemoteBindingDao().getByPlaylistIdAndSourceId(playlistId, row.sourceId)
             if (binding != null && row.remoteOrdinal != null) {
-                val resolvedSource = resolveSubsonicCompatibleSource(row.sourceId)
-                    ?: error("Subsonic-compatible 来源不可用，无法更新歌单。")
-                requestNavidromeJson(
-                    httpClient = httpClient,
-                    source = resolvedSource,
-                    endpoint = "updatePlaylist",
-                    parameters = mapOf(
-                        "playlistId" to binding.remotePlaylistId,
-                        "songIndexToRemove" to row.remoteOrdinal.toString(),
-                    ),
-                    logger = logger,
-                    logContext = "playlist=\"${playlist.name}\" remove track=$trackId",
-                )
-                syncRemoteBinding(
-                    playlist = playlist,
-                    sourceId = row.sourceId,
-                    remotePlaylistId = binding.remotePlaylistId,
-                    remoteName = binding.remoteName,
-                )
+                if (database.importSourceDao().getById(row.sourceId)?.isEmbySource() == true) {
+                    removeEmbyTrackFromPlaylist(
+                        playlist = playlist,
+                        binding = binding,
+                        row = row,
+                    )
+                } else {
+                    val resolvedSource = resolveSubsonicCompatibleSource(row.sourceId)
+                        ?: error("Subsonic-compatible 来源不可用，无法更新歌单。")
+                    requestNavidromeJson(
+                        httpClient = httpClient,
+                        source = resolvedSource,
+                        endpoint = "updatePlaylist",
+                        parameters = mapOf(
+                            "playlistId" to binding.remotePlaylistId,
+                            "songIndexToRemove" to row.remoteOrdinal.toString(),
+                        ),
+                        logger = logger,
+                        logContext = "playlist=\"${playlist.name}\" remove track=$trackId",
+                    )
+                    syncRemoteBinding(
+                        playlist = playlist,
+                        sourceId = row.sourceId,
+                        remotePlaylistId = binding.remotePlaylistId,
+                        remoteName = binding.remoteName,
+                    )
+                }
             } else {
                 database.playlistTrackDao().deleteByPlaylistIdAndTrackId(playlistId, trackId)
                 touchPlaylist(playlist)
@@ -188,14 +283,20 @@ class RoomPlaylistRepository(
 
     override suspend fun refreshNavidromePlaylists(): Result<Unit> {
         return runCatching {
-            val compatibleSources = database.importSourceDao().getAll()
-                .filter { it.subsonicCompatibleSourceType() != null }
-            cleanupRemovedSubsonicCompatibleSources(compatibleSources.mapTo(linkedSetOf()) { it.id })
+            val remoteSources = database.importSourceDao().getAll()
+                .filter { it.subsonicCompatibleSourceType() != null || it.isEmbySource() }
+            cleanupRemovedRemoteSources(remoteSources.mapTo(linkedSetOf()) { it.id })
             val failures = mutableListOf<String>()
-            compatibleSources
+            remoteSources
                 .filter { it.enabled }
                 .forEach { source ->
-                runCatching { syncSourcePlaylists(source) }
+                runCatching {
+                    if (source.isEmbySource()) {
+                        syncEmbySourcePlaylists(source)
+                    } else {
+                        syncSourcePlaylists(source)
+                    }
+                }
                     .onFailure { throwable ->
                         failures += "${source.label}: ${throwable.message.orEmpty()}"
                     }
@@ -259,6 +360,66 @@ class RoomPlaylistRepository(
         )
     }
 
+    private suspend fun addEmbyTrackToPlaylist(
+        playlist: PlaylistEntity,
+        track: Track,
+        itemId: String,
+    ) {
+        val resolvedSource = resolveEmbySource(database, secureCredentialStore, track.sourceId)
+            ?: error("Emby 来源不可用，无法更新歌单。")
+        val binding = ensureEmbyRemoteBinding(
+            playlist = playlist,
+            sourceId = track.sourceId,
+            resolvedSource = resolvedSource,
+        )
+        addEmbyPlaylistItem(
+            httpClient = httpClient,
+            source = resolvedSource,
+            playlistId = binding.remotePlaylistId,
+            itemId = itemId,
+            logger = logger,
+        )
+        syncEmbyRemoteBinding(
+            playlist = playlist,
+            sourceId = track.sourceId,
+            remotePlaylistId = binding.remotePlaylistId,
+            remoteName = binding.remoteName,
+        )
+    }
+
+    private suspend fun removeEmbyTrackFromPlaylist(
+        playlist: PlaylistEntity,
+        binding: PlaylistRemoteBindingEntity,
+        row: PlaylistTrackEntity,
+    ) {
+        val resolvedSource = resolveEmbySource(database, secureCredentialStore, row.sourceId)
+            ?: error("Emby 来源不可用，无法更新歌单。")
+        val entries = fetchEmbyPlaylistEntries(
+            httpClient = httpClient,
+            source = resolvedSource,
+            playlistId = binding.remotePlaylistId,
+            logger = logger,
+        )
+        val entry = entries.getOrNull(row.remoteOrdinal ?: -1)
+            ?.takeIf { embyTrackIdFor(row.sourceId, it.itemId) == row.trackId }
+            ?: entries.firstOrNull { embyTrackIdFor(row.sourceId, it.itemId) == row.trackId }
+            ?: error("Emby 远端歌单未找到要移除的歌曲。")
+        val entryId = entry.playlistItemId ?: error("Emby 远端歌单缺少可移除条目 ID。")
+        removeEmbyPlaylistEntries(
+            httpClient = httpClient,
+            source = resolvedSource,
+            playlistId = binding.remotePlaylistId,
+            entryIds = listOf(entryId),
+            logger = logger,
+        )
+        syncEmbyRemoteBinding(
+            playlist = playlist,
+            sourceId = row.sourceId,
+            remotePlaylistId = binding.remotePlaylistId,
+            remoteName = binding.remoteName,
+        )
+    }
+
     private suspend fun ensureRemoteBinding(
         playlist: PlaylistEntity,
         sourceId: String,
@@ -281,6 +442,33 @@ class RoomPlaylistRepository(
                     .firstOrNull { normalizePlaylistName(it.name) == playlist.normalizedName }
             }
             ?: error("远端歌单创建失败。")
+
+        val binding = PlaylistRemoteBindingEntity(
+            playlistId = playlist.id,
+            sourceId = sourceId,
+            remotePlaylistId = remotePlaylist.id,
+            remoteName = remotePlaylist.name,
+            lastSyncedAt = null,
+        )
+        database.playlistRemoteBindingDao().upsert(binding)
+        return binding
+    }
+
+    private suspend fun ensureEmbyRemoteBinding(
+        playlist: PlaylistEntity,
+        sourceId: String,
+        resolvedSource: top.iwesley.lyn.music.domain.EmbyResolvedSource,
+    ): PlaylistRemoteBindingEntity {
+        database.playlistRemoteBindingDao().getByPlaylistIdAndSourceId(playlist.id, sourceId)?.let { return it }
+
+        val remotePlaylist = fetchEmbyPlaylists(httpClient, resolvedSource, logger)
+            .firstOrNull { normalizePlaylistName(it.name) == playlist.normalizedName }
+            ?: createEmbyPlaylist(
+                httpClient = httpClient,
+                source = resolvedSource,
+                name = playlist.name,
+                logger = logger,
+            )
 
         val binding = PlaylistRemoteBindingEntity(
             playlistId = playlist.id,
@@ -321,6 +509,54 @@ class RoomPlaylistRepository(
                 playlistsByNormalizedName[playlist.normalizedName] = playlist
             }
             syncRemoteBinding(
+                playlist = playlist,
+                sourceId = source.id,
+                remotePlaylistId = remotePlaylist.id,
+                remoteName = remotePlaylist.name,
+            )
+        }
+
+        existingBindingsByRemoteId.values
+            .filter { it.remotePlaylistId !in remoteIds }
+            .forEach { binding ->
+                database.playlistRemoteBindingDao().deleteByPlaylistIdAndSourceId(binding.playlistId, binding.sourceId)
+                database.playlistTrackDao().deleteByPlaylistIdAndSourceId(binding.playlistId, binding.sourceId)
+                cleanupPlaylistIfNecessary(binding.playlistId)
+        }
+    }
+
+    private suspend fun syncEmbySourcePlaylists(source: ImportSourceEntity) {
+        val resolvedSource = resolveEmbySource(database, secureCredentialStore, source.id)
+            ?: error("Emby 来源缺少有效凭据，无法同步歌单。")
+        val remotePlaylists = fetchEmbyPlaylists(
+            httpClient = httpClient,
+            source = resolvedSource,
+            logger = logger,
+        )
+        val remoteIds = remotePlaylists.mapTo(linkedSetOf()) { it.id }
+        val existingBindingsByRemoteId = database.playlistRemoteBindingDao().getBySourceId(source.id)
+            .associateBy { it.remotePlaylistId }
+        val playlistsByNormalizedName = database.playlistDao().getAll()
+            .associateBy { it.normalizedName }
+            .toMutableMap()
+
+        remotePlaylists.forEach { remotePlaylist ->
+            val existingBinding = existingBindingsByRemoteId[remotePlaylist.id]
+            val currentPlaylist = existingBinding?.let { database.playlistDao().getById(it.playlistId) }
+                ?: playlistsByNormalizedName[normalizePlaylistName(remotePlaylist.name)]
+            val playlist = currentPlaylist ?: PlaylistEntity(
+                id = newId("playlist"),
+                name = remotePlaylist.name,
+                normalizedName = normalizePlaylistName(remotePlaylist.name),
+                createdLocally = false,
+                createdAt = now(),
+                updatedAt = now(),
+            )
+            if (currentPlaylist == null) {
+                database.playlistDao().upsert(playlist)
+                playlistsByNormalizedName[playlist.normalizedName] = playlist
+            }
+            syncEmbyRemoteBinding(
                 playlist = playlist,
                 sourceId = source.id,
                 remotePlaylistId = remotePlaylist.id,
@@ -390,7 +626,62 @@ class RoomPlaylistRepository(
         }
     }
 
-    private suspend fun cleanupRemovedSubsonicCompatibleSources(activeSourceIds: Set<String>) {
+    private suspend fun syncEmbyRemoteBinding(
+        playlist: PlaylistEntity,
+        sourceId: String,
+        remotePlaylistId: String,
+        remoteName: String,
+    ) {
+        val resolvedSource = resolveEmbySource(database, secureCredentialStore, sourceId)
+            ?: error("Emby 来源不可用，无法同步歌单。")
+        val remoteEntries = fetchEmbyPlaylistEntries(
+            httpClient = httpClient,
+            source = resolvedSource,
+            playlistId = remotePlaylistId,
+            logger = logger,
+        )
+        val currentRemoteTrackOrder = database.playlistTrackDao().getByPlaylistIdAndSourceId(playlist.id, sourceId)
+            .sortedBy { it.remoteOrdinal ?: Int.MAX_VALUE }
+            .map { RemotePlaylistTrackSnapshot(trackId = it.trackId, remoteOrdinal = it.remoteOrdinal ?: -1) }
+        val nextRemoteTrackOrder = remoteEntries.mapIndexed { index, entry ->
+            RemotePlaylistTrackSnapshot(
+                trackId = embyTrackIdFor(sourceId, entry.itemId),
+                remoteOrdinal = index,
+            )
+        }
+        val tracksChanged = currentRemoteTrackOrder != nextRemoteTrackOrder
+        if (tracksChanged) {
+            database.playlistTrackDao().deleteByPlaylistIdAndSourceId(playlist.id, sourceId)
+            if (remoteEntries.isNotEmpty()) {
+                database.playlistTrackDao().upsertAll(
+                    remoteEntries.mapIndexed { index, entry ->
+                        PlaylistTrackEntity(
+                            playlistId = playlist.id,
+                            trackId = embyTrackIdFor(sourceId, entry.itemId),
+                            sourceId = sourceId,
+                            addedAt = now(),
+                            localOrdinal = null,
+                            remoteOrdinal = index,
+                        )
+                    },
+                )
+            }
+        }
+        database.playlistRemoteBindingDao().upsert(
+            PlaylistRemoteBindingEntity(
+                playlistId = playlist.id,
+                sourceId = sourceId,
+                remotePlaylistId = remotePlaylistId,
+                remoteName = remoteName,
+                lastSyncedAt = now(),
+            ),
+        )
+        if (tracksChanged) {
+            touchPlaylist(playlist)
+        }
+    }
+
+    private suspend fun cleanupRemovedRemoteSources(activeSourceIds: Set<String>) {
         database.playlistRemoteBindingDao().getAll()
             .filter { it.sourceId !in activeSourceIds }
             .forEach { binding ->
@@ -488,6 +779,10 @@ class RoomPlaylistRepository(
     private fun ImportSourceEntity.subsonicCompatibleSourceType(): ImportSourceType? {
         val sourceType = runCatching { ImportSourceType.valueOf(type) }.getOrNull() ?: return null
         return sourceType.takeIf(::isSubsonicCompatibleSourceType)
+    }
+
+    private fun ImportSourceEntity.isEmbySource(): Boolean {
+        return type == ImportSourceType.EMBY.name
     }
 }
 

@@ -33,6 +33,7 @@ import org.jetbrains.compose.resources.painterResource
 import top.iwesley.lyn.music.core.model.ArtworkCachedTarget
 import top.iwesley.lyn.music.core.model.ArtworkCacheStore
 import top.iwesley.lyn.music.core.model.normalizedArtworkCacheLocator
+import top.iwesley.lyn.music.core.model.parseEmbyCoverLocator
 import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleCoverLocator
 
 internal object ArtworkDecodeSize {
@@ -351,6 +352,7 @@ private fun shouldUseInitialArtworkTarget(
     cacheRemote: Boolean,
 ): Boolean {
     if (parseSubsonicCompatibleCoverLocator(normalizedLocator) != null) return false
+    if (parseEmbyCoverLocator(normalizedLocator) != null) return false
     if (!cacheRemote) return true
     return !normalizedLocator.startsWith("http://", ignoreCase = true) &&
         !normalizedLocator.startsWith("https://", ignoreCase = true)

@@ -455,26 +455,7 @@ private fun TvSourcesSettingsPane(
             if (showPageTestMessage) {
                 add(listOf("sources:test-message:clear"))
             }
-            val addSourceRow = buildList {
-                if (state.capabilities.supportsLocalFolderImport) {
-                    add("sources:add:local")
-                }
-                if (state.capabilities.supportsSambaImport) {
-                    add("sources:add:samba")
-                }
-                if (state.capabilities.supportsWebDavImport) {
-                    add("sources:add:webdav")
-                }
-                if (state.capabilities.supportsNavidromeImport) {
-                    add("sources:add:navidrome")
-                }
-                if (state.capabilities.supportsSubsonicImport) {
-                    add("sources:add:subsonic")
-                }
-            }
-            if (addSourceRow.isNotEmpty()) {
-                add(addSourceRow)
-            }
+            addSourceFocusRows(state.capabilities).forEach(::add)
             state.sources.forEach { sourceWithStatus ->
                 val source = sourceWithStatus.source
                 val sourceRow = buildList {
@@ -552,7 +533,7 @@ private fun TvSourcesSettingsPane(
         item {
             TvSettingsPaneHeader(
                 title = "来源",
-                subtitle = "管理本机、Samba、WebDAV、Navidrome 和 Subsonic 音乐来源。",
+                subtitle = "管理本机、Samba、WebDAV、Navidrome、Subsonic 和 Emby 音乐来源。",
             )
         }
         if (sourceFocusRows.isEmpty()) {
@@ -595,7 +576,7 @@ private fun TvSourcesSettingsPane(
             item {
                 TvSettingsEmptyCard(
                     title = "还没有来源",
-                    body = "添加本地文件夹、Samba、WebDAV、Navidrome 或 Subsonic 后，曲库会开始扫描音乐。",
+                    body = "添加本地文件夹、Samba、WebDAV、Navidrome、Subsonic 或 Emby 后，曲库会开始扫描音乐。",
                 )
             }
         } else {
@@ -632,73 +613,107 @@ private fun TvAddSourcePanel(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Text("新增来源", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (capabilities.supportsLocalFolderImport) {
-                TvSettingsActionButton(
-                    onClick = {
-                        coroutineScope.launch {
-                            pickLocalFolder()?.let { selection ->
-                                onIntent(ImportIntent.ImportSelectedLocalFolder(selection))
-                            }
+        addSourceFocusRows(capabilities).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                row.forEach { focusKey ->
+                    when (focusKey) {
+                        "sources:add:local" -> TvSettingsActionButton(
+                            onClick = {
+                                coroutineScope.launch {
+                                    pickLocalFolder()?.let { selection ->
+                                        onIntent(ImportIntent.ImportSelectedLocalFolder(selection))
+                                    }
+                                }
+                            },
+                            enabled = !state.isWorking,
+                            style = TvSettingsActionButtonStyle.Filled,
+                            focusKey = focusKey,
+                            focusChain = focusChain,
+                            restoreFocusAfterClick = false,
+                        ) { contentColor ->
+                            Icon(Icons.Rounded.Folder, contentDescription = null, tint = contentColor)
+                            Spacer(Modifier.width(8.dp))
+                            Text("本地文件夹", color = contentColor)
                         }
-                    },
-                    enabled = !state.isWorking,
-                    style = TvSettingsActionButtonStyle.Filled,
-                    focusKey = "sources:add:local",
-                    focusChain = focusChain,
-                    restoreFocusAfterClick = false,
-                ) { contentColor ->
-                    Icon(Icons.Rounded.Folder, contentDescription = null, tint = contentColor)
-                    Spacer(Modifier.width(8.dp))
-                    Text("本地文件夹", color = contentColor)
-                }
-            }
-            if (capabilities.supportsSambaImport) {
-                TvAddTypeButton(
-                    label = "Samba",
-                    selected = state.creatingSourceType == ImportSourceType.SAMBA,
-                    focusKey = "sources:add:samba",
-                    focusChain = focusChain,
-                    restoreFocusAfterClick = false,
-                ) {
-                    onIntent(ImportIntent.OpenRemoteSourceCreator(ImportSourceType.SAMBA))
-                }
-            }
-            if (capabilities.supportsWebDavImport) {
-                TvAddTypeButton(
-                    label = "WebDAV",
-                    selected = state.creatingSourceType == ImportSourceType.WEBDAV,
-                    focusKey = "sources:add:webdav",
-                    focusChain = focusChain,
-                    restoreFocusAfterClick = false,
-                ) {
-                    onIntent(ImportIntent.OpenRemoteSourceCreator(ImportSourceType.WEBDAV))
-                }
-            }
-            if (capabilities.supportsNavidromeImport) {
-                TvAddTypeButton(
-                    label = "Navidrome",
-                    selected = state.creatingSourceType == ImportSourceType.NAVIDROME,
-                    focusKey = "sources:add:navidrome",
-                    focusChain = focusChain,
-                    restoreFocusAfterClick = false,
-                ) {
-                    onIntent(ImportIntent.OpenRemoteSourceCreator(ImportSourceType.NAVIDROME))
-                }
-            }
-            if (capabilities.supportsSubsonicImport) {
-                TvAddTypeButton(
-                    label = "Subsonic",
-                    selected = state.creatingSourceType == ImportSourceType.SUBSONIC,
-                    focusKey = "sources:add:subsonic",
-                    focusChain = focusChain,
-                    restoreFocusAfterClick = false,
-                ) {
-                    onIntent(ImportIntent.OpenRemoteSourceCreator(ImportSourceType.SUBSONIC))
+
+                        "sources:add:samba" -> TvAddTypeButton(
+                            label = "Samba",
+                            selected = state.creatingSourceType == ImportSourceType.SAMBA,
+                            focusKey = focusKey,
+                            focusChain = focusChain,
+                            restoreFocusAfterClick = false,
+                        ) {
+                            onIntent(ImportIntent.OpenRemoteSourceCreator(ImportSourceType.SAMBA))
+                        }
+
+                        "sources:add:webdav" -> TvAddTypeButton(
+                            label = "WebDAV",
+                            selected = state.creatingSourceType == ImportSourceType.WEBDAV,
+                            focusKey = focusKey,
+                            focusChain = focusChain,
+                            restoreFocusAfterClick = false,
+                        ) {
+                            onIntent(ImportIntent.OpenRemoteSourceCreator(ImportSourceType.WEBDAV))
+                        }
+
+                        "sources:add:navidrome" -> TvAddTypeButton(
+                            label = "Navidrome",
+                            selected = state.creatingSourceType == ImportSourceType.NAVIDROME,
+                            focusKey = focusKey,
+                            focusChain = focusChain,
+                            restoreFocusAfterClick = false,
+                        ) {
+                            onIntent(ImportIntent.OpenRemoteSourceCreator(ImportSourceType.NAVIDROME))
+                        }
+
+                        "sources:add:subsonic" -> TvAddTypeButton(
+                            label = "Subsonic",
+                            selected = state.creatingSourceType == ImportSourceType.SUBSONIC,
+                            focusKey = focusKey,
+                            focusChain = focusChain,
+                            restoreFocusAfterClick = false,
+                        ) {
+                            onIntent(ImportIntent.OpenRemoteSourceCreator(ImportSourceType.SUBSONIC))
+                        }
+
+                        "sources:add:emby" -> TvAddTypeButton(
+                            label = "Emby",
+                            selected = state.creatingSourceType == ImportSourceType.EMBY,
+                            focusKey = focusKey,
+                            focusChain = focusChain,
+                            restoreFocusAfterClick = false,
+                        ) {
+                            onIntent(ImportIntent.OpenRemoteSourceCreator(ImportSourceType.EMBY))
+                        }
+                    }
                 }
             }
         }
     }
+}
+
+private fun addSourceFocusRows(capabilities: PlatformCapabilities): List<List<String>> {
+    val keys = buildList {
+        if (capabilities.supportsLocalFolderImport) {
+            add("sources:add:local")
+        }
+        if (capabilities.supportsSambaImport) {
+            add("sources:add:samba")
+        }
+        if (capabilities.supportsWebDavImport) {
+            add("sources:add:webdav")
+        }
+        if (capabilities.supportsNavidromeImport) {
+            add("sources:add:navidrome")
+        }
+        if (capabilities.supportsSubsonicImport) {
+            add("sources:add:subsonic")
+        }
+        if (capabilities.supportsEmbyImport) {
+            add("sources:add:emby")
+        }
+    }
+    return keys.chunked(3)
 }
 
 private enum class TvSettingsActionButtonStyle {
@@ -875,6 +890,13 @@ private fun TvRemoteSourceCreatorDialog(
                             focusChain = focusChain,
                         )
 
+                        ImportSourceType.EMBY -> TvEmbySourceForm(
+                            state = state,
+                            onIntent = onIntent,
+                            focusPrefix = focusPrefix,
+                            focusChain = focusChain,
+                        )
+
                         ImportSourceType.LOCAL_FOLDER -> Unit
                     }
                 }
@@ -903,6 +925,7 @@ private fun TvRemoteSourceCreatorDialog(
                                 ImportSourceType.WEBDAV -> onIntent(ImportIntent.TestWebDavSource)
                                 ImportSourceType.NAVIDROME -> onIntent(ImportIntent.TestNavidromeSource)
                                 ImportSourceType.SUBSONIC -> onIntent(ImportIntent.TestSubsonicSource)
+                                ImportSourceType.EMBY -> onIntent(ImportIntent.TestEmbySource)
                                 ImportSourceType.LOCAL_FOLDER -> Unit
                             }
                         },
@@ -926,6 +949,7 @@ private fun TvRemoteSourceCreatorDialog(
                                 ImportSourceType.WEBDAV -> onIntent(ImportIntent.AddWebDavSource)
                                 ImportSourceType.NAVIDROME -> onIntent(ImportIntent.AddNavidromeSource)
                                 ImportSourceType.SUBSONIC -> onIntent(ImportIntent.AddSubsonicSource)
+                                ImportSourceType.EMBY -> onIntent(ImportIntent.AddEmbySource)
                                 ImportSourceType.LOCAL_FOLDER -> Unit
                             }
                         },
@@ -975,6 +999,13 @@ private fun remoteSourceDialogFocusRows(
             listOf("$prefix:label"),
             listOf("$prefix:root"),
             listOf("$prefix:auth"),
+            listOf("$prefix:username", "$prefix:password"),
+            buttons,
+        )
+
+        ImportSourceType.EMBY -> listOf(
+            listOf("$prefix:label"),
+            listOf("$prefix:root"),
             listOf("$prefix:username", "$prefix:password"),
             buttons,
         )
@@ -1220,6 +1251,52 @@ private fun TvSubsonicSourceForm(
 }
 
 @Composable
+private fun TvEmbySourceForm(
+    state: ImportState,
+    onIntent: (ImportIntent) -> Unit,
+    focusPrefix: String,
+    focusChain: TvSettingsFocusChain,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        TvSettingsTextField(
+            label = "名称",
+            value = state.embyLabel,
+            onValueChange = { onIntent(ImportIntent.EmbyLabelChanged(it)) },
+            placeholder = "Emby",
+            focusKey = "$focusPrefix:label",
+            focusChain = focusChain,
+        )
+        TvSettingsTextField(
+            label = "服务器地址",
+            value = state.embyBaseUrl,
+            onValueChange = { onIntent(ImportIntent.EmbyBaseUrlChanged(it)) },
+            placeholder = "https://media.example.com",
+            focusKey = "$focusPrefix:root",
+            focusChain = focusChain,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            TvSettingsTextField(
+                label = "用户名",
+                value = state.embyUsername,
+                onValueChange = { onIntent(ImportIntent.EmbyUsernameChanged(it)) },
+                modifier = Modifier.weight(1f),
+                focusKey = "$focusPrefix:username",
+                focusChain = focusChain,
+            )
+            TvSettingsTextField(
+                label = "密码",
+                value = state.embyPassword,
+                onValueChange = { onIntent(ImportIntent.EmbyPasswordChanged(it)) },
+                modifier = Modifier.weight(1f),
+                password = true,
+                focusKey = "$focusPrefix:password",
+                focusChain = focusChain,
+            )
+        }
+    }
+}
+
+@Composable
 private fun TvSourceCard(
     sourceWithStatus: SourceWithStatus,
     latestSummary: top.iwesley.lyn.music.core.model.ImportScanSummary?,
@@ -1428,6 +1505,16 @@ private fun TvRemoteSourceEditorDialog(
                         }
 
                         ImportSourceType.SUBSONIC -> {
+                            TvSettingsTextField(
+                                label = "服务器地址",
+                                value = editor.rootUrl,
+                                onValueChange = { onIntent(ImportIntent.RemoteSourceRootUrlChanged(it)) },
+                                focusKey = "$focusPrefix:root",
+                                focusChain = focusChain,
+                            )
+                        }
+
+                        ImportSourceType.EMBY -> {
                             TvSettingsTextField(
                                 label = "服务器地址",
                                 value = editor.rootUrl,
@@ -2596,6 +2683,7 @@ private fun sourceTypeTitle(type: ImportSourceType): String {
         ImportSourceType.WEBDAV -> "WebDAV"
         ImportSourceType.NAVIDROME -> "Navidrome"
         ImportSourceType.SUBSONIC -> "Subsonic"
+        ImportSourceType.EMBY -> "Emby"
     }
 }
 
@@ -2605,7 +2693,8 @@ private fun sourceTypeIcon(type: ImportSourceType): ImageVector {
         ImportSourceType.SAMBA,
         ImportSourceType.WEBDAV,
         ImportSourceType.NAVIDROME,
-        ImportSourceType.SUBSONIC -> Icons.Rounded.Cloud
+        ImportSourceType.SUBSONIC,
+        ImportSourceType.EMBY -> Icons.Rounded.Cloud
     }
 }
 
@@ -2616,6 +2705,7 @@ private fun sourceDisplayReference(source: ImportSource): String {
         ImportSourceType.WEBDAV -> displayWebDavRootUrl(source.rootReference)
         ImportSourceType.NAVIDROME -> source.rootReference
         ImportSourceType.SUBSONIC -> source.rootReference
+        ImportSourceType.EMBY -> source.rootReference
     }
 }
 

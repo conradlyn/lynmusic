@@ -39,6 +39,7 @@ sealed interface PlaylistsIntent {
     data class SourceFilterChanged(val filter: LibrarySourceFilter) : PlaylistsIntent
     data object BackToList : PlaylistsIntent
     data class CreatePlaylist(val name: String) : PlaylistsIntent
+    data class RenamePlaylist(val playlistId: String, val name: String) : PlaylistsIntent
     data class DeletePlaylist(val playlistId: String) : PlaylistsIntent
     data class CreatePlaylistAndAddTrack(val name: String, val track: Track?) : PlaylistsIntent
     data class AddTrackToPlaylist(val playlistId: String, val track: Track) : PlaylistsIntent
@@ -84,7 +85,11 @@ class PlaylistsStore(
                     offlineDownloadsByTrackId = offlineDownloads,
                     navidromeSourceIds = sources
                         .map(SourceWithStatus::source)
-                        .filter { it.type == ImportSourceType.NAVIDROME || it.type == ImportSourceType.SUBSONIC }
+                        .filter {
+                            it.type == ImportSourceType.NAVIDROME ||
+                                it.type == ImportSourceType.SUBSONIC ||
+                                it.type == ImportSourceType.EMBY
+                        }
                         .mapTo(linkedSetOf()) { it.id },
                 )
             }.collect { snapshot ->
@@ -133,6 +138,7 @@ class PlaylistsStore(
             }
             is PlaylistsIntent.SelectPlaylist -> observeSelectedPlaylist(intent.playlistId)
             is PlaylistsIntent.CreatePlaylist -> createPlaylist(intent.name)
+            is PlaylistsIntent.RenamePlaylist -> renamePlaylist(intent.playlistId, intent.name)
             is PlaylistsIntent.DeletePlaylist -> deletePlaylist(intent.playlistId)
             is PlaylistsIntent.CreatePlaylistAndAddTrack -> createPlaylistAndMaybeAddTrack(intent.name, intent.track)
             is PlaylistsIntent.AddTrackToPlaylist -> addTrackToPlaylist(intent.playlistId, intent.track)
@@ -194,6 +200,14 @@ class PlaylistsStore(
             }
             .onFailure { throwable ->
                 updateState { it.copy(message = throwable.message.orEmpty().ifBlank { "歌单创建失败。" }) }
+            }
+    }
+
+    private suspend fun renamePlaylist(playlistId: String, name: String) {
+        playlistRepository.renamePlaylist(playlistId, name)
+            .onSuccess { updateState { it.copy(message = null) } }
+            .onFailure { throwable ->
+                updateState { it.copy(message = throwable.message.orEmpty().ifBlank { "歌单重命名失败。" }) }
             }
     }
 
@@ -274,6 +288,7 @@ class PlaylistsStore(
             LibrarySourceFilter.WEBDAV,
             LibrarySourceFilter.NAVIDROME,
             LibrarySourceFilter.SUBSONIC,
+            LibrarySourceFilter.EMBY,
         )
     }
 }

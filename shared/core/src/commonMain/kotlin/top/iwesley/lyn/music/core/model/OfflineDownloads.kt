@@ -72,6 +72,7 @@ fun offlineDownloadSourceType(track: Track): ImportSourceType? {
     return when {
         parseSambaLocator(track.mediaLocator) != null -> ImportSourceType.SAMBA
         parseWebDavLocator(track.mediaLocator) != null -> ImportSourceType.WEBDAV
+        parseEmbySongLocator(track.mediaLocator) != null -> ImportSourceType.EMBY
         else -> parseSubsonicCompatibleSongLocator(track.mediaLocator)?.sourceType
     }
 }

@@ -294,6 +294,24 @@ private class FakePlaylistRepository(
         return Result.success(summary)
     }
 
+    override suspend fun renamePlaylist(playlistId: String, name: String): Result<PlaylistSummary> {
+        val current = mutableDetails.value.getValue(playlistId)
+        val updatedSummary = mutablePlaylists.value.first { it.id == playlistId }.copy(
+            name = name,
+            updatedAt = current.updatedAt + 1,
+        )
+        mutablePlaylists.value = mutablePlaylists.value.map { playlist ->
+            if (playlist.id == playlistId) updatedSummary else playlist
+        }
+        mutableDetails.value = mutableDetails.value + (
+            playlistId to current.copy(
+                name = name,
+                updatedAt = updatedSummary.updatedAt,
+            )
+        )
+        return Result.success(updatedSummary)
+    }
+
     override suspend fun deletePlaylist(playlistId: String): Result<Unit> {
         deleteError?.let { return Result.failure(it) }
         deletedPlaylistIds += playlistId

@@ -2,6 +2,7 @@ package top.iwesley.lyn.music.feature.importing
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import top.iwesley.lyn.music.core.model.EmbySourceDraft
 import top.iwesley.lyn.music.core.model.ImportScanSummary
 import top.iwesley.lyn.music.core.model.ImportSourceType
 import top.iwesley.lyn.music.core.model.LocalFolderSelection
@@ -62,6 +63,10 @@ data class ImportState(
     val subsonicUsername: String = "",
     val subsonicCredential: String = "",
     val subsonicAuthMode: SubsonicAuthMode = SubsonicAuthMode.PASSWORD,
+    val embyLabel: String = "",
+    val embyBaseUrl: String = "",
+    val embyUsername: String = "",
+    val embyPassword: String = "",
     val creatingSourceType: ImportSourceType? = null,
     val editingSource: RemoteSourceEditorState? = null,
     val isWorking: Boolean = false,
@@ -82,6 +87,8 @@ sealed interface ImportIntent {
     data object AddNavidromeSource : ImportIntent
     data object TestSubsonicSource : ImportIntent
     data object AddSubsonicSource : ImportIntent
+    data object TestEmbySource : ImportIntent
+    data object AddEmbySource : ImportIntent
     data class OpenRemoteSourceCreator(val type: ImportSourceType) : ImportIntent
     data object DismissRemoteSourceCreator : ImportIntent
     data class OpenRemoteSourceEditor(val sourceId: String) : ImportIntent
@@ -111,6 +118,10 @@ sealed interface ImportIntent {
     data class SubsonicUsernameChanged(val value: String) : ImportIntent
     data class SubsonicCredentialChanged(val value: String) : ImportIntent
     data class SubsonicAuthModeChanged(val value: SubsonicAuthMode) : ImportIntent
+    data class EmbyLabelChanged(val value: String) : ImportIntent
+    data class EmbyBaseUrlChanged(val value: String) : ImportIntent
+    data class EmbyUsernameChanged(val value: String) : ImportIntent
+    data class EmbyPasswordChanged(val value: String) : ImportIntent
     data class RemoteSourceLabelChanged(val value: String) : ImportIntent
     data class RemoteSourceServerChanged(val value: String) : ImportIntent
     data class RemoteSourcePortChanged(val value: String) : ImportIntent
@@ -328,6 +339,49 @@ class ImportStore(
                 }
             }
 
+            ImportIntent.TestEmbySource -> {
+                val draft = embyDraftOrNull(
+                    label = state.value.embyLabel,
+                    baseUrl = state.value.embyBaseUrl,
+                    username = state.value.embyUsername,
+                    password = state.value.embyPassword,
+                    allowBlankPassword = false,
+                ) ?: return
+                runImport {
+                    repository.testEmbySource(draft)
+                        .onSuccess { setTestMessage("Emby 连接测试成功。") }
+                        .onFailure { setTestMessage("Emby 连接测试失败: ${it.message}") }
+                }
+            }
+
+            ImportIntent.AddEmbySource -> {
+                val draft = embyDraftOrNull(
+                    label = state.value.embyLabel,
+                    baseUrl = state.value.embyBaseUrl,
+                    username = state.value.embyUsername,
+                    password = state.value.embyPassword,
+                    allowBlankPassword = false,
+                ) ?: return
+                runImport(ImportScanOperation.CreateRemote(ImportSourceType.EMBY)) {
+                    repository.addEmbySource(draft)
+                        .onSuccess { summary ->
+                            updateState {
+                                it.copy(
+                                    creatingSourceType = null,
+                                    embyLabel = "",
+                                    embyBaseUrl = "",
+                                    embyUsername = "",
+                                    embyPassword = "",
+                                    testMessage = null,
+                                )
+                            }
+                            recordScanSummary(summary)
+                            setMessage(scanSuccessMessage("Emby 音乐源已导入。", summary))
+                        }
+                        .onFailure { setCreateOrPageMessage(ImportSourceType.EMBY, "Emby 导入失败: ${it.message}") }
+                }
+            }
+
             is ImportIntent.OpenRemoteSourceCreator -> {
                 if (intent.type == ImportSourceType.LOCAL_FOLDER) return
                 updateState { state ->
@@ -441,6 +495,21 @@ class ImportStore(
                         }
                     }
 
+                    ImportSourceType.EMBY -> {
+                        val draft = editingEmbyDraftOrNull(editor) ?: return
+                        runImport {
+                            repository.testUpdatedEmbySource(
+                                sourceId = editor.sourceId,
+                                draft = draft,
+                                keepExistingCredentialWhenBlankPassword = editor.keepExistingCredential,
+                            ).onSuccess {
+                                setTestMessage("Emby 连接测试成功。")
+                            }.onFailure {
+                                setTestMessage("Emby 连接测试失败: ${it.message}")
+                            }
+                        }
+                    }
+
                     ImportSourceType.LOCAL_FOLDER -> Unit
                 }
             }
@@ -516,6 +585,23 @@ class ImportStore(
                         }
                     }
 
+                    ImportSourceType.EMBY -> {
+                        val draft = editingEmbyDraftOrNull(editor) ?: return
+                        runImport(ImportScanOperation.UpdateRemote(editor.sourceId)) {
+                            repository.updateEmbySource(
+                                sourceId = editor.sourceId,
+                                draft = draft,
+                                keepExistingCredentialWhenBlankPassword = editor.keepExistingCredential,
+                            ).onSuccess { summary ->
+                                updateState { it.copy(editingSource = null) }
+                                recordScanSummary(summary)
+                                setMessage(scanSuccessMessage("来源已更新并重新扫描。", summary))
+                            }.onFailure {
+                                setMessage("更新来源失败: ${it.message}")
+                            }
+                        }
+                    }
+
                     ImportSourceType.LOCAL_FOLDER -> Unit
                 }
             }
@@ -576,12 +662,28 @@ class ImportStore(
                     )
                 }
             }
+            is ImportIntent.EmbyLabelChanged -> updateState { it.copy(embyLabel = intent.value) }
+            is ImportIntent.EmbyBaseUrlChanged -> updateState { it.copy(embyBaseUrl = intent.value) }
+            is ImportIntent.EmbyUsernameChanged -> updateState { it.copy(embyUsername = intent.value) }
+            is ImportIntent.EmbyPasswordChanged -> updateState { it.copy(embyPassword = intent.value) }
             is ImportIntent.RemoteSourceLabelChanged -> updateEditingSource { it.copy(label = intent.value) }
             is ImportIntent.RemoteSourceServerChanged -> updateEditingSource { it.copy(server = intent.value) }
             is ImportIntent.RemoteSourcePortChanged -> updateEditingSource { it.copy(port = intent.value) }
             is ImportIntent.RemoteSourcePathChanged -> updateEditingSource { it.copy(path = intent.value) }
-            is ImportIntent.RemoteSourceRootUrlChanged -> updateEditingSource { it.copy(rootUrl = intent.value) }
-            is ImportIntent.RemoteSourceUsernameChanged -> updateEditingSource { it.copy(username = intent.value) }
+            is ImportIntent.RemoteSourceRootUrlChanged -> updateEditingSource {
+                if (it.type == ImportSourceType.EMBY && it.rootUrl != intent.value) {
+                    it.copy(rootUrl = intent.value, password = "", keepExistingCredential = false)
+                } else {
+                    it.copy(rootUrl = intent.value)
+                }
+            }
+            is ImportIntent.RemoteSourceUsernameChanged -> updateEditingSource {
+                if (it.type == ImportSourceType.EMBY && it.username != intent.value) {
+                    it.copy(username = intent.value, password = "", keepExistingCredential = false)
+                } else {
+                    it.copy(username = intent.value)
+                }
+            }
             is ImportIntent.RemoteSourcePasswordChanged -> updateEditingSource {
                 it.copy(
                     password = intent.value,
@@ -712,6 +814,33 @@ class ImportStore(
         )
     }
 
+    private fun embyDraftOrNull(
+        label: String,
+        baseUrl: String,
+        username: String,
+        password: String,
+        allowBlankPassword: Boolean,
+    ): EmbySourceDraft? {
+        if (baseUrl.isBlank()) {
+            setCreateOrPageMessage(ImportSourceType.EMBY, "请先填写 Emby 服务器地址。")
+            return null
+        }
+        if (username.isBlank()) {
+            setCreateOrPageMessage(ImportSourceType.EMBY, "请先填写 Emby 用户名。")
+            return null
+        }
+        if (!allowBlankPassword && password.isBlank()) {
+            setCreateOrPageMessage(ImportSourceType.EMBY, "请先填写 Emby 密码。")
+            return null
+        }
+        return EmbySourceDraft(
+            label = label,
+            baseUrl = baseUrl,
+            username = username,
+            password = password,
+        )
+    }
+
     private fun editingSambaDraftOrNull(editor: RemoteSourceEditorState): SambaSourceDraft? {
         val port = editor.port.trim().takeIf { it.isNotBlank() }?.toIntOrNull()
         if (editor.server.isBlank()) {
@@ -781,6 +910,17 @@ class ImportStore(
         )
     }
 
+    private fun editingEmbyDraftOrNull(editor: RemoteSourceEditorState): EmbySourceDraft? {
+        val canReuseStoredCredential = editor.keepExistingCredential && editor.hasStoredCredential
+        return embyDraftOrNull(
+            label = editor.label,
+            baseUrl = editor.rootUrl,
+            username = editor.username,
+            password = editor.password,
+            allowBlankPassword = canReuseStoredCredential,
+        )
+    }
+
     private fun updateEditingSource(transform: (RemoteSourceEditorState) -> RemoteSourceEditorState) {
         updateState { state ->
             state.copy(editingSource = state.editingSource?.let(transform))
@@ -819,6 +959,13 @@ class ImportStore(
                 subsonicUsername = "",
                 subsonicCredential = "",
                 subsonicAuthMode = SubsonicAuthMode.PASSWORD,
+            )
+
+            ImportSourceType.EMBY -> copy(
+                embyLabel = "",
+                embyBaseUrl = "",
+                embyUsername = "",
+                embyPassword = "",
             )
 
             ImportSourceType.LOCAL_FOLDER -> this

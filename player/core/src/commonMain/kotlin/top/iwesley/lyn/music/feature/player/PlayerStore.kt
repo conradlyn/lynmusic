@@ -48,6 +48,8 @@ import top.iwesley.lyn.music.core.model.normalizeArtworkLocator
 import top.iwesley.lyn.music.core.model.parseLyricsShareImportedFontHash
 import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleCoverLocator
 import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleSongLocator
+import top.iwesley.lyn.music.core.model.parseEmbyCoverLocator
+import top.iwesley.lyn.music.core.model.parseEmbySongLocator
 import top.iwesley.lyn.music.core.model.trackArtworkCacheKey
 import top.iwesley.lyn.music.core.model.warn
 import top.iwesley.lyn.music.core.mvi.BaseStore
@@ -849,6 +851,7 @@ class PlayerStore(
         val uri = when {
             isDirectCastUri(locator) -> locator
             parseSubsonicCompatibleSongLocator(locator) != null -> NavidromeLocatorRuntime.resolveStreamUrl(locator)
+            parseEmbySongLocator(locator) != null -> NavidromeLocatorRuntime.resolveStreamUrl(locator)
             else -> null
         }?.takeIf(::isDirectCastUri)
 
@@ -893,6 +896,7 @@ class PlayerStore(
         val artworkUri = when {
             isDirectCastUri(artworkLocator) -> artworkLocator
             parseSubsonicCompatibleCoverLocator(artworkLocator) != null -> NavidromeLocatorRuntime.resolveCoverArtUrl(artworkLocator)
+            parseEmbyCoverLocator(artworkLocator) != null -> NavidromeLocatorRuntime.resolveCoverArtUrl(artworkLocator)
             else -> null
         }
         return directCastUriOrNull(artworkUri)

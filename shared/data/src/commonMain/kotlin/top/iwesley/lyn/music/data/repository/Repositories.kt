@@ -26,6 +26,7 @@ import top.iwesley.lyn.music.core.model.ImportSource
 import top.iwesley.lyn.music.core.model.ImportSourceGateway
 import top.iwesley.lyn.music.core.model.ImportSourceType
 import top.iwesley.lyn.music.core.model.LocalFolderSelection
+import top.iwesley.lyn.music.core.model.EmbySourceDraft
 import top.iwesley.lyn.music.core.model.LyricsDocument
 import top.iwesley.lyn.music.core.model.LyricsHttpClient
 import top.iwesley.lyn.music.core.model.LyricsLookupMetadata
@@ -79,6 +80,7 @@ import top.iwesley.lyn.music.core.model.normalizeSambaPath
 import top.iwesley.lyn.music.core.model.normalizeArtworkLocator
 import top.iwesley.lyn.music.core.model.normalizeWebDavRootUrl
 import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleSongLocator
+import top.iwesley.lyn.music.core.model.parseEmbySongLocator
 import top.iwesley.lyn.music.core.model.parseSambaLocator
 import top.iwesley.lyn.music.core.model.trackArtworkCacheKey
 import top.iwesley.lyn.music.core.model.warn
@@ -92,6 +94,7 @@ import top.iwesley.lyn.music.data.db.LynMusicDatabase
 import top.iwesley.lyn.music.data.db.TrackEntity
 import top.iwesley.lyn.music.data.db.WorkflowLyricsSourceConfigEntity
 import top.iwesley.lyn.music.domain.DEFAULT_LRCAPI_URL
+import top.iwesley.lyn.music.domain.EMBY_LYRICS_SOURCE_ID
 import top.iwesley.lyn.music.domain.MANAGED_LRCAPI_SOURCE_ID
 import top.iwesley.lyn.music.domain.buildLyricsRequest
 import top.iwesley.lyn.music.domain.buildManagedLrcApiConfig
@@ -102,13 +105,19 @@ import top.iwesley.lyn.music.domain.isSubsonicCompatibleSourceType
 import top.iwesley.lyn.music.domain.lyricsSourceIdFor
 import top.iwesley.lyn.music.domain.normalizeNavidromeBaseUrl
 import top.iwesley.lyn.music.domain.normalizeSubsonicBaseUrl
+import top.iwesley.lyn.music.domain.normalizeEmbyBaseUrl
 import top.iwesley.lyn.music.domain.requestNavidromeLyrics
+import top.iwesley.lyn.music.domain.requestEmbyLyricsDocument as requestEmbyServerLyricsDocument
+import top.iwesley.lyn.music.domain.resolveEmbyDeviceId
 import top.iwesley.lyn.music.domain.resolveNavidromeCoverArtUrl
 import top.iwesley.lyn.music.domain.resolveNavidromeStreamUrl
+import top.iwesley.lyn.music.domain.resolveEmbySource
 import top.iwesley.lyn.music.domain.resolveSubsonicCompatibleCoverArtUrl
 import top.iwesley.lyn.music.domain.resolveSubsonicCompatibleStreamUrl
 import top.iwesley.lyn.music.domain.scanNavidromeLibrary
 import top.iwesley.lyn.music.domain.scanSubsonicLibrary
+import top.iwesley.lyn.music.domain.parseEmbyCredential
+import top.iwesley.lyn.music.domain.serializeEmbyCredential
 import top.iwesley.lyn.music.domain.toSubsonicAuthMode
 import top.iwesley.lyn.music.domain.buildPresetOiapiQqMusicWorkflowJson
 import top.iwesley.lyn.music.domain.buildWorkflowRequest
@@ -216,6 +225,26 @@ interface ImportSourceRepository {
     ): Result<ImportScanSummary> {
         return Result.failure(UnsupportedOperationException("Subsonic import is not supported."))
     }
+    suspend fun testEmbySource(draft: EmbySourceDraft): Result<Unit> {
+        return Result.failure(UnsupportedOperationException("Emby import is not supported."))
+    }
+    suspend fun testUpdatedEmbySource(
+        sourceId: String,
+        draft: EmbySourceDraft,
+        keepExistingCredentialWhenBlankPassword: Boolean = true,
+    ): Result<Unit> {
+        return Result.failure(UnsupportedOperationException("Emby import is not supported."))
+    }
+    suspend fun addEmbySource(draft: EmbySourceDraft): Result<ImportScanSummary> {
+        return Result.failure(UnsupportedOperationException("Emby import is not supported."))
+    }
+    suspend fun updateEmbySource(
+        sourceId: String,
+        draft: EmbySourceDraft,
+        keepExistingCredentialWhenBlankPassword: Boolean = true,
+    ): Result<ImportScanSummary> {
+        return Result.failure(UnsupportedOperationException("Emby import is not supported."))
+    }
     suspend fun rescanSource(sourceId: String): Result<ImportScanSummary?>
     suspend fun setSourceEnabled(sourceId: String, enabled: Boolean): Result<Unit>
     suspend fun deleteSource(sourceId: String): Result<Unit>
@@ -226,6 +255,7 @@ interface PlaylistRepository {
 
     fun observePlaylistDetail(playlistId: String): Flow<PlaylistDetail?>
     suspend fun createPlaylist(name: String): Result<PlaylistSummary>
+    suspend fun renamePlaylist(playlistId: String, name: String): Result<PlaylistSummary>
     suspend fun deletePlaylist(playlistId: String): Result<Unit>
     suspend fun addTrackToPlaylist(playlistId: String, track: Track): Result<Unit>
     suspend fun removeTrackFromPlaylist(playlistId: String, trackId: String): Result<Unit>
@@ -687,6 +717,89 @@ class RoomImportSourceRepository(
         }
     }
 
+    override suspend fun testEmbySource(draft: EmbySourceDraft): Result<Unit> {
+        return runCatching {
+            gateway.testEmby(
+                draft = prepareEmbyDraft(draft),
+                deviceId = resolveEmbyDeviceId(secureCredentialStore),
+            )
+        }.map { }
+    }
+
+    override suspend fun testUpdatedEmbySource(
+        sourceId: String,
+        draft: EmbySourceDraft,
+        keepExistingCredentialWhenBlankPassword: Boolean,
+    ): Result<Unit> {
+        return runCatching {
+            val existing = requireRemoteSource(sourceId, ImportSourceType.EMBY)
+            val preparedDraft = prepareEmbyDraft(draft)
+            val deviceId = resolveEmbyDeviceId(secureCredentialStore)
+            if (preparedDraft.password.isNotBlank()) {
+                gateway.testEmby(preparedDraft, deviceId)
+            } else if (keepExistingCredentialWhenBlankPassword) {
+                val storedCredential = existing.credentialKey?.let { secureCredentialStore.get(it) }
+                val credential = parseEmbyCredential(storedCredential) ?: error("Emby 来源缺少有效凭据。")
+                gateway.testEmbyCredential(preparedDraft, credential, deviceId)
+            } else {
+                error("Emby 来源缺少有效凭据。")
+            }
+        }.map { }
+    }
+
+    override suspend fun addEmbySource(draft: EmbySourceDraft): Result<ImportScanSummary> {
+        return runCatching {
+            val sourceId = newId("emby")
+            val preparedDraft = prepareEmbyDraft(draft)
+            val deviceId = resolveEmbyDeviceId(secureCredentialStore)
+            val credential = gateway.testEmby(preparedDraft, deviceId)
+            val source = createEmbySource(sourceId, preparedDraft).copy(credentialKey = "credential-$sourceId")
+            validateImportSourceCreation(label = source.label)
+            source.credentialKey?.let { secureCredentialStore.put(it, serializeEmbyCredential(credential)) }
+            database.importSourceDao().upsert(source.toEntity())
+            runScan(source) {
+                gateway.scanEmby(preparedDraft, credential, sourceId, deviceId)
+            }
+        }
+    }
+
+    override suspend fun updateEmbySource(
+        sourceId: String,
+        draft: EmbySourceDraft,
+        keepExistingCredentialWhenBlankPassword: Boolean,
+    ): Result<ImportScanSummary> {
+        return runCatching {
+            val existing = requireRemoteSource(sourceId, ImportSourceType.EMBY)
+            val preparedDraft = prepareEmbyDraft(draft)
+            val updatedSource = createEmbySource(
+                sourceId = existing.id,
+                draft = preparedDraft,
+                createdAt = existing.createdAt,
+                enabled = existing.enabled,
+            )
+            assertUniqueImportSourceLabel(updatedSource.label, excludingSourceId = existing.id)
+            val deviceId = resolveEmbyDeviceId(secureCredentialStore)
+            val credential = if (preparedDraft.password.isNotBlank()) {
+                gateway.testEmby(preparedDraft, deviceId)
+            } else if (keepExistingCredentialWhenBlankPassword) {
+                val existingCredential = parseEmbyCredential(existing.credentialKey?.let { secureCredentialStore.get(it) })
+                    ?: error("Emby 来源缺少有效凭据。")
+                gateway.testEmbyCredential(preparedDraft, existingCredential, deviceId)
+                existingCredential
+            } else {
+                error("Emby 来源缺少有效凭据。")
+            }
+            val report = gateway.scanEmby(preparedDraft, credential, sourceId, deviceId)
+            val credentialKey = existing.credentialKey ?: "credential-$sourceId"
+            persistUpdatedCredential(
+                previousCredentialKey = existing.credentialKey,
+                nextCredentialKey = credentialKey,
+                password = serializeEmbyCredential(credential),
+            )
+            persistScan(updatedSource.copy(credentialKey = credentialKey), report)
+        }
+    }
+
     override suspend fun rescanSource(sourceId: String): Result<ImportScanSummary?> {
         return runCatching {
             val entity = database.importSourceDao().getById(sourceId)
@@ -760,6 +873,22 @@ class RoomImportSourceRepository(
                             sourceId = source.id,
                         )
                     }
+
+                    ImportSourceType.EMBY -> {
+                        val credential = parseEmbyCredential(source.credentialKey?.let { secureCredentialStore.get(it) })
+                            ?: error("Emby 来源缺少有效凭据。")
+                        gateway.scanEmby(
+                            draft = EmbySourceDraft(
+                                label = source.label,
+                                baseUrl = normalizeEmbyBaseUrl(source.rootReference),
+                                username = source.username.orEmpty(),
+                                password = "",
+                            ),
+                            credential = credential,
+                            sourceId = source.id,
+                            deviceId = resolveEmbyDeviceId(secureCredentialStore),
+                        )
+                    }
                 }
             }
             summary
@@ -785,12 +914,36 @@ class RoomImportSourceRepository(
             database.offlineDownloadDao().deleteBySourceId(source.id)
             source.credentialKey?.let { secureCredentialStore.remove(it) }
             database.favoriteTrackDao().deleteBySourceId(source.id)
+            cleanupPlaylistsForDeletedSource(source.id)
             database.trackPlaybackStatsDao().deleteBySourceId(source.id)
             database.trackDao().deleteBySourceId(source.id)
             database.lyricsCacheDao().deleteByTrackIdPrefix(trackIdPrefix(source.id))
             database.importIndexStateDao().deleteBySourceId(source.id)
             database.importSourceDao().deleteById(source.id)
             rebuildLibrarySummaries()
+        }
+    }
+
+    private suspend fun cleanupPlaylistsForDeletedSource(sourceId: String) {
+        val playlistIds = buildSet {
+            database.playlistRemoteBindingDao().getBySourceId(sourceId).forEach { add(it.playlistId) }
+            database.playlistTrackDao().getAll()
+                .filter { it.sourceId == sourceId }
+                .forEach { add(it.playlistId) }
+        }
+        playlistIds.forEach { playlistId ->
+            database.playlistRemoteBindingDao().deleteByPlaylistIdAndSourceId(playlistId, sourceId)
+            database.playlistTrackDao().deleteByPlaylistIdAndSourceId(playlistId, sourceId)
+            cleanupDeletedSourcePlaylistIfNecessary(playlistId)
+        }
+    }
+
+    private suspend fun cleanupDeletedSourcePlaylistIfNecessary(playlistId: String) {
+        val playlist = database.playlistDao().getById(playlistId) ?: return
+        val hasTracks = database.playlistTrackDao().getByPlaylistId(playlistId).isNotEmpty()
+        val hasBindings = database.playlistRemoteBindingDao().getAll().any { it.playlistId == playlistId }
+        if (!playlist.createdLocally && !hasTracks && !hasBindings) {
+            database.playlistDao().deleteById(playlistId)
         }
     }
 
@@ -832,6 +985,14 @@ class RoomImportSourceRepository(
             baseUrl = normalizeSubsonicBaseUrl(draft.baseUrl),
             username = if (apiKeyMode) "" else draft.username.trim(),
             credential = credential,
+        )
+    }
+
+    private fun prepareEmbyDraft(draft: EmbySourceDraft): EmbySourceDraft {
+        return draft.copy(
+            label = draft.label.trim(),
+            baseUrl = normalizeEmbyBaseUrl(draft.baseUrl),
+            username = draft.username.trim(),
         )
     }
 
@@ -913,6 +1074,24 @@ class RoomImportSourceRepository(
             rootReference = draft.baseUrl,
             username = draft.username.takeIf { draft.authMode == SubsonicAuthMode.PASSWORD },
             subsonicAuthMode = draft.authMode,
+            createdAt = createdAt,
+            enabled = enabled,
+        )
+    }
+
+    private fun createEmbySource(
+        sourceId: String,
+        draft: EmbySourceDraft,
+        createdAt: Long = now(),
+        enabled: Boolean = true,
+    ): ImportSource {
+        val label = draft.label.ifBlank { draft.baseUrl }
+        return ImportSource(
+            id = sourceId,
+            type = ImportSourceType.EMBY,
+            label = label,
+            rootReference = draft.baseUrl,
+            username = draft.username,
             createdAt = createdAt,
             enabled = enabled,
         )
@@ -1501,9 +1680,48 @@ class DefaultLyricsRepository(
                 logCacheHit(trackLabel, resolved.document)
                 return resolved.withArtworkOverride(manualArtworkOverride)
             }
+        val embyLocator = parseEmbySongLocator(track.mediaLocator)
+        if (embyLocator != null) {
+            cachedRows
+                .firstOrNull { it.sourceId == EMBY_LYRICS_SOURCE_ID }
+                ?.let { row ->
+                    resolveCachedLyricsForTrack(
+                        track = track,
+                        row = row,
+                        suppressArtwork = hasRealLocalAlbumArtworkCache,
+                    )
+                }
+                ?.let { resolved ->
+                    logCacheHit(trackLabel, resolved.document)
+                    return resolved.withArtworkOverride(manualArtworkOverride)
+                }
+            requestEmbyLyricsDocumentForPlayback(track)?.let { embyLyrics ->
+                storeLyricsDocument(track.id, embyLyrics)
+                logger.info(LYRICS_LOG_TAG) {
+                    "resolved track=$trackLabel source=${embyLyrics.sourceId} synced=${embyLyrics.isSynced} lines=${embyLyrics.lines.size}"
+                }
+                return ResolvedLyricsResult(document = embyLyrics)
+                    .withArtworkOverride(manualArtworkOverride)
+            }
+            cachedRows
+                .firstNotNullOfOrNull { cache ->
+                    cache.takeUnless { it.sourceId == EMBY_LYRICS_SOURCE_ID }
+                        ?.let { row ->
+                            resolveCachedLyricsForTrack(
+                                track = track,
+                                row = row,
+                                suppressArtwork = hasRealLocalAlbumArtworkCache,
+                            )
+                        }
+                }
+                ?.let { resolved ->
+                    logCacheHit(trackLabel, resolved.document)
+                    return resolved.withArtworkOverride(manualArtworkOverride)
+                }
+        }
         val subsonicLocator = parseSubsonicCompatibleSongLocator(track.mediaLocator)
         val subsonicLyricsSourceId = subsonicLocator?.sourceType?.let(::lyricsSourceIdFor)
-        if (subsonicLocator != null && subsonicLyricsSourceId != null) {
+        if (embyLocator == null && subsonicLocator != null && subsonicLyricsSourceId != null) {
             cachedRows
                 .firstOrNull { it.sourceId == subsonicLyricsSourceId }
                 ?.let { row ->
@@ -1710,6 +1928,29 @@ class DefaultLyricsRepository(
             track = track,
             logger = logger,
         )
+    }
+
+    private suspend fun requestEmbyLyricsDocument(track: Track): LyricsDocument? {
+        val locator = parseEmbySongLocator(track.mediaLocator) ?: return null
+        if (locator.first != track.sourceId) return null
+        val source = resolveEmbySource(database, secureCredentialStore, locator.first) ?: return null
+        return requestEmbyServerLyricsDocument(
+            httpClient = httpClient,
+            source = source,
+            itemId = locator.second,
+            logger = logger,
+        )
+    }
+
+    private suspend fun requestEmbyLyricsDocumentForPlayback(track: Track): LyricsDocument? {
+        return runCatching { requestEmbyLyricsDocument(track) }
+            .onFailure { throwable ->
+                throwable.throwIfCancellation()
+                logger.warn(LYRICS_LOG_TAG) {
+                    "playback-emby-lyrics-failed track=${track.logIdentity()} reason=${throwable.message.orEmpty()}"
+                }
+            }
+            .getOrNull()
     }
 
     override suspend fun searchLyricsCandidates(track: Track, includeTrackProvidedCandidate: Boolean): List<LyricsSearchCandidate> {
@@ -1924,6 +2165,8 @@ class DefaultLyricsRepository(
     private suspend fun buildTrackProvidedLyricsCandidates(track: Track): List<LyricsSearchCandidate> {
         return if (parseSubsonicCompatibleSongLocator(track.mediaLocator) != null) {
             listOfNotNull(buildNavidromeTrackProvidedLyricsCandidate(track))
+        } else if (parseEmbySongLocator(track.mediaLocator) != null) {
+            listOfNotNull(buildEmbyTrackProvidedLyricsCandidate(track))
         } else {
             buildList {
                 buildSameNameTrackProvidedLyricsCandidate(track)?.let(::add)
@@ -1944,6 +2187,28 @@ class DefaultLyricsRepository(
         return LyricsSearchCandidate(
             sourceId = document.sourceId,
             sourceName = if (document.sourceId == SUBSONIC_LYRICS_SOURCE_ID) "Subsonic" else "Navidrome",
+            document = document,
+            title = track.title.takeIf { it.isNotBlank() },
+            artistName = track.artistName?.takeIf { it.isNotBlank() },
+            albumTitle = track.albumTitle?.takeIf { it.isNotBlank() },
+            durationSeconds = track.durationSecondsOrNull(),
+            artworkLocator = normalizeArtworkLocator(track.artworkLocator),
+            isTrackProvided = true,
+        )
+    }
+
+    private suspend fun buildEmbyTrackProvidedLyricsCandidate(track: Track): LyricsSearchCandidate? {
+        val document = runCatching { requestEmbyLyricsDocument(track) }
+            .onFailure { throwable ->
+                logger.warn(LYRICS_LOG_TAG) {
+                    "manual-track-provided-emby-failed track=${track.logIdentity()} reason=${throwable.message.orEmpty()}"
+                }
+            }
+            .getOrNull()
+            ?: return null
+        return LyricsSearchCandidate(
+            sourceId = document.sourceId,
+            sourceName = "Emby",
             document = document,
             title = track.title.takeIf { it.isNotBlank() },
             artistName = track.artistName?.takeIf { it.isNotBlank() },
@@ -2030,6 +2295,7 @@ class DefaultLyricsRepository(
 
     private suspend fun readLiveSameNameLyricsDocument(track: Track): SameNameLyricsLookup {
         if (parseSubsonicCompatibleSongLocator(track.mediaLocator) != null) return SameNameLyricsLookup.Missing
+        if (parseEmbySongLocator(track.mediaLocator) != null) return SameNameLyricsLookup.Missing
         val rawPayload = sameNameLyricsFileGateway.readSameNameLyrics(track).fold(
             onSuccess = { it?.trim()?.takeIf { value -> value.isNotBlank() } },
             onFailure = { throwable -> return SameNameLyricsLookup.Failed(throwable) },
@@ -2798,13 +3064,20 @@ internal fun subsonicCompatibleTrackIdFor(
     }
 }
 
+internal fun embyTrackIdFor(sourceId: String, itemId: String): String {
+    return "track:${sourceId}:emby:${itemId.lowercase()}"
+}
+
 private fun trackIdFor(sourceId: String, relativePath: String, mediaLocator: String): String {
     val subsonicSong = parseSubsonicCompatibleSongLocator(mediaLocator)
-    return if (subsonicSong != null) {
-        subsonicCompatibleTrackIdFor(sourceId, subsonicSong.itemId, subsonicSong.sourceType)
-    } else {
-        "track:${sourceId}:${relativePath.lowercase()}"
+    if (subsonicSong != null) {
+        return subsonicCompatibleTrackIdFor(sourceId, subsonicSong.itemId, subsonicSong.sourceType)
     }
+    val embySong = parseEmbySongLocator(mediaLocator)
+    if (embySong != null) {
+        return embyTrackIdFor(sourceId, embySong.second)
+    }
+    return "track:${sourceId}:${relativePath.lowercase()}"
 }
 
 private fun trackIdPrefix(sourceId: String): String = "track:${sourceId}:%"

@@ -54,6 +54,8 @@ import top.iwesley.lyn.music.core.model.DEFAULT_SAMBA_PORT
 import top.iwesley.lyn.music.core.model.DesktopLyricsPreferencesStore
 import top.iwesley.lyn.music.core.model.DesktopVlcPreferencesStore
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
+import top.iwesley.lyn.music.core.model.EmbyCredential
+import top.iwesley.lyn.music.core.model.EmbySourceDraft
 import top.iwesley.lyn.music.core.model.ImportScanFailure
 import top.iwesley.lyn.music.core.model.ImportScanReport
 import top.iwesley.lyn.music.core.model.ImportSourceGateway
@@ -103,6 +105,8 @@ import top.iwesley.lyn.music.core.model.normalizeArtworkLocator
 import top.iwesley.lyn.music.core.model.normalizeSambaPath
 import top.iwesley.lyn.music.core.model.parseSambaLocator
 import top.iwesley.lyn.music.core.model.parseSambaPath
+import top.iwesley.lyn.music.core.model.parseEmbyCoverLocator
+import top.iwesley.lyn.music.core.model.parseEmbySongLocator
 import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleCoverLocator
 import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleSongLocator
 import top.iwesley.lyn.music.core.model.parseWebDavLocator
@@ -116,8 +120,11 @@ import top.iwesley.lyn.music.data.repository.DailyRecommendationDateChangeNotifi
 import top.iwesley.lyn.music.data.repository.DailyRecommendationDateKeyProvider
 import top.iwesley.lyn.music.data.repository.PlayerRuntimeServices
 import top.iwesley.lyn.music.domain.resolveNavidromeStreamUrl
+import top.iwesley.lyn.music.domain.resolveEmbyStreamUrl
+import top.iwesley.lyn.music.domain.scanEmbyLibrary
 import top.iwesley.lyn.music.domain.scanNavidromeLibrary
 import top.iwesley.lyn.music.domain.scanSubsonicLibrary
+import top.iwesley.lyn.music.domain.testEmbyConnection
 import top.iwesley.lyn.music.domain.testNavidromeConnection
 import top.iwesley.lyn.music.domain.testSubsonicConnection
 import top.iwesley.lyn.music.feature.library.LibrarySourceFilter
@@ -295,6 +302,7 @@ private class JvmLyricsHttpClient : LyricsHttpClient {
                 this.method = when (request.method) {
                     top.iwesley.lyn.music.core.model.RequestMethod.GET -> HttpMethod.Get
                     top.iwesley.lyn.music.core.model.RequestMethod.POST -> HttpMethod.Post
+                    top.iwesley.lyn.music.core.model.RequestMethod.DELETE -> HttpMethod.Delete
                 }
                 request.headers.forEach { (key, value) -> headers.append(key, value) }
                 request.body?.let { setBody(it) }
@@ -695,7 +703,10 @@ private class JvmAudioTagEditorPlatformService : AudioTagEditorPlatformService {
             if (rawTarget.isBlank()) {
                 null
             } else {
-                val target = if (parseSubsonicCompatibleCoverLocator(rawTarget) != null) {
+                val target = if (
+                    parseSubsonicCompatibleCoverLocator(rawTarget) != null ||
+                    parseEmbyCoverLocator(rawTarget) != null
+                ) {
                     NavidromeLocatorRuntime.resolveCoverArtUrl(rawTarget).orEmpty()
                 } else {
                     rawTarget
@@ -1048,6 +1059,35 @@ private class JvmImportSourceGateway(
     override suspend fun scanSubsonic(draft: SubsonicSourceDraft, sourceId: String): ImportScanReport {
         return scanSubsonicLibrary(
             draft = draft,
+            sourceId = sourceId,
+            httpClient = navidromeHttpClient,
+            supportedImportExtensions = JVM_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
+            logger = logger,
+        )
+    }
+
+    override suspend fun testEmby(draft: EmbySourceDraft, deviceId: String): EmbyCredential {
+        return testEmbyConnection(draft, deviceId, navidromeHttpClient, logger)
+    }
+
+    override suspend fun testEmbyCredential(
+        draft: EmbySourceDraft,
+        credential: EmbyCredential,
+        deviceId: String,
+    ) {
+        testEmbyConnection(draft, credential, deviceId, navidromeHttpClient, logger)
+    }
+
+    override suspend fun scanEmby(
+        draft: EmbySourceDraft,
+        credential: EmbyCredential,
+        sourceId: String,
+        deviceId: String,
+    ): ImportScanReport {
+        return scanEmbyLibrary(
+            draft = draft,
+            credential = credential,
+            deviceId = deviceId,
             sourceId = sourceId,
             httpClient = navidromeHttpClient,
             supportedImportExtensions = JVM_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
@@ -1630,6 +1670,7 @@ internal class JvmPlaybackGateway(
             val sourceReference = when {
                 offlineTarget != null -> track.mediaLocator
                 parseSubsonicCompatibleSongLocator(track.mediaLocator) != null -> track.mediaLocator
+                parseEmbySongLocator(track.mediaLocator) != null -> track.mediaLocator
                 else -> actualPlaybackSource
             }
             if (!loadToken.isCurrent()) {
@@ -2029,6 +2070,7 @@ internal class JvmPlaybackGateway(
 
     private suspend fun resolveLocator(locator: String): String {
         resolveNavidromeStreamUrl(database, secureCredentialStore, locator)?.let { return it }
+        resolveEmbyStreamUrl(database, secureCredentialStore, locator)?.let { return it }
         val samba = parseSambaLocator(locator) ?: return locator
         val source = database.importSourceDao().getById(samba.first)?.takeIf { it.enabled }
             ?: error("Samba 来源不可用。")

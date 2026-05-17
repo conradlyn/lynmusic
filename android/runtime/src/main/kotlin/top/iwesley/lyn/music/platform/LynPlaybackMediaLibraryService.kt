@@ -51,6 +51,7 @@ import top.iwesley.lyn.music.core.model.withSecureInMemoryCache
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
 import top.iwesley.lyn.music.data.db.PlaylistTrackEntity
 import top.iwesley.lyn.music.data.repository.DefaultPlaybackRepository
+import top.iwesley.lyn.music.data.repository.EmbyPlaybackStatsReporter
 import top.iwesley.lyn.music.data.repository.LocalPlaybackStatsReporter
 import top.iwesley.lyn.music.data.repository.NavidromePlaybackStatsReporter
 import top.iwesley.lyn.music.data.repository.PlaybackRepository
@@ -262,6 +263,12 @@ private class LynPlaybackServiceRuntime private constructor(
                 playbackStatsReporter = CompositePlaybackStatsReporter(
                     reporters = listOf(
                         NavidromePlaybackStatsReporter(
+                            database = database,
+                            secureCredentialStore = secureStore,
+                            httpClient = navidromeHttpClient,
+                            logger = logger,
+                        ),
+                        EmbyPlaybackStatsReporter(
                             database = database,
                             secureCredentialStore = secureStore,
                             httpClient = navidromeHttpClient,

@@ -19,6 +19,7 @@ import top.iwesley.lyn.music.core.model.AudioTagSnapshot
 import top.iwesley.lyn.music.core.model.ArtworkCacheStore
 import top.iwesley.lyn.music.core.model.DiagnosticLogLevel
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
+import top.iwesley.lyn.music.core.model.EmbyCredential
 import top.iwesley.lyn.music.core.model.ImportScanReport
 import top.iwesley.lyn.music.core.model.ImportSourceGateway
 import top.iwesley.lyn.music.core.model.ImportSourceType
@@ -39,6 +40,7 @@ import top.iwesley.lyn.music.core.model.SameNameLyricsFileGateway
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.WebDavSourceDraft
 import top.iwesley.lyn.music.core.model.WorkflowSongCandidate
+import top.iwesley.lyn.music.core.model.buildEmbySongLocator
 import top.iwesley.lyn.music.core.model.buildNavidromeCoverLocator
 import top.iwesley.lyn.music.core.model.buildNavidromeSongLocator
 import top.iwesley.lyn.music.core.model.trackArtworkCacheKey
@@ -54,6 +56,7 @@ import top.iwesley.lyn.music.data.db.WorkflowLyricsSourceConfigEntity
 import top.iwesley.lyn.music.data.db.buildLynMusicDatabase
 import top.iwesley.lyn.music.domain.NAVIDROME_LYRICS_SOURCE_ID
 import top.iwesley.lyn.music.domain.parseEnhancedLyricsPresentation
+import top.iwesley.lyn.music.domain.serializeEmbyCredential
 
 class LyricsRepositoryManualOverrideTest {
 
@@ -887,6 +890,57 @@ class LyricsRepositoryManualOverrideTest {
         assertEquals(listOf(track.id), audioTagGateway.readTrackIds)
         assertEquals(listOf("https://lyrics.example/direct-fallback"), httpClient.requestedUrls)
         assertNull(embeddedRow)
+    }
+
+    @Test
+    fun `emby lyrics server failure falls through to online sources`() = runTest {
+        val database = createTestDatabase()
+        seedEmbySource(database)
+        val track = embyTrack()
+        database.trackDao().upsertAll(listOf(track.toEntity()))
+        database.lyricsSourceConfigDao().upsert(
+            directSourceEntity(
+                id = "direct-fallback",
+                urlTemplate = "https://lyrics.example/direct-fallback",
+                priority = 100,
+            ),
+        )
+        val httpClient = MatchingLyricsHttpClient { request ->
+            when {
+                request.url.contains("/Items/song-1/Lyrics") -> Result.success(
+                    LyricsHttpResponse(statusCode = 501, body = ""),
+                )
+
+                request.url == "https://lyrics.example/direct-fallback" -> Result.success(
+                    LyricsHttpResponse(
+                        statusCode = 200,
+                        body = """
+                            {"data":[
+                              {"id":"direct","title":"Blue","artist":"Artist A","album":"Album A","duration":215,"lyrics":"direct line"}
+                            ]}
+                        """.trimIndent(),
+                    ),
+                )
+
+                else -> Result.failure(IllegalArgumentException("Unexpected request: ${request.url}"))
+            }
+        }
+        val repository = DefaultLyricsRepository(
+            database = database,
+            httpClient = httpClient,
+            secureCredentialStore = MapCredentialStore(
+                mutableMapOf("emby-cred" to serializeEmbyCredential(EmbyCredential("user-1", "token"))),
+            ),
+            logger = NoopDiagnosticLogger,
+        )
+
+        val resolved = repository.getLyrics(track)
+
+        assertNotNull(resolved)
+        assertEquals("direct-fallback", resolved.document.sourceId)
+        assertEquals("direct line", resolved.document.lines.single().text)
+        assertTrue(httpClient.requestedUrls.any { it.contains("/Items/song-1/Lyrics") })
+        assertTrue(httpClient.requestedUrls.contains("https://lyrics.example/direct-fallback"))
     }
 
     @Test
@@ -1959,6 +2013,25 @@ private suspend fun seedNavidromeSource(database: LynMusicDatabase) {
     )
 }
 
+private suspend fun seedEmbySource(database: LynMusicDatabase) {
+    database.importSourceDao().upsert(
+        ImportSourceEntity(
+            id = "emby-source",
+            type = ImportSourceType.EMBY.name,
+            label = "Emby",
+            rootReference = "https://emby.example.com/emby",
+            server = null,
+            shareName = null,
+            directoryPath = null,
+            username = "demo",
+            credentialKey = "emby-cred",
+            allowInsecureTls = false,
+            lastScannedAt = null,
+            createdAt = 1L,
+        ),
+    )
+}
+
 private fun directSourceEntity(
     id: String,
     urlTemplate: String,
@@ -2001,6 +2074,21 @@ private fun navidromeTrack(
         mediaLocator = buildNavidromeSongLocator("nav-source", "song-1"),
         relativePath = "Artist A/Album A/Blue.flac",
         artworkLocator = artworkLocator,
+        sizeBytes = 1L,
+        modifiedAt = 1L,
+    )
+}
+
+private fun embyTrack(): Track {
+    return Track(
+        id = embyTrackIdFor("emby-source", "song-1"),
+        sourceId = "emby-source",
+        title = "Blue",
+        artistName = "Artist A",
+        albumTitle = "Album A",
+        durationMs = 215_000L,
+        mediaLocator = buildEmbySongLocator("emby-source", "song-1"),
+        relativePath = "Artist A/Album A/Blue.flac",
         sizeBytes = 1L,
         modifiedAt = 1L,
     )

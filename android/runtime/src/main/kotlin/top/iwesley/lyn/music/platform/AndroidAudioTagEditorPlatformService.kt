@@ -12,6 +12,7 @@ import kotlin.coroutines.resume
 import top.iwesley.lyn.music.core.model.AudioTagEditorPlatformService
 import top.iwesley.lyn.music.core.model.NavidromeLocatorRuntime
 import top.iwesley.lyn.music.core.model.normalizeArtworkLocator
+import top.iwesley.lyn.music.core.model.parseEmbyCoverLocator
 import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleCoverLocator
 
 internal class AndroidAudioTagEditorPlatformService(
@@ -52,7 +53,10 @@ internal class AndroidAudioTagEditorPlatformService(
         runCatching {
             val rawTarget = normalizeArtworkLocator(locator)?.trim().orEmpty()
             if (rawTarget.isBlank()) return@runCatching null
-            val target = if (parseSubsonicCompatibleCoverLocator(rawTarget) != null) {
+            val target = if (
+                parseSubsonicCompatibleCoverLocator(rawTarget) != null ||
+                parseEmbyCoverLocator(rawTarget) != null
+            ) {
                 NavidromeLocatorRuntime.resolveCoverArtUrl(rawTarget).orEmpty()
             } else {
                 rawTarget

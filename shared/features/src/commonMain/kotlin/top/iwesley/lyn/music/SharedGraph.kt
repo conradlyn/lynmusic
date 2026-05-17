@@ -58,6 +58,7 @@ import top.iwesley.lyn.music.data.repository.DefaultLyricsRepository
 import top.iwesley.lyn.music.data.repository.DefaultSettingsRepository
 import top.iwesley.lyn.music.data.repository.DailyRecommendationDateChangeNotifier
 import top.iwesley.lyn.music.data.repository.DailyRecommendationDateKeyProvider
+import top.iwesley.lyn.music.data.repository.EmbyPlaybackStatsReporter
 import top.iwesley.lyn.music.data.repository.LocalPlaybackStatsReporter
 import top.iwesley.lyn.music.data.repository.LyricsRepository
 import top.iwesley.lyn.music.data.repository.NavidromePlaybackStatsReporter
@@ -72,6 +73,8 @@ import top.iwesley.lyn.music.data.repository.RoomTrackPlaybackStatsRepository
 import top.iwesley.lyn.music.data.repository.UtcDailyRecommendationDateKeyProvider
 import top.iwesley.lyn.music.domain.resolveNavidromeCoverArtUrl
 import top.iwesley.lyn.music.domain.resolveNavidromeStreamUrl
+import top.iwesley.lyn.music.domain.resolveEmbyCoverArtUrl
+import top.iwesley.lyn.music.domain.resolveEmbyStreamUrl
 import top.iwesley.lyn.music.feature.favorites.FavoritesStore
 import top.iwesley.lyn.music.feature.importing.ImportStore
 import top.iwesley.lyn.music.feature.library.LibrarySourceFilterPreferencesStore
@@ -187,11 +190,19 @@ fun buildSharedGraph(
                     secureCredentialStore = runtimeServices.secureCredentialStore,
                     locator = locator,
                     audioQuality = audioQuality,
+                ) ?: resolveEmbyStreamUrl(
+                    database = database,
+                    secureCredentialStore = runtimeServices.secureCredentialStore,
+                    locator = locator,
                 )
             }
 
             override suspend fun resolveCoverArtUrl(locator: String): String? {
                 return resolveNavidromeCoverArtUrl(
+                    database = database,
+                    secureCredentialStore = runtimeServices.secureCredentialStore,
+                    locator = locator,
+                ) ?: resolveEmbyCoverArtUrl(
                     database = database,
                     secureCredentialStore = runtimeServices.secureCredentialStore,
                     locator = locator,
@@ -211,6 +222,12 @@ fun buildSharedGraph(
     val playbackStatsReporter = CompositePlaybackStatsReporter(
         reporters = listOf(
             NavidromePlaybackStatsReporter(
+                database = database,
+                secureCredentialStore = runtimeServices.secureCredentialStore,
+                httpClient = runtimeServices.lyricsHttpClient,
+                logger = runtimeServices.logger,
+            ),
+            EmbyPlaybackStatsReporter(
                 database = database,
                 secureCredentialStore = runtimeServices.secureCredentialStore,
                 httpClient = runtimeServices.lyricsHttpClient,

@@ -17,6 +17,8 @@ import top.iwesley.lyn.music.core.model.LyricsHttpClient
 import top.iwesley.lyn.music.core.model.LyricsHttpResponse
 import top.iwesley.lyn.music.core.model.LyricsRequest
 import top.iwesley.lyn.music.core.model.SecureCredentialStore
+import top.iwesley.lyn.music.core.model.EmbyCredential
+import top.iwesley.lyn.music.core.model.buildEmbySongLocator
 import top.iwesley.lyn.music.core.model.buildNavidromeSongLocator
 import top.iwesley.lyn.music.data.db.AlbumEntity
 import top.iwesley.lyn.music.data.db.DailyRecommendationEntity
@@ -26,6 +28,7 @@ import top.iwesley.lyn.music.data.db.LynMusicDatabase
 import top.iwesley.lyn.music.data.db.TrackEntity
 import top.iwesley.lyn.music.data.db.TrackPlaybackStatsEntity
 import top.iwesley.lyn.music.data.db.buildLynMusicDatabase
+import top.iwesley.lyn.music.domain.serializeEmbyCredential
 
 class MyRepositoryTest {
 
@@ -164,6 +167,75 @@ class MyRepositoryTest {
             assertTrue(result.isFailure)
             assertEquals(listOf("getAlbumList2"), httpClient.requestedEndpoints)
             assertEquals(listOf("Cached Song"), recentTracks.map { it.track.title })
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun `emby refresh stores server recent track stats`() = runTest {
+        val database = createMyTestDatabase()
+        val httpClient = RecordingMyHttpClient(
+            embyRecentBody = """
+                {
+                  "Items": [
+                    {
+                      "Id": "song-e1",
+                      "AlbumId": "remote-album-e",
+                      "UserData": {
+                        "LastPlayedDate": "2026-04-30T11:05:00Z",
+                        "PlayCount": 5
+                      }
+                    }
+                  ],
+                  "TotalRecordCount": 1
+                }
+            """.trimIndent(),
+        )
+        val repository = RoomMyRepository(
+            database = database,
+            secureCredentialStore = MyCredentialStore(
+                mutableMapOf("emby-cred" to serializeEmbyCredential(EmbyCredential("user-1", "token"))),
+            ),
+            httpClient = httpClient,
+        )
+
+        try {
+            seedSource(
+                database = database,
+                sourceId = "emby-source",
+                type = "EMBY",
+                enabled = true,
+                rootReference = "https://emby.example.com/emby",
+                username = "demo",
+                credentialKey = "emby-cred",
+            )
+            database.albumDao().upsertAll(listOf(albumEntity("album-emby", "Emby Album")))
+            database.trackDao().upsertAll(
+                listOf(
+                    trackEntity(
+                        trackId = embyTrackIdFor("emby-source", "song-e1"),
+                        sourceId = "emby-source",
+                        title = "Emby Song",
+                        albumId = "album-emby",
+                        albumTitle = "Emby Album",
+                        mediaLocator = buildEmbySongLocator("emby-source", "song-e1"),
+                    ),
+                ),
+            )
+
+            val result = repository.refreshNavidromeRecentPlays()
+
+            assertTrue(result.isSuccess)
+            assertEquals(listOf("Items"), httpClient.requestedEndpoints)
+            val trackStats = database.trackPlaybackStatsDao().getByTrackId(
+                embyTrackIdFor("emby-source", "song-e1"),
+            )
+            val albumStats = database.albumPlaybackStatsDao().getByAlbumId("album-emby")
+            assertEquals(5, trackStats?.playCount)
+            assertEquals(playedAt("2026-04-30T11:05:00Z"), trackStats?.lastPlayedAt)
+            assertEquals(5, albumStats?.playCount)
+            assertEquals(playedAt("2026-04-30T11:05:00Z"), albumStats?.lastPlayedAt)
         } finally {
             database.close()
         }
@@ -520,18 +592,21 @@ private suspend fun seedSource(
     sourceId: String,
     type: String,
     enabled: Boolean,
+    rootReference: String = if (type == "NAVIDROME") "https://demo.example.com/navidrome" else "/music",
+    username: String? = if (type == "NAVIDROME") "demo" else null,
+    credentialKey: String? = if (type == "NAVIDROME") "nav-cred" else null,
 ) {
     database.importSourceDao().upsert(
         ImportSourceEntity(
             id = sourceId,
             type = type,
             label = sourceId,
-            rootReference = if (type == "NAVIDROME") "https://demo.example.com/navidrome" else "/music",
+            rootReference = rootReference,
             server = null,
             shareName = null,
             directoryPath = null,
-            username = if (type == "NAVIDROME") "demo" else null,
-            credentialKey = if (type == "NAVIDROME") "nav-cred" else null,
+            username = username,
+            credentialKey = credentialKey,
             allowInsecureTls = false,
             enabled = enabled,
             lastScannedAt = null,
@@ -620,6 +695,7 @@ private fun playedAt(value: String): Long {
 private class RecordingMyHttpClient(
     private val albumListBody: String = """{"subsonic-response":{"status":"ok","version":"1.16.1","albumList2":{"album":[]}}}""",
     private val albumBody: String = """{"subsonic-response":{"status":"ok","version":"1.16.1","album":{"song":[]}}}""",
+    private val embyRecentBody: String = """{"Items":[],"TotalRecordCount":0}""",
     private val failEndpoint: String? = null,
 ) : LyricsHttpClient {
     val requests = mutableListOf<LyricsRequest>()
@@ -643,6 +719,7 @@ private class RecordingMyHttpClient(
                 body = when (endpoint) {
                     "getAlbumList2" -> albumListBody
                     "getAlbum" -> albumBody
+                    "Items" -> embyRecentBody
                     else -> """{"subsonic-response":{"status":"ok","version":"1.16.1"}}"""
                 },
             ),
