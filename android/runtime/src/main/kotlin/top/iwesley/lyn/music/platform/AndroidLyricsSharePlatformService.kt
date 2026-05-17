@@ -49,7 +49,7 @@ import top.iwesley.lyn.music.core.model.argbWithAlpha
 import top.iwesley.lyn.music.core.model.buildLyricsShareTitleArtistLine
 import top.iwesley.lyn.music.core.model.derivePlaybackArtworkBackgroundPalette
 import top.iwesley.lyn.music.core.model.normalizedArtworkCacheLocator
-import top.iwesley.lyn.music.core.model.parseNavidromeCoverLocator
+import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleCoverLocator
 import top.iwesley.lyn.music.core.model.resolveArtworkCacheTarget
 import kotlin.coroutines.resume
 
@@ -278,7 +278,7 @@ class AndroidLyricsSharePlatformService(
     }
 
     private fun shouldCacheLyricsShareArtwork(normalizedLocator: String): Boolean {
-        return parseNavidromeCoverLocator(normalizedLocator) != null ||
+        return parseSubsonicCompatibleCoverLocator(normalizedLocator) != null ||
             normalizedLocator.startsWith("http://", ignoreCase = true) ||
             normalizedLocator.startsWith("https://", ignoreCase = true)
     }

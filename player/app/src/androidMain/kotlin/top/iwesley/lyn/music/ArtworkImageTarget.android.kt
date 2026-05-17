@@ -6,7 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import top.iwesley.lyn.music.core.model.ArtworkCacheStore
 import top.iwesley.lyn.music.core.model.normalizedArtworkCacheLocator
-import top.iwesley.lyn.music.core.model.parseNavidromeCoverLocator
+import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleCoverLocator
 import top.iwesley.lyn.music.core.model.resolveArtworkCacheTarget
 
 internal actual suspend fun resolveLynArtworkTarget(
@@ -21,7 +21,7 @@ internal actual suspend fun resolveLynArtworkTarget(
             .getOrNull()
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
-            ?.takeIf { parseNavidromeCoverLocator(it) == null }
+            ?.takeIf { parseSubsonicCompatibleCoverLocator(it) == null }
     } else {
         null
     }

@@ -850,7 +850,7 @@ private fun PlaylistListPane(
             item {
                 PlaylistSectionTitle(
                     title = "歌单",
-                    subtitle = "普通歌单支持本地歌曲和 Navidrome 歌曲混合收藏。",
+                    subtitle = "普通歌单支持本地歌曲和 Subsonic-compatible 歌曲混合收藏。",
                 )
             }
             item {
@@ -1403,6 +1403,7 @@ private fun playlistSourceFilterButtonLabel(filter: LibrarySourceFilter): String
         LibrarySourceFilter.SAMBA -> "Samba"
         LibrarySourceFilter.WEBDAV -> "WebDAV"
         LibrarySourceFilter.NAVIDROME -> "Navidrome"
+        LibrarySourceFilter.SUBSONIC -> "Subsonic"
         LibrarySourceFilter.DOWNLOADED -> "已下载"
     }
 }

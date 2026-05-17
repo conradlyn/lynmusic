@@ -33,7 +33,7 @@ import org.jetbrains.compose.resources.painterResource
 import top.iwesley.lyn.music.core.model.ArtworkCachedTarget
 import top.iwesley.lyn.music.core.model.ArtworkCacheStore
 import top.iwesley.lyn.music.core.model.normalizedArtworkCacheLocator
-import top.iwesley.lyn.music.core.model.parseNavidromeCoverLocator
+import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleCoverLocator
 
 internal object ArtworkDecodeSize {
     const val Thumbnail: Int = 256
@@ -350,7 +350,7 @@ private fun shouldUseInitialArtworkTarget(
     normalizedLocator: String,
     cacheRemote: Boolean,
 ): Boolean {
-    if (parseNavidromeCoverLocator(normalizedLocator) != null) return false
+    if (parseSubsonicCompatibleCoverLocator(normalizedLocator) != null) return false
     if (!cacheRemote) return true
     return !normalizedLocator.startsWith("http://", ignoreCase = true) &&
         !normalizedLocator.startsWith("https://", ignoreCase = true)

@@ -141,7 +141,7 @@ import top.iwesley.lyn.music.core.model.PlaybackAudioFormat
 import top.iwesley.lyn.music.core.model.PlaybackSnapshot
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.debug
-import top.iwesley.lyn.music.core.model.parseNavidromeSongLocator
+import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleSongLocator
 import top.iwesley.lyn.music.core.model.supportsOfflineDownload
 import top.iwesley.lyn.music.core.model.trackArtworkCacheKey
 import top.iwesley.lyn.music.automotive.AutomotiveLandscapePlayerOverlayContent
@@ -2845,7 +2845,7 @@ internal fun formatCurrentNavidromePlaybackAudioQuality(
     track: Track,
     audioQuality: NavidromeAudioQuality?,
 ): String? {
-    if (parseNavidromeSongLocator(track.mediaLocator) == null) return null
+    if (parseSubsonicCompatibleSongLocator(track.mediaLocator) == null) return null
     return audioQuality?.let(::navidromeAudioQualityLabel)
 }
 
@@ -2864,7 +2864,7 @@ internal fun formatAndroidCurrentPlaybackAudioQuality(
     navidromeQuality: NavidromeAudioQuality?,
 ): String? {
     val navidromeFallbackBitRate = navidromeQuality
-        ?.takeIf { parseNavidromeSongLocator(track.mediaLocator) != null }
+        ?.takeIf { parseSubsonicCompatibleSongLocator(track.mediaLocator) != null }
         ?.let(::formatNavidromePlaybackBitRateFallback)
     return listOfNotNull(
         audioFormat?.samplingRateHz?.takeIf { it > 0 }?.let(::formatPlaybackSamplingRate),

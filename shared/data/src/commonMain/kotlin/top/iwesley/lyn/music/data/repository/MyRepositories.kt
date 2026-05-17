@@ -21,6 +21,7 @@ import top.iwesley.lyn.music.core.model.NoopDiagnosticLogger
 import top.iwesley.lyn.music.core.model.RecentAlbum
 import top.iwesley.lyn.music.core.model.RecentTrack
 import top.iwesley.lyn.music.core.model.SecureCredentialStore
+import top.iwesley.lyn.music.core.model.SubsonicAuthMode
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.warn
 import top.iwesley.lyn.music.data.db.AlbumEntity
@@ -31,8 +32,10 @@ import top.iwesley.lyn.music.data.db.LynMusicDatabase
 import top.iwesley.lyn.music.data.db.TrackEntity
 import top.iwesley.lyn.music.data.db.TrackPlaybackStatsEntity
 import top.iwesley.lyn.music.domain.NavidromeResolvedSource
-import top.iwesley.lyn.music.domain.normalizeNavidromeBaseUrl
+import top.iwesley.lyn.music.domain.isSubsonicCompatibleSourceType
+import top.iwesley.lyn.music.domain.normalizeSubsonicBaseUrl
 import top.iwesley.lyn.music.domain.requestNavidromeJson
+import top.iwesley.lyn.music.domain.toSubsonicAuthMode
 
 interface MyRepository {
     val recentTracks: Flow<List<RecentTrack>>
@@ -161,10 +164,10 @@ class RoomMyRepository(
         return runCatching {
             val failures = mutableListOf<Throwable>()
             database.importSourceDao().getAll()
-                .filter { it.type == ImportSourceType.NAVIDROME.name && it.enabled }
+                .filter { it.subsonicCompatibleSourceType() != null && it.enabled }
                 .forEach { source ->
                     runCatching {
-                        refreshNavidromeRecentPlays(source)
+                        refreshSubsonicCompatibleRecentPlays(source)
                     }.onFailure { throwable ->
                         if (throwable is CancellationException) throw throwable
                         failures += throwable
@@ -175,7 +178,7 @@ class RoomMyRepository(
                     }
                 }
             if (failures.isNotEmpty()) {
-                error("Navidrome 最近播放同步失败，已显示本地统计。")
+                error("远程最近播放同步失败，已显示本地统计。")
             }
         }
     }
@@ -254,9 +257,11 @@ class RoomMyRepository(
         )
     }
 
-    private suspend fun refreshNavidromeRecentPlays(source: ImportSourceEntity) {
-        val resolved = source.toNavidromeResolvedSource()
-            ?: error("Navidrome 来源缺少有效账号或密码。")
+    private suspend fun refreshSubsonicCompatibleRecentPlays(source: ImportSourceEntity) {
+        val sourceType = source.subsonicCompatibleSourceType()
+            ?: error("Subsonic-compatible 来源类型无效。")
+        val resolved = source.toSubsonicCompatibleResolvedSource()
+            ?: error("远程来源缺少有效凭据。")
         val recentAlbums = fetchRecentNavidromeAlbums(resolved)
         val albumDetails = recentAlbums.mapNotNull { recentAlbum ->
             runCatching {
@@ -275,7 +280,7 @@ class RoomMyRepository(
         }
         if (albumDetails.isEmpty()) return
         val allSongTrackIds = albumDetails
-            .flatMap { detail -> detail.songs.map { song -> navidromeTrackIdFor(source.id, song.songId) } }
+            .flatMap { detail -> detail.songs.map { song -> subsonicCompatibleTrackIdFor(source.id, song.songId, sourceType) } }
             .distinct()
         val localTracksById = if (allSongTrackIds.isEmpty()) {
             emptyMap()
@@ -294,7 +299,7 @@ class RoomMyRepository(
         val candidateAlbumIds = albumDetails
             .flatMap { detail ->
                 detail.songs.mapNotNull { song ->
-                    localTracksById[navidromeTrackIdFor(source.id, song.songId)]?.albumId
+                    localTracksById[subsonicCompatibleTrackIdFor(source.id, song.songId, sourceType)]?.albumId
                 }
             }
             .filter { it.isNotBlank() }
@@ -310,7 +315,7 @@ class RoomMyRepository(
         albumDetails.forEach { detail ->
             detail.songs.forEach { song ->
                 val playedAt = song.playedAt ?: return@forEach
-                val trackId = navidromeTrackIdFor(source.id, song.songId)
+                val trackId = subsonicCompatibleTrackIdFor(source.id, song.songId, sourceType)
                 val localTrack = localTracksById[trackId] ?: return@forEach
                 database.trackPlaybackStatsDao().setPlayStats(
                     trackId = localTrack.id,
@@ -327,7 +332,7 @@ class RoomMyRepository(
                 ?: detail.songs.mapNotNull { it.playedAt }.maxOrNull()
                 ?: return@forEach
             val localAlbumIds = detail.songs
-                .mapNotNull { song -> localTracksById[navidromeTrackIdFor(source.id, song.songId)]?.albumId }
+                .mapNotNull { song -> localTracksById[subsonicCompatibleTrackIdFor(source.id, song.songId, sourceType)]?.albumId }
                 .filter { it.isNotBlank() }
                 .distinct()
             localAlbumIds.forEach { albumId ->
@@ -406,15 +411,25 @@ class RoomMyRepository(
         )
     }
 
-    private suspend fun ImportSourceEntity.toNavidromeResolvedSource(): NavidromeResolvedSource? {
+    private suspend fun ImportSourceEntity.toSubsonicCompatibleResolvedSource(): NavidromeResolvedSource? {
+        val sourceType = subsonicCompatibleSourceType() ?: return null
+        val authMode = authMode.toSubsonicAuthMode()
         val username = username?.trim().orEmpty()
-        val password = credentialKey?.let { secureCredentialStore.get(it) }.orEmpty()
-        if (username.isBlank() || password.isBlank()) return null
+        val credential = credentialKey?.let { secureCredentialStore.get(it) }.orEmpty()
+        if (authMode == SubsonicAuthMode.PASSWORD && (username.isBlank() || credential.isBlank())) return null
+        if (authMode == SubsonicAuthMode.API_KEY && credential.isBlank()) return null
         return NavidromeResolvedSource(
-            baseUrl = normalizeNavidromeBaseUrl(rootReference),
+            baseUrl = normalizeSubsonicBaseUrl(rootReference),
             username = username,
-            password = password,
+            password = credential,
+            authMode = authMode,
+            sourceType = sourceType,
         )
+    }
+
+    private fun ImportSourceEntity.subsonicCompatibleSourceType(): ImportSourceType? {
+        val sourceType = runCatching { ImportSourceType.valueOf(type) }.getOrNull() ?: return null
+        return sourceType.takeIf(::isSubsonicCompatibleSourceType)
     }
 }
 

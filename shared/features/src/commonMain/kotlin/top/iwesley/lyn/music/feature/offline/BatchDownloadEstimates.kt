@@ -34,7 +34,7 @@ fun estimateBatchDownloadSize(
             return@forEach
         }
         val sizeBytes = when {
-            sourceType == ImportSourceType.NAVIDROME && quality != NavidromeAudioQuality.Original -> {
+            sourceType.supportsSubsonicAudioQuality() && quality != NavidromeAudioQuality.Original -> {
                 approximate = true
                 estimatedNavidromeTranscodedSizeBytes(track, quality)
             }
@@ -121,10 +121,14 @@ private fun shouldSkipBatchDownloadEstimate(
     if (download?.status != OfflineDownloadStatus.Completed || !download.hasLocalFileReference) {
         return false
     }
-    return sourceType != ImportSourceType.NAVIDROME || download.quality == quality
+    return !sourceType.supportsSubsonicAudioQuality() || download.quality == quality
 }
 
 private fun safeAdd(left: Long, right: Long): Long {
     if (right <= 0L) return left
     return if (Long.MAX_VALUE - left < right) Long.MAX_VALUE else left + right
+}
+
+private fun ImportSourceType?.supportsSubsonicAudioQuality(): Boolean {
+    return this == ImportSourceType.NAVIDROME || this == ImportSourceType.SUBSONIC
 }

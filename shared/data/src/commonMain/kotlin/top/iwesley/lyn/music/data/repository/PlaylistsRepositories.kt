@@ -17,18 +17,21 @@ import top.iwesley.lyn.music.core.model.PlaylistKind
 import top.iwesley.lyn.music.core.model.PlaylistSummary
 import top.iwesley.lyn.music.core.model.PlaylistTrackEntry
 import top.iwesley.lyn.music.core.model.SecureCredentialStore
+import top.iwesley.lyn.music.core.model.SubsonicAuthMode
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.error
 import top.iwesley.lyn.music.core.model.normalizeArtworkLocator
-import top.iwesley.lyn.music.core.model.parseNavidromeSongLocator
+import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleSongLocator
 import top.iwesley.lyn.music.data.db.ImportSourceEntity
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
 import top.iwesley.lyn.music.data.db.PlaylistEntity
 import top.iwesley.lyn.music.data.db.PlaylistRemoteBindingEntity
 import top.iwesley.lyn.music.data.db.PlaylistTrackEntity
 import top.iwesley.lyn.music.domain.NavidromeResolvedSource
-import top.iwesley.lyn.music.domain.normalizeNavidromeBaseUrl
+import top.iwesley.lyn.music.domain.isSubsonicCompatibleSourceType
+import top.iwesley.lyn.music.domain.normalizeSubsonicBaseUrl
 import top.iwesley.lyn.music.domain.requestNavidromeJson
+import top.iwesley.lyn.music.domain.toSubsonicAuthMode
 
 class RoomPlaylistRepository(
     private val database: LynMusicDatabase,
@@ -119,8 +122,8 @@ class RoomPlaylistRepository(
             val playlist = database.playlistDao().getById(playlistId) ?: error("歌单不存在。")
             val bindings = database.playlistRemoteBindingDao().getByPlaylistId(playlistId)
             bindings.forEach { binding ->
-                val resolvedSource = resolveNavidromeSource(binding.sourceId)
-                    ?: error("Navidrome 来源不可用，无法删除歌单。")
+                val resolvedSource = resolveSubsonicCompatibleSource(binding.sourceId)
+                    ?: error("Subsonic-compatible 来源不可用，无法删除歌单。")
                 requestNavidromeJson(
                     httpClient = httpClient,
                     source = resolvedSource,
@@ -140,11 +143,10 @@ class RoomPlaylistRepository(
             if (database.playlistTrackDao().getByPlaylistIdAndTrackId(playlistId, track.id) != null) {
                 error("歌曲已在歌单中。")
             }
-            val navidromeSongId = parseNavidromeSongLocator(track.mediaLocator)
-                ?.takeIf { it.first == track.sourceId }
-                ?.second
-            if (navidromeSongId != null) {
-                addNavidromeTrackToPlaylist(playlist, track, navidromeSongId)
+            val subsonicSong = parseSubsonicCompatibleSongLocator(track.mediaLocator)
+                ?.takeIf { it.sourceId == track.sourceId }
+            if (subsonicSong != null) {
+                addSubsonicCompatibleTrackToPlaylist(playlist, track, subsonicSong.itemId)
             } else {
                 addLocalTrackToPlaylist(playlist, track)
             }
@@ -157,8 +159,8 @@ class RoomPlaylistRepository(
             val row = database.playlistTrackDao().getByPlaylistIdAndTrackId(playlistId, trackId) ?: return@runCatching
             val binding = database.playlistRemoteBindingDao().getByPlaylistIdAndSourceId(playlistId, row.sourceId)
             if (binding != null && row.remoteOrdinal != null) {
-                val resolvedSource = resolveNavidromeSource(row.sourceId)
-                    ?: error("Navidrome 来源不可用，无法更新歌单。")
+                val resolvedSource = resolveSubsonicCompatibleSource(row.sourceId)
+                    ?: error("Subsonic-compatible 来源不可用，无法更新歌单。")
                 requestNavidromeJson(
                     httpClient = httpClient,
                     source = resolvedSource,
@@ -186,11 +188,11 @@ class RoomPlaylistRepository(
 
     override suspend fun refreshNavidromePlaylists(): Result<Unit> {
         return runCatching {
-            val navidromeSources = database.importSourceDao().getAll()
-                .filter { it.type == ImportSourceType.NAVIDROME.name }
-            cleanupRemovedNavidromeSources(navidromeSources.mapTo(linkedSetOf()) { it.id })
+            val compatibleSources = database.importSourceDao().getAll()
+                .filter { it.subsonicCompatibleSourceType() != null }
+            cleanupRemovedSubsonicCompatibleSources(compatibleSources.mapTo(linkedSetOf()) { it.id })
             val failures = mutableListOf<String>()
-            navidromeSources
+            compatibleSources
                 .filter { it.enabled }
                 .forEach { source ->
                 runCatching { syncSourcePlaylists(source) }
@@ -226,13 +228,13 @@ class RoomPlaylistRepository(
         touchPlaylist(playlist)
     }
 
-    private suspend fun addNavidromeTrackToPlaylist(
+    private suspend fun addSubsonicCompatibleTrackToPlaylist(
         playlist: PlaylistEntity,
         track: Track,
-        navidromeSongId: String,
+        songId: String,
     ) {
-        val resolvedSource = resolveNavidromeSource(track.sourceId)
-            ?: error("Navidrome 来源不可用，无法更新歌单。")
+        val resolvedSource = resolveSubsonicCompatibleSource(track.sourceId)
+            ?: error("Subsonic-compatible 来源不可用，无法更新歌单。")
         val binding = ensureRemoteBinding(
             playlist = playlist,
             sourceId = track.sourceId,
@@ -244,7 +246,7 @@ class RoomPlaylistRepository(
             endpoint = "updatePlaylist",
             parameters = mapOf(
                 "playlistId" to binding.remotePlaylistId,
-                "songIdToAdd" to navidromeSongId,
+                "songIdToAdd" to songId,
             ),
             logger = logger,
             logContext = "playlist=\"${playlist.name}\" add track=${track.id}",
@@ -292,8 +294,8 @@ class RoomPlaylistRepository(
     }
 
     private suspend fun syncSourcePlaylists(source: ImportSourceEntity) {
-        val resolvedSource = source.toNavidromeResolvedSource()
-            ?: error("Navidrome 来源缺少有效账号或密码，无法同步歌单。")
+        val resolvedSource = source.toSubsonicCompatibleResolvedSource()
+            ?: error("Subsonic-compatible 来源缺少有效凭据，无法同步歌单。")
         val remotePlaylists = fetchSourcePlaylists(resolvedSource)
         val remoteIds = remotePlaylists.mapTo(linkedSetOf()) { it.id }
         val existingBindingsByRemoteId = database.playlistRemoteBindingDao().getBySourceId(source.id)
@@ -341,8 +343,8 @@ class RoomPlaylistRepository(
         remotePlaylistId: String,
         remoteName: String,
     ) {
-        val resolvedSource = resolveNavidromeSource(sourceId)
-            ?: error("Navidrome 来源不可用，无法同步歌单。")
+        val resolvedSource = resolveSubsonicCompatibleSource(sourceId)
+            ?: error("Subsonic-compatible 来源不可用，无法同步歌单。")
         val remoteEntries = fetchRemotePlaylistEntries(
             resolvedSource = resolvedSource,
             remotePlaylistId = remotePlaylistId,
@@ -352,7 +354,7 @@ class RoomPlaylistRepository(
             .map { RemotePlaylistTrackSnapshot(trackId = it.trackId, remoteOrdinal = it.remoteOrdinal ?: -1) }
         val nextRemoteTrackOrder = remoteEntries.mapIndexed { index, entry ->
             RemotePlaylistTrackSnapshot(
-                trackId = navidromeTrackIdFor(sourceId, entry.songId),
+                trackId = subsonicCompatibleTrackIdFor(sourceId, entry.songId, resolvedSource.sourceType),
                 remoteOrdinal = index,
             )
         }
@@ -364,7 +366,7 @@ class RoomPlaylistRepository(
                     remoteEntries.mapIndexed { index, entry ->
                         PlaylistTrackEntity(
                             playlistId = playlist.id,
-                            trackId = navidromeTrackIdFor(sourceId, entry.songId),
+                            trackId = subsonicCompatibleTrackIdFor(sourceId, entry.songId, resolvedSource.sourceType),
                             sourceId = sourceId,
                             addedAt = now(),
                             localOrdinal = null,
@@ -388,7 +390,7 @@ class RoomPlaylistRepository(
         }
     }
 
-    private suspend fun cleanupRemovedNavidromeSources(activeSourceIds: Set<String>) {
+    private suspend fun cleanupRemovedSubsonicCompatibleSources(activeSourceIds: Set<String>) {
         database.playlistRemoteBindingDao().getAll()
             .filter { it.sourceId !in activeSourceIds }
             .forEach { binding ->
@@ -460,22 +462,32 @@ class RoomPlaylistRepository(
             }
     }
 
-    private suspend fun resolveNavidromeSource(sourceId: String): NavidromeResolvedSource? {
+    private suspend fun resolveSubsonicCompatibleSource(sourceId: String): NavidromeResolvedSource? {
         val source = database.importSourceDao().getById(sourceId)
-            ?.takeIf { it.type == ImportSourceType.NAVIDROME.name && it.enabled }
+            ?.takeIf { it.subsonicCompatibleSourceType() != null && it.enabled }
             ?: return null
-        return source.toNavidromeResolvedSource()
+        return source.toSubsonicCompatibleResolvedSource()
     }
 
-    private suspend fun ImportSourceEntity.toNavidromeResolvedSource(): NavidromeResolvedSource? {
+    private suspend fun ImportSourceEntity.toSubsonicCompatibleResolvedSource(): NavidromeResolvedSource? {
+        val sourceType = subsonicCompatibleSourceType() ?: return null
+        val authMode = authMode.toSubsonicAuthMode()
         val username = username?.trim().orEmpty()
-        val password = credentialKey?.let { secureCredentialStore.get(it) }.orEmpty()
-        if (username.isBlank() || password.isBlank()) return null
+        val credential = credentialKey?.let { secureCredentialStore.get(it) }.orEmpty()
+        if (authMode == SubsonicAuthMode.PASSWORD && (username.isBlank() || credential.isBlank())) return null
+        if (authMode == SubsonicAuthMode.API_KEY && credential.isBlank()) return null
         return NavidromeResolvedSource(
-            baseUrl = normalizeNavidromeBaseUrl(rootReference),
+            baseUrl = normalizeSubsonicBaseUrl(rootReference),
             username = username,
-            password = password,
+            password = credential,
+            authMode = authMode,
+            sourceType = sourceType,
         )
+    }
+
+    private fun ImportSourceEntity.subsonicCompatibleSourceType(): ImportSourceType? {
+        val sourceType = runCatching { ImportSourceType.valueOf(type) }.getOrNull() ?: return null
+        return sourceType.takeIf(::isSubsonicCompatibleSourceType)
     }
 }
 

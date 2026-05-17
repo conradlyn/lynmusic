@@ -116,6 +116,7 @@ import top.iwesley.lyn.music.core.model.withThemePalette
 import top.iwesley.lyn.music.core.model.SambaSourceDraft
 import top.iwesley.lyn.music.core.model.SecureCredentialStore
 import top.iwesley.lyn.music.core.model.SameNameLyricsFileGateway
+import top.iwesley.lyn.music.core.model.SubsonicSourceDraft
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.WebDavSourceDraft
 import top.iwesley.lyn.music.core.model.buildSambaLocator
@@ -125,7 +126,7 @@ import top.iwesley.lyn.music.core.model.formatSambaEndpoint
 import top.iwesley.lyn.music.core.model.info
 import top.iwesley.lyn.music.core.model.joinSambaPath
 import top.iwesley.lyn.music.core.model.normalizeSambaPath
-import top.iwesley.lyn.music.core.model.parseNavidromeSongLocator
+import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleSongLocator
 import top.iwesley.lyn.music.core.model.parseSambaLocator
 import top.iwesley.lyn.music.core.model.parseSambaPath
 import top.iwesley.lyn.music.core.model.sameNameLyricsRelativePath
@@ -139,7 +140,9 @@ import top.iwesley.lyn.music.data.repository.DailyRecommendationDateKeyProvider
 import top.iwesley.lyn.music.data.repository.PlayerRuntimeServices
 import top.iwesley.lyn.music.domain.resolveNavidromeStreamUrl
 import top.iwesley.lyn.music.domain.scanNavidromeLibrary
+import top.iwesley.lyn.music.domain.scanSubsonicLibrary
 import top.iwesley.lyn.music.domain.testNavidromeConnection
+import top.iwesley.lyn.music.domain.testSubsonicConnection
 import top.iwesley.lyn.music.feature.library.LibrarySourceFilter
 import top.iwesley.lyn.music.feature.library.LibrarySourceFilterPreferencesStore
 import top.iwesley.lyn.music.feature.library.TrackSortMode
@@ -935,7 +938,7 @@ internal class AndroidSameNameLyricsFileGateway(
         return runCatching {
             val localFile = resolveAndroidLocalTrackFile(track.mediaLocator)
             when {
-                parseNavidromeSongLocator(track.mediaLocator) != null -> null
+                parseSubsonicCompatibleSongLocator(track.mediaLocator) != null -> null
                 localFile != null -> readAndroidLocalSameNameLyricsFile(localFile)
                 parseSambaLocator(track.mediaLocator) != null -> readAndroidSambaSameNameLyrics(
                     database = database,
@@ -1376,6 +1379,20 @@ private class AndroidImportSourceGateway(
 
     override suspend fun scanNavidrome(draft: NavidromeSourceDraft, sourceId: String): ImportScanReport {
         return scanNavidromeLibrary(
+            draft = draft,
+            sourceId = sourceId,
+            httpClient = navidromeHttpClient,
+            supportedImportExtensions = ANDROID_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
+            logger = logger,
+        )
+    }
+
+    override suspend fun testSubsonic(draft: SubsonicSourceDraft) {
+        testSubsonicConnection(draft, navidromeHttpClient, logger)
+    }
+
+    override suspend fun scanSubsonic(draft: SubsonicSourceDraft, sourceId: String): ImportScanReport {
+        return scanSubsonicLibrary(
             draft = draft,
             sourceId = sourceId,
             httpClient = navidromeHttpClient,
@@ -2065,7 +2082,7 @@ internal class AndroidPlaybackGateway(
         stopAndResetForTrackSwitch(loadToken, playWhenReady)
         try {
             val offlineTarget = resolveAndroidOfflinePlaybackTarget(database, track)
-            val isNavidromeTrack = parseNavidromeSongLocator(track.mediaLocator) != null
+            val isSubsonicCompatibleTrack = parseSubsonicCompatibleSongLocator(track.mediaLocator) != null
             val webDavTarget = if (offlineTarget == null) resolveAndroidWebDavPlaybackTarget(
                 database = database,
                 secureCredentialStore = secureCredentialStore,
@@ -2092,14 +2109,14 @@ internal class AndroidPlaybackGateway(
                 }
                 return
             }
-            val navidrome = if (offlineTarget == null && webDavTarget == null && sambaTarget == null) {
-                parseNavidromeSongLocator(track.mediaLocator)
+            val subsonicCompatible = if (offlineTarget == null && webDavTarget == null && sambaTarget == null) {
+                parseSubsonicCompatibleSongLocator(track.mediaLocator)
             } else {
                 null
             }
             val navidromeAudioQuality = when {
-                offlineTarget != null && isNavidromeTrack -> offlineTarget.quality
-                navidrome != null -> resolveNavidromeAudioQualityForCurrentNetwork(
+                offlineTarget != null && isSubsonicCompatibleTrack -> offlineTarget.quality
+                subsonicCompatible != null -> resolveNavidromeAudioQualityForCurrentNetwork(
                     preferencesStore = navidromeAudioQualityPreferencesStore,
                     networkConnectionTypeProvider = networkConnectionTypeProvider,
                 )
@@ -2138,8 +2155,12 @@ internal class AndroidPlaybackGateway(
                     currentRemoteLabel = sambaTarget.sourceReference
                     player.setMediaSource(sambaTarget.mediaSource)
                 } else {
-                    currentRemoteLogTag = if (navidrome != null) "Navidrome" else null
-                    currentRemoteLabel = if (navidrome != null) track.mediaLocator else null
+                    currentRemoteLogTag = when (subsonicCompatible?.sourceType) {
+                        ImportSourceType.NAVIDROME -> "Navidrome"
+                        ImportSourceType.SUBSONIC -> "Subsonic"
+                        else -> null
+                    }
+                    currentRemoteLabel = if (subsonicCompatible != null) track.mediaLocator else null
                     player.setMediaItem(MediaItem.fromUri(checkNotNull(resolvedUri)))
                 }
                 mutableState.update {

@@ -26,6 +26,12 @@ enum class ImportSourceType {
     SAMBA,
     WEBDAV,
     NAVIDROME,
+    SUBSONIC,
+}
+
+enum class SubsonicAuthMode {
+    PASSWORD,
+    API_KEY,
 }
 
 enum class LyricsResponseFormat {
@@ -129,6 +135,7 @@ data class ImportSource(
     val path: String? = null,
     val username: String? = null,
     val credentialKey: String? = null,
+    val subsonicAuthMode: SubsonicAuthMode = SubsonicAuthMode.PASSWORD,
     val allowInsecureTls: Boolean = false,
     val enabled: Boolean = true,
     val lastScannedAt: Long? = null,
@@ -174,6 +181,14 @@ data class NavidromeSourceDraft(
     val baseUrl: String,
     val username: String,
     val password: String,
+)
+
+data class SubsonicSourceDraft(
+    val label: String,
+    val baseUrl: String,
+    val username: String = "",
+    val credential: String,
+    val authMode: SubsonicAuthMode = SubsonicAuthMode.PASSWORD,
 )
 
 data class ImportedTrackCandidate(
@@ -414,6 +429,7 @@ data class PlatformCapabilities(
     val supportsWebDavImport: Boolean,
     val supportsNavidromeImport: Boolean,
     val supportsSystemMediaControls: Boolean,
+    val supportsSubsonicImport: Boolean = supportsNavidromeImport,
     val supportsAppDisplayScaleAdjustment: Boolean = false,
     val supportsAndroidExtensionDecoder: Boolean = false,
     val supportsDesktopLyrics: Boolean = false,
@@ -435,6 +451,12 @@ interface ImportSourceGateway {
     suspend fun scanWebDav(draft: WebDavSourceDraft, sourceId: String): ImportScanReport
     suspend fun testNavidrome(draft: NavidromeSourceDraft)
     suspend fun scanNavidrome(draft: NavidromeSourceDraft, sourceId: String): ImportScanReport
+    suspend fun testSubsonic(draft: SubsonicSourceDraft) {
+        throw UnsupportedOperationException("Subsonic import is not supported on this platform.")
+    }
+    suspend fun scanSubsonic(draft: SubsonicSourceDraft, sourceId: String): ImportScanReport {
+        throw UnsupportedOperationException("Subsonic import is not supported on this platform.")
+    }
 }
 
 interface SecureCredentialStore {

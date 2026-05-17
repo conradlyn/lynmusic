@@ -84,7 +84,7 @@ class PlaylistsStore(
                     offlineDownloadsByTrackId = offlineDownloads,
                     navidromeSourceIds = sources
                         .map(SourceWithStatus::source)
-                        .filter { it.type == ImportSourceType.NAVIDROME }
+                        .filter { it.type == ImportSourceType.NAVIDROME || it.type == ImportSourceType.SUBSONIC }
                         .mapTo(linkedSetOf()) { it.id },
                 )
             }.collect { snapshot ->
@@ -273,6 +273,7 @@ class PlaylistsStore(
             LibrarySourceFilter.SAMBA,
             LibrarySourceFilter.WEBDAV,
             LibrarySourceFilter.NAVIDROME,
+            LibrarySourceFilter.SUBSONIC,
         )
     }
 }

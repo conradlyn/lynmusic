@@ -113,7 +113,7 @@ class FavoritesStore(
                     sourceTypesById = enabledSources.associate { it.id to it.type },
                     availableSourceFilters = buildAvailableSourceFilters(sources.filter { it.source.enabled }),
                     navidromeSourceIds = enabledSources
-                        .filter { it.type == ImportSourceType.NAVIDROME }
+                        .filter { it.type == ImportSourceType.NAVIDROME || it.type == ImportSourceType.SUBSONIC }
                         .mapTo(linkedSetOf()) { it.id },
                 )
             }
@@ -215,7 +215,7 @@ class FavoritesStore(
                         message = if (manual) {
                             "刷新喜欢失败: ${throwable.message.orEmpty()}"
                         } else {
-                            "同步 Navidrome 喜欢失败: ${throwable.message.orEmpty()}"
+                            "同步远程喜欢失败: ${throwable.message.orEmpty()}"
                         },
                     )
                 }
@@ -309,6 +309,7 @@ class FavoritesStore(
             LibrarySourceFilter.SAMBA,
             LibrarySourceFilter.WEBDAV,
             LibrarySourceFilter.NAVIDROME,
+            LibrarySourceFilter.SUBSONIC,
         )
     }
 }

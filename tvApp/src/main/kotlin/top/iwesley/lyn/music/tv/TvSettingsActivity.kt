@@ -128,6 +128,7 @@ import top.iwesley.lyn.music.core.model.ImportSourceType
 import top.iwesley.lyn.music.core.model.LocalFolderSelection
 import top.iwesley.lyn.music.core.model.PlatformCapabilities
 import top.iwesley.lyn.music.core.model.SourceWithStatus
+import top.iwesley.lyn.music.core.model.SubsonicAuthMode
 import top.iwesley.lyn.music.core.model.displayWebDavRootUrl
 import top.iwesley.lyn.music.core.model.effectiveAppDisplayDensity
 import top.iwesley.lyn.music.core.model.formatSambaEndpoint
@@ -467,6 +468,9 @@ private fun TvSourcesSettingsPane(
                 if (state.capabilities.supportsNavidromeImport) {
                     add("sources:add:navidrome")
                 }
+                if (state.capabilities.supportsSubsonicImport) {
+                    add("sources:add:subsonic")
+                }
             }
             if (addSourceRow.isNotEmpty()) {
                 add(addSourceRow)
@@ -548,7 +552,7 @@ private fun TvSourcesSettingsPane(
         item {
             TvSettingsPaneHeader(
                 title = "来源",
-                subtitle = "管理本机、Samba、WebDAV 和 Navidrome 音乐来源。",
+                subtitle = "管理本机、Samba、WebDAV、Navidrome 和 Subsonic 音乐来源。",
             )
         }
         if (sourceFocusRows.isEmpty()) {
@@ -591,7 +595,7 @@ private fun TvSourcesSettingsPane(
             item {
                 TvSettingsEmptyCard(
                     title = "还没有来源",
-                    body = "添加本地文件夹、Samba、WebDAV 或 Navidrome 后，曲库会开始扫描音乐。",
+                    body = "添加本地文件夹、Samba、WebDAV、Navidrome 或 Subsonic 后，曲库会开始扫描音乐。",
                 )
             }
         } else {
@@ -680,6 +684,17 @@ private fun TvAddSourcePanel(
                     restoreFocusAfterClick = false,
                 ) {
                     onIntent(ImportIntent.OpenRemoteSourceCreator(ImportSourceType.NAVIDROME))
+                }
+            }
+            if (capabilities.supportsSubsonicImport) {
+                TvAddTypeButton(
+                    label = "Subsonic",
+                    selected = state.creatingSourceType == ImportSourceType.SUBSONIC,
+                    focusKey = "sources:add:subsonic",
+                    focusChain = focusChain,
+                    restoreFocusAfterClick = false,
+                ) {
+                    onIntent(ImportIntent.OpenRemoteSourceCreator(ImportSourceType.SUBSONIC))
                 }
             }
         }
@@ -853,6 +868,13 @@ private fun TvRemoteSourceCreatorDialog(
                             focusChain = focusChain,
                         )
 
+                        ImportSourceType.SUBSONIC -> TvSubsonicSourceForm(
+                            state = state,
+                            onIntent = onIntent,
+                            focusPrefix = focusPrefix,
+                            focusChain = focusChain,
+                        )
+
                         ImportSourceType.LOCAL_FOLDER -> Unit
                     }
                 }
@@ -880,6 +902,7 @@ private fun TvRemoteSourceCreatorDialog(
                                 ImportSourceType.SAMBA -> onIntent(ImportIntent.TestSambaSource)
                                 ImportSourceType.WEBDAV -> onIntent(ImportIntent.TestWebDavSource)
                                 ImportSourceType.NAVIDROME -> onIntent(ImportIntent.TestNavidromeSource)
+                                ImportSourceType.SUBSONIC -> onIntent(ImportIntent.TestSubsonicSource)
                                 ImportSourceType.LOCAL_FOLDER -> Unit
                             }
                         },
@@ -902,6 +925,7 @@ private fun TvRemoteSourceCreatorDialog(
                                 ImportSourceType.SAMBA -> onIntent(ImportIntent.AddSambaSource)
                                 ImportSourceType.WEBDAV -> onIntent(ImportIntent.AddWebDavSource)
                                 ImportSourceType.NAVIDROME -> onIntent(ImportIntent.AddNavidromeSource)
+                                ImportSourceType.SUBSONIC -> onIntent(ImportIntent.AddSubsonicSource)
                                 ImportSourceType.LOCAL_FOLDER -> Unit
                             }
                         },
@@ -943,6 +967,14 @@ private fun remoteSourceDialogFocusRows(
         ImportSourceType.NAVIDROME -> listOf(
             listOf("$prefix:label"),
             listOf("$prefix:root"),
+            listOf("$prefix:username", "$prefix:password"),
+            buttons,
+        )
+
+        ImportSourceType.SUBSONIC -> listOf(
+            listOf("$prefix:label"),
+            listOf("$prefix:root"),
+            listOf("$prefix:auth"),
             listOf("$prefix:username", "$prefix:password"),
             buttons,
         )
@@ -1112,6 +1144,77 @@ private fun TvNavidromeSourceForm(
                 focusKey = "$focusPrefix:password",
                 focusChain = focusChain,
             )
+        }
+    }
+}
+
+@Composable
+private fun TvSubsonicSourceForm(
+    state: ImportState,
+    onIntent: (ImportIntent) -> Unit,
+    focusPrefix: String,
+    focusChain: TvSettingsFocusChain,
+) {
+    val apiKeyMode = state.subsonicAuthMode == SubsonicAuthMode.API_KEY
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        TvSettingsTextField(
+            label = "名称",
+            value = state.subsonicLabel,
+            onValueChange = { onIntent(ImportIntent.SubsonicLabelChanged(it)) },
+            placeholder = "Subsonic",
+            focusKey = "$focusPrefix:label",
+            focusChain = focusChain,
+        )
+        TvSettingsTextField(
+            label = "服务器地址",
+            value = state.subsonicBaseUrl,
+            onValueChange = { onIntent(ImportIntent.SubsonicBaseUrlChanged(it)) },
+            placeholder = "https://music.example.com",
+            focusKey = "$focusPrefix:root",
+            focusChain = focusChain,
+        )
+        TvSettingsSwitchRow(
+            title = "API Key 鉴权",
+            checked = apiKeyMode,
+            onCheckedChange = {
+                onIntent(
+                    ImportIntent.SubsonicAuthModeChanged(
+                        if (it) SubsonicAuthMode.API_KEY else SubsonicAuthMode.PASSWORD,
+                    ),
+                )
+            },
+            focusKey = "$focusPrefix:auth",
+            focusChain = focusChain,
+        )
+        if (apiKeyMode) {
+            TvSettingsTextField(
+                label = "API Key",
+                value = state.subsonicCredential,
+                onValueChange = { onIntent(ImportIntent.SubsonicCredentialChanged(it)) },
+                password = true,
+                focusKey = "$focusPrefix:password",
+                focusChain = focusChain,
+            )
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                TvSettingsTextField(
+                    label = "用户名",
+                    value = state.subsonicUsername,
+                    onValueChange = { onIntent(ImportIntent.SubsonicUsernameChanged(it)) },
+                    modifier = Modifier.weight(1f),
+                    focusKey = "$focusPrefix:username",
+                    focusChain = focusChain,
+                )
+                TvSettingsTextField(
+                    label = "密码",
+                    value = state.subsonicCredential,
+                    onValueChange = { onIntent(ImportIntent.SubsonicCredentialChanged(it)) },
+                    modifier = Modifier.weight(1f),
+                    password = true,
+                    focusKey = "$focusPrefix:password",
+                    focusChain = focusChain,
+                )
+            }
         }
     }
 }
@@ -1324,27 +1427,64 @@ private fun TvRemoteSourceEditorDialog(
                             )
                         }
 
+                        ImportSourceType.SUBSONIC -> {
+                            TvSettingsTextField(
+                                label = "服务器地址",
+                                value = editor.rootUrl,
+                                onValueChange = { onIntent(ImportIntent.RemoteSourceRootUrlChanged(it)) },
+                                focusKey = "$focusPrefix:root",
+                                focusChain = focusChain,
+                            )
+                        }
+
                         ImportSourceType.LOCAL_FOLDER -> Unit
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        TvSettingsTextField(
-                            label = "用户名",
-                            value = editor.username,
-                            onValueChange = { onIntent(ImportIntent.RemoteSourceUsernameChanged(it)) },
-                            modifier = Modifier.weight(1f),
-                            focusKey = "$focusPrefix:username",
+                    if (editor.type == ImportSourceType.SUBSONIC) {
+                        TvSettingsSwitchRow(
+                            title = "API Key 鉴权",
+                            checked = editor.subsonicAuthMode == SubsonicAuthMode.API_KEY,
+                            onCheckedChange = {
+                                onIntent(
+                                    ImportIntent.RemoteSourceSubsonicAuthModeChanged(
+                                        if (it) SubsonicAuthMode.API_KEY else SubsonicAuthMode.PASSWORD,
+                                    ),
+                                )
+                            },
+                            focusKey = "$focusPrefix:auth",
                             focusChain = focusChain,
                         )
+                    }
+                    if (editor.type == ImportSourceType.SUBSONIC && editor.subsonicAuthMode == SubsonicAuthMode.API_KEY) {
                         TvSettingsTextField(
-                            label = "密码",
+                            label = "API Key",
                             value = editor.password,
                             onValueChange = { onIntent(ImportIntent.RemoteSourcePasswordChanged(it)) },
-                            placeholder = if (editor.hasStoredCredential) "留空则沿用已保存密码" else "",
-                            modifier = Modifier.weight(1f),
+                            placeholder = if (editor.hasStoredCredential) "留空则沿用已保存 API Key" else "",
                             password = true,
                             focusKey = "$focusPrefix:password",
                             focusChain = focusChain,
                         )
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            TvSettingsTextField(
+                                label = "用户名",
+                                value = editor.username,
+                                onValueChange = { onIntent(ImportIntent.RemoteSourceUsernameChanged(it)) },
+                                modifier = Modifier.weight(1f),
+                                focusKey = "$focusPrefix:username",
+                                focusChain = focusChain,
+                            )
+                            TvSettingsTextField(
+                                label = "密码",
+                                value = editor.password,
+                                onValueChange = { onIntent(ImportIntent.RemoteSourcePasswordChanged(it)) },
+                                placeholder = if (editor.hasStoredCredential) "留空则沿用已保存密码" else "",
+                                modifier = Modifier.weight(1f),
+                                password = true,
+                                focusKey = "$focusPrefix:password",
+                                focusChain = focusChain,
+                            )
+                        }
                     }
                     if (editor.type == ImportSourceType.WEBDAV) {
                         TvSettingsSwitchRow(
@@ -2455,6 +2595,7 @@ private fun sourceTypeTitle(type: ImportSourceType): String {
         ImportSourceType.SAMBA -> "Samba"
         ImportSourceType.WEBDAV -> "WebDAV"
         ImportSourceType.NAVIDROME -> "Navidrome"
+        ImportSourceType.SUBSONIC -> "Subsonic"
     }
 }
 
@@ -2463,7 +2604,8 @@ private fun sourceTypeIcon(type: ImportSourceType): ImageVector {
         ImportSourceType.LOCAL_FOLDER -> Icons.Rounded.Folder
         ImportSourceType.SAMBA,
         ImportSourceType.WEBDAV,
-        ImportSourceType.NAVIDROME -> Icons.Rounded.Cloud
+        ImportSourceType.NAVIDROME,
+        ImportSourceType.SUBSONIC -> Icons.Rounded.Cloud
     }
 }
 
@@ -2473,6 +2615,7 @@ private fun sourceDisplayReference(source: ImportSource): String {
         ImportSourceType.SAMBA -> formatSambaEndpoint(source.server, source.port, source.path)
         ImportSourceType.WEBDAV -> displayWebDavRootUrl(source.rootReference)
         ImportSourceType.NAVIDROME -> source.rootReference
+        ImportSourceType.SUBSONIC -> source.rootReference
     }
 }
 

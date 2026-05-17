@@ -17,6 +17,7 @@ import top.iwesley.lyn.music.data.db.MIGRATION_10_11
 import top.iwesley.lyn.music.data.db.MIGRATION_11_12
 import top.iwesley.lyn.music.data.db.MIGRATION_12_13
 import top.iwesley.lyn.music.data.db.MIGRATION_13_14
+import top.iwesley.lyn.music.data.db.MIGRATION_14_15
 
 class DatabaseMigrationTest {
 
@@ -363,6 +364,53 @@ class DatabaseMigrationTest {
             assertTrue(connection.hasColumn("offline_download", "updatedAt"))
             assertTrue(connection.hasColumn("offline_download", "errorMessage"))
             assertEquals(listOf("trackId"), connection.primaryKeyColumns("offline_download"))
+        }
+    }
+
+    @Test
+    fun `migration 14 to 15 adds import source auth mode default`() {
+        val databasePath = Files.createTempFile("lynmusic-migration", ".db")
+        val driver = BundledSQLiteDriver()
+
+        driver.open(databasePath.absolutePathString()).use { connection ->
+            connection.execSql(
+                """
+                CREATE TABLE import_source (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    rootReference TEXT NOT NULL,
+                    server TEXT,
+                    shareName TEXT,
+                    directoryPath TEXT,
+                    username TEXT,
+                    credentialKey TEXT,
+                    lastScannedAt INTEGER,
+                    createdAt INTEGER NOT NULL,
+                    allowInsecureTls INTEGER NOT NULL DEFAULT 0,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    port INTEGER,
+                    path TEXT
+                )
+                """.trimIndent(),
+            )
+            connection.execSql(
+                """
+                INSERT INTO import_source (
+                    id, type, label, rootReference, server, shareName, directoryPath,
+                    username, credentialKey, lastScannedAt, createdAt, allowInsecureTls, enabled, port, path
+                ) VALUES (
+                    'nav-1', 'NAVIDROME', 'Navidrome', 'https://nav.example.com',
+                    NULL, NULL, NULL, 'demo', 'cred-1', NULL, 1, 0, 1, NULL, NULL
+                )
+                """.trimIndent(),
+            )
+
+            MIGRATION_14_15.migrate(connection)
+
+            assertTrue(connection.hasColumn("import_source", "authMode"))
+            assertEquals("PASSWORD", connection.singleText("SELECT authMode FROM import_source WHERE id = 'nav-1'"))
+            assertEquals("NAVIDROME", connection.singleText("SELECT type FROM import_source WHERE id = 'nav-1'"))
         }
     }
 

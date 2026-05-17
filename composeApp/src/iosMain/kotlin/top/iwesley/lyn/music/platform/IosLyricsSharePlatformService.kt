@@ -18,7 +18,7 @@ import top.iwesley.lyn.music.core.model.LyricsShareFontOption
 import top.iwesley.lyn.music.core.model.LyricsSharePlatformService
 import top.iwesley.lyn.music.core.model.LyricsShareSaveResult
 import top.iwesley.lyn.music.core.model.normalizedArtworkCacheLocator
-import top.iwesley.lyn.music.core.model.parseNavidromeCoverLocator
+import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleCoverLocator
 import top.iwesley.lyn.music.core.model.resolveArtworkCacheTarget
 import org.jetbrains.skia.FontMgr
 import kotlin.coroutines.resume
@@ -139,7 +139,7 @@ private suspend fun readIosLyricsShareArtworkTargetBytes(target: String): ByteAr
 }
 
 private fun shouldCacheLyricsShareArtwork(normalizedLocator: String): Boolean {
-    return parseNavidromeCoverLocator(normalizedLocator) != null ||
+    return parseSubsonicCompatibleCoverLocator(normalizedLocator) != null ||
         normalizedLocator.startsWith("http://", ignoreCase = true) ||
         normalizedLocator.startsWith("https://", ignoreCase = true)
 }

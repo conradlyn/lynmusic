@@ -835,12 +835,12 @@ private fun GeneralSettingsPane(
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(
-                            text = "Navidrome 播放音质",
+                            text = "远程播放音质",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
-                            text = "仅影响 Navidrome 曲目，设置会在下一次加载歌曲时生效。",
+                            text = "影响 Navidrome 与 Subsonic 曲目，设置会在下一次加载歌曲时生效。",
                             style = MaterialTheme.typography.bodySmall,
                             color = shellColors.secondaryText,
                         )

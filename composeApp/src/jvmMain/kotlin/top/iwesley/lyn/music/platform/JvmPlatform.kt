@@ -89,6 +89,7 @@ import top.iwesley.lyn.music.core.model.withThemePalette
 import top.iwesley.lyn.music.core.model.SambaSourceDraft
 import top.iwesley.lyn.music.core.model.SecureCredentialStore
 import top.iwesley.lyn.music.core.model.SameNameLyricsFileGateway
+import top.iwesley.lyn.music.core.model.SubsonicSourceDraft
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.VlcPathPickerPlatformService
 import top.iwesley.lyn.music.core.model.WebDavSourceDraft
@@ -102,8 +103,8 @@ import top.iwesley.lyn.music.core.model.normalizeArtworkLocator
 import top.iwesley.lyn.music.core.model.normalizeSambaPath
 import top.iwesley.lyn.music.core.model.parseSambaLocator
 import top.iwesley.lyn.music.core.model.parseSambaPath
-import top.iwesley.lyn.music.core.model.parseNavidromeCoverLocator
-import top.iwesley.lyn.music.core.model.parseNavidromeSongLocator
+import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleCoverLocator
+import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleSongLocator
 import top.iwesley.lyn.music.core.model.parseWebDavLocator
 import top.iwesley.lyn.music.core.model.sameNameLyricsRelativePath
 import top.iwesley.lyn.music.core.model.unsupportedAudioImportFailure
@@ -116,7 +117,9 @@ import top.iwesley.lyn.music.data.repository.DailyRecommendationDateKeyProvider
 import top.iwesley.lyn.music.data.repository.PlayerRuntimeServices
 import top.iwesley.lyn.music.domain.resolveNavidromeStreamUrl
 import top.iwesley.lyn.music.domain.scanNavidromeLibrary
+import top.iwesley.lyn.music.domain.scanSubsonicLibrary
 import top.iwesley.lyn.music.domain.testNavidromeConnection
+import top.iwesley.lyn.music.domain.testSubsonicConnection
 import top.iwesley.lyn.music.feature.library.LibrarySourceFilter
 import top.iwesley.lyn.music.feature.library.LibrarySourceFilterPreferencesStore
 import top.iwesley.lyn.music.feature.library.TrackSortMode
@@ -648,7 +651,7 @@ private class JvmSameNameLyricsFileGateway(
     override suspend fun readSameNameLyrics(track: Track): Result<String?> {
         return runCatching {
             when {
-                parseNavidromeSongLocator(track.mediaLocator) != null -> null
+                parseSubsonicCompatibleSongLocator(track.mediaLocator) != null -> null
                 resolveJvmLocalTrackPath(track.mediaLocator) != null ->
                     readJvmLocalSameNameLyricsFile(requireNotNull(resolveJvmLocalTrackPath(track.mediaLocator)))
 
@@ -692,7 +695,7 @@ private class JvmAudioTagEditorPlatformService : AudioTagEditorPlatformService {
             if (rawTarget.isBlank()) {
                 null
             } else {
-                val target = if (parseNavidromeCoverLocator(rawTarget) != null) {
+                val target = if (parseSubsonicCompatibleCoverLocator(rawTarget) != null) {
                     NavidromeLocatorRuntime.resolveCoverArtUrl(rawTarget).orEmpty()
                 } else {
                     rawTarget
@@ -1030,6 +1033,20 @@ private class JvmImportSourceGateway(
 
     override suspend fun scanNavidrome(draft: NavidromeSourceDraft, sourceId: String): ImportScanReport {
         return scanNavidromeLibrary(
+            draft = draft,
+            sourceId = sourceId,
+            httpClient = navidromeHttpClient,
+            supportedImportExtensions = JVM_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
+            logger = logger,
+        )
+    }
+
+    override suspend fun testSubsonic(draft: SubsonicSourceDraft) {
+        testSubsonicConnection(draft, navidromeHttpClient, logger)
+    }
+
+    override suspend fun scanSubsonic(draft: SubsonicSourceDraft, sourceId: String): ImportScanReport {
+        return scanSubsonicLibrary(
             draft = draft,
             sourceId = sourceId,
             httpClient = navidromeHttpClient,
@@ -1599,7 +1616,7 @@ internal class JvmPlaybackGateway(
                 null
             }
             val currentNavidromeAudioQuality =
-                if (offlineTarget == null && webDavTarget == null && sambaTarget == null && parseNavidromeSongLocator(track.mediaLocator) != null) {
+                if (offlineTarget == null && webDavTarget == null && sambaTarget == null && parseSubsonicCompatibleSongLocator(track.mediaLocator) != null) {
                     NavidromeAudioQuality.Original
                 } else {
                     null
@@ -1612,7 +1629,7 @@ internal class JvmPlaybackGateway(
             }
             val sourceReference = when {
                 offlineTarget != null -> track.mediaLocator
-                parseNavidromeSongLocator(track.mediaLocator) != null -> track.mediaLocator
+                parseSubsonicCompatibleSongLocator(track.mediaLocator) != null -> track.mediaLocator
                 else -> actualPlaybackSource
             }
             if (!loadToken.isCurrent()) {

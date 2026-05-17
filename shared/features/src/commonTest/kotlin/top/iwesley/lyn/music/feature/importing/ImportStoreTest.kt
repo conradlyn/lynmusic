@@ -25,6 +25,8 @@ import top.iwesley.lyn.music.core.model.NavidromeSourceDraft
 import top.iwesley.lyn.music.core.model.PlatformCapabilities
 import top.iwesley.lyn.music.core.model.SambaSourceDraft
 import top.iwesley.lyn.music.core.model.SourceWithStatus
+import top.iwesley.lyn.music.core.model.SubsonicAuthMode
+import top.iwesley.lyn.music.core.model.SubsonicSourceDraft
 import top.iwesley.lyn.music.core.model.WebDavSourceDraft
 import top.iwesley.lyn.music.data.repository.ImportSourceRepository
 
@@ -219,6 +221,73 @@ class ImportStoreTest {
         assertNull(store.state.value.editingSource)
         assertEquals("来源已更新并重新扫描。发现 1 个音频文件，成功导入 1 首，0 个失败。", store.state.value.message)
         assertEquals(testScanSummary("nav-1"), store.state.value.latestScanSummariesBySourceId["nav-1"])
+        harness.close()
+    }
+
+    @Test
+    fun `saving edited subsonic source after auth mode change requires new credential`() = runTest {
+        val repository = FakeImportSourceRepository(
+            sources = listOf(
+                source(
+                    sourceId = "sub-1",
+                    type = ImportSourceType.SUBSONIC,
+                    label = "Subsonic",
+                    rootReference = "https://sub.example.com",
+                    username = "demo",
+                    credentialKey = "credential-sub-1",
+                    subsonicAuthMode = SubsonicAuthMode.PASSWORD,
+                ),
+            ),
+        )
+        val harness = createStore(repository)
+        val store = harness.store
+
+        store.dispatch(ImportIntent.OpenRemoteSourceEditor("sub-1"))
+        advanceUntilIdle()
+        store.dispatch(ImportIntent.RemoteSourceSubsonicAuthModeChanged(SubsonicAuthMode.API_KEY))
+        advanceUntilIdle()
+        store.dispatch(ImportIntent.SaveRemoteSource)
+        advanceUntilIdle()
+
+        val editing = assertNotNull(store.state.value.editingSource)
+        assertEquals(SubsonicAuthMode.API_KEY, editing.subsonicAuthMode)
+        assertEquals("", editing.username)
+        assertEquals(false, editing.keepExistingCredential)
+        assertEquals("", editing.password)
+        assertEquals("请先填写 Subsonic API Key。", store.state.value.message)
+        assertNull(repository.lastUpdatedSubsonicSourceId)
+        assertNull(repository.lastUpdatedSubsonicDraft)
+        harness.close()
+    }
+
+    @Test
+    fun `adding subsonic api key source does not send hidden username`() = runTest {
+        val repository = FakeImportSourceRepository()
+        val harness = createStore(repository)
+        val store = harness.store
+
+        store.dispatch(ImportIntent.SubsonicBaseUrlChanged("https://sub.example.com"))
+        store.dispatch(ImportIntent.SubsonicUsernameChanged("demo"))
+        store.dispatch(ImportIntent.SubsonicCredentialChanged("password"))
+        advanceUntilIdle()
+        store.dispatch(ImportIntent.SubsonicAuthModeChanged(SubsonicAuthMode.API_KEY))
+        advanceUntilIdle()
+        store.dispatch(ImportIntent.SubsonicCredentialChanged("api-key"))
+        advanceUntilIdle()
+        store.dispatch(ImportIntent.AddSubsonicSource)
+        advanceUntilIdle()
+
+        assertEquals("", store.state.value.subsonicUsername)
+        assertEquals(
+            SubsonicSourceDraft(
+                label = "",
+                baseUrl = "https://sub.example.com",
+                username = "",
+                credential = "api-key",
+                authMode = SubsonicAuthMode.API_KEY,
+            ),
+            repository.lastAddedSubsonicDraft,
+        )
         harness.close()
     }
 
@@ -595,6 +664,7 @@ private fun source(
     path: String? = null,
     username: String? = null,
     credentialKey: String? = null,
+    subsonicAuthMode: SubsonicAuthMode = SubsonicAuthMode.PASSWORD,
     enabled: Boolean = true,
 ): SourceWithStatus {
     return SourceWithStatus(
@@ -608,6 +678,7 @@ private fun source(
             path = path,
             username = username,
             credentialKey = credentialKey,
+            subsonicAuthMode = subsonicAuthMode,
             enabled = enabled,
             createdAt = 1L,
         ),
@@ -619,6 +690,7 @@ private class FakeImportSourceRepository(
     sambaResult: Result<ImportScanSummary> = Result.success(testScanSummary("smb-1")),
     private val webDavResult: Result<ImportScanSummary> = Result.success(testScanSummary("dav-1")),
     private val navidromeResult: Result<ImportScanSummary> = Result.success(testScanSummary("nav-1")),
+    private val subsonicResult: Result<ImportScanSummary> = Result.success(testScanSummary("sub-1")),
     sources: List<SourceWithStatus> = emptyList(),
 ) : ImportSourceRepository {
     private val mutableSources = MutableStateFlow(sources)
@@ -633,6 +705,10 @@ private class FakeImportSourceRepository(
     var lastUpdatedNavidromeSourceId: String? = null
     var lastUpdatedNavidromeDraft: NavidromeSourceDraft? = null
     var lastUpdatedNavidromeKeepExisting: Boolean = false
+    var lastAddedSubsonicDraft: SubsonicSourceDraft? = null
+    var lastUpdatedSubsonicSourceId: String? = null
+    var lastUpdatedSubsonicDraft: SubsonicSourceDraft? = null
+    var lastUpdatedSubsonicKeepExisting: Boolean = false
 
     override fun observeSources(): Flow<List<SourceWithStatus>> = mutableSources.asStateFlow()
 
@@ -713,9 +789,36 @@ private class FakeImportSourceRepository(
         return pendingResult?.await()?.map { testScanSummary(sourceId) } ?: Result.success(testScanSummary(sourceId))
     }
 
+    override suspend fun testSubsonicSource(draft: SubsonicSourceDraft): Result<Unit> {
+        return pendingResult?.await() ?: Result.success(Unit)
+    }
+
+    override suspend fun testUpdatedSubsonicSource(
+        sourceId: String,
+        draft: SubsonicSourceDraft,
+        keepExistingCredentialWhenBlankCredential: Boolean,
+    ): Result<Unit> = pendingResult?.await() ?: Result.success(Unit)
+
+    override suspend fun addSubsonicSource(draft: SubsonicSourceDraft): Result<ImportScanSummary> {
+        lastAddedSubsonicDraft = draft
+        return pendingResult?.await()?.map { testScanSummary("sub-1") } ?: subsonicResult
+    }
+
+    override suspend fun updateSubsonicSource(
+        sourceId: String,
+        draft: SubsonicSourceDraft,
+        keepExistingCredentialWhenBlankCredential: Boolean,
+    ): Result<ImportScanSummary> {
+        lastUpdatedSubsonicSourceId = sourceId
+        lastUpdatedSubsonicDraft = draft
+        lastUpdatedSubsonicKeepExisting = keepExistingCredentialWhenBlankCredential
+        return pendingResult?.await()?.map { testScanSummary(sourceId) } ?: Result.success(testScanSummary(sourceId))
+    }
+
     override suspend fun rescanSource(sourceId: String): Result<ImportScanSummary?> {
         return pendingResult?.await()?.map { testScanSummary(sourceId) } ?: when (sourceId) {
             "nav-1" -> navidromeResult.map { it }
+            "sub-1" -> subsonicResult.map { it }
             "dav-1" -> webDavResult.map { it }
             "smb-1" -> sambaResult.map { it }
             else -> Result.success(testScanSummary(sourceId))

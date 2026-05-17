@@ -15,7 +15,7 @@ import top.iwesley.lyn.music.core.model.PlaybackLoadToken
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.UnsupportedNavidromeAudioQualityPreferencesStore
 import top.iwesley.lyn.music.core.model.WifiNetworkConnectionTypeProvider
-import top.iwesley.lyn.music.core.model.parseNavidromeSongLocator
+import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleSongLocator
 import top.iwesley.lyn.music.core.model.resolveNavidromeAudioQualityForCurrentNetwork
 
 internal class ApplePlaybackGateway(
@@ -58,14 +58,14 @@ internal class ApplePlaybackGateway(
             return
         }
         stopAndResetForTrackSwitch()
-        val navidrome = parseNavidromeSongLocator(track.mediaLocator)
-        val navidromeAudioQuality = navidrome?.let {
+        val subsonicCompatible = parseSubsonicCompatibleSongLocator(track.mediaLocator)
+        val navidromeAudioQuality = subsonicCompatible?.let {
             resolveNavidromeAudioQualityForCurrentNetwork(
                 preferencesStore = navidromeAudioQualityPreferencesStore,
                 networkConnectionTypeProvider = networkConnectionTypeProvider,
             )
         }
-        val effectiveLocator = if (navidrome != null) {
+        val effectiveLocator = if (subsonicCompatible != null) {
             NavidromeLocatorRuntime.resolveStreamUrl(
                 locator = track.mediaLocator,
                 audioQuality = requireNotNull(navidromeAudioQuality),

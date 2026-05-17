@@ -48,6 +48,8 @@ import top.iwesley.lyn.music.core.model.SambaCachePreferencesStore
 import top.iwesley.lyn.music.core.model.SambaSourceDraft
 import top.iwesley.lyn.music.core.model.SecureCredentialStore
 import top.iwesley.lyn.music.core.model.SameNameLyricsFileGateway
+import top.iwesley.lyn.music.core.model.SubsonicAuthMode
+import top.iwesley.lyn.music.core.model.SubsonicSourceDraft
 import top.iwesley.lyn.music.core.model.AppThemeId
 import top.iwesley.lyn.music.core.model.AppThemeTextPalette
 import top.iwesley.lyn.music.core.model.AppThemeTextPalettePreferences
@@ -76,7 +78,7 @@ import top.iwesley.lyn.music.core.model.joinSambaPath
 import top.iwesley.lyn.music.core.model.normalizeSambaPath
 import top.iwesley.lyn.music.core.model.normalizeArtworkLocator
 import top.iwesley.lyn.music.core.model.normalizeWebDavRootUrl
-import top.iwesley.lyn.music.core.model.parseNavidromeSongLocator
+import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleSongLocator
 import top.iwesley.lyn.music.core.model.parseSambaLocator
 import top.iwesley.lyn.music.core.model.trackArtworkCacheKey
 import top.iwesley.lyn.music.core.model.warn
@@ -94,11 +96,20 @@ import top.iwesley.lyn.music.domain.MANAGED_LRCAPI_SOURCE_ID
 import top.iwesley.lyn.music.domain.buildLyricsRequest
 import top.iwesley.lyn.music.domain.buildManagedLrcApiConfig
 import top.iwesley.lyn.music.domain.NAVIDROME_LYRICS_SOURCE_ID
+import top.iwesley.lyn.music.domain.SUBSONIC_LYRICS_SOURCE_ID
+import top.iwesley.lyn.music.domain.NavidromeResolvedSource
+import top.iwesley.lyn.music.domain.isSubsonicCompatibleSourceType
+import top.iwesley.lyn.music.domain.lyricsSourceIdFor
 import top.iwesley.lyn.music.domain.normalizeNavidromeBaseUrl
+import top.iwesley.lyn.music.domain.normalizeSubsonicBaseUrl
 import top.iwesley.lyn.music.domain.requestNavidromeLyrics
 import top.iwesley.lyn.music.domain.resolveNavidromeCoverArtUrl
 import top.iwesley.lyn.music.domain.resolveNavidromeStreamUrl
+import top.iwesley.lyn.music.domain.resolveSubsonicCompatibleCoverArtUrl
+import top.iwesley.lyn.music.domain.resolveSubsonicCompatibleStreamUrl
 import top.iwesley.lyn.music.domain.scanNavidromeLibrary
+import top.iwesley.lyn.music.domain.scanSubsonicLibrary
+import top.iwesley.lyn.music.domain.toSubsonicAuthMode
 import top.iwesley.lyn.music.domain.buildPresetOiapiQqMusicWorkflowJson
 import top.iwesley.lyn.music.domain.buildWorkflowRequest
 import top.iwesley.lyn.music.domain.extractWorkflowEnrichmentStepCapture
@@ -185,6 +196,26 @@ interface ImportSourceRepository {
         draft: NavidromeSourceDraft,
         keepExistingCredentialWhenBlankPassword: Boolean = true,
     ): Result<ImportScanSummary>
+    suspend fun testSubsonicSource(draft: SubsonicSourceDraft): Result<Unit> {
+        return Result.failure(UnsupportedOperationException("Subsonic import is not supported."))
+    }
+    suspend fun testUpdatedSubsonicSource(
+        sourceId: String,
+        draft: SubsonicSourceDraft,
+        keepExistingCredentialWhenBlankCredential: Boolean = true,
+    ): Result<Unit> {
+        return Result.failure(UnsupportedOperationException("Subsonic import is not supported."))
+    }
+    suspend fun addSubsonicSource(draft: SubsonicSourceDraft): Result<ImportScanSummary> {
+        return Result.failure(UnsupportedOperationException("Subsonic import is not supported."))
+    }
+    suspend fun updateSubsonicSource(
+        sourceId: String,
+        draft: SubsonicSourceDraft,
+        keepExistingCredentialWhenBlankCredential: Boolean = true,
+    ): Result<ImportScanSummary> {
+        return Result.failure(UnsupportedOperationException("Subsonic import is not supported."))
+    }
     suspend fun rescanSource(sourceId: String): Result<ImportScanSummary?>
     suspend fun setSourceEnabled(sourceId: String, enabled: Boolean): Result<Unit>
     suspend fun deleteSource(sourceId: String): Result<Unit>
@@ -581,6 +612,81 @@ class RoomImportSourceRepository(
         }
     }
 
+    override suspend fun testSubsonicSource(draft: SubsonicSourceDraft): Result<Unit> {
+        return runCatching {
+            gateway.testSubsonic(prepareSubsonicDraft(draft))
+        }
+    }
+
+    override suspend fun testUpdatedSubsonicSource(
+        sourceId: String,
+        draft: SubsonicSourceDraft,
+        keepExistingCredentialWhenBlankCredential: Boolean,
+    ): Result<Unit> {
+        return runCatching {
+            val existing = requireRemoteSource(sourceId, ImportSourceType.SUBSONIC)
+            val preparedDraft = prepareSubsonicDraft(draft)
+            val credential = resolveUpdatedSubsonicCredential(
+                existing = existing,
+                draft = preparedDraft,
+                keepExistingCredentialWhenBlankCredential = keepExistingCredentialWhenBlankCredential,
+            )
+            if (credential.isBlank()) {
+                error("Subsonic 来源缺少有效凭据。")
+            }
+            gateway.testSubsonic(preparedDraft.copy(credential = credential))
+        }
+    }
+
+    override suspend fun addSubsonicSource(draft: SubsonicSourceDraft): Result<ImportScanSummary> {
+        return runCatching {
+            val sourceId = newId("subsonic")
+            val preparedDraft = prepareSubsonicDraft(draft)
+            val source = createSubsonicSource(sourceId, preparedDraft).copy(credentialKey = "credential-$sourceId")
+            validateImportSourceCreation(label = source.label)
+            source.credentialKey?.let { secureCredentialStore.put(it, preparedDraft.credential) }
+            database.importSourceDao().upsert(source.toEntity())
+            runScan(source) {
+                gateway.scanSubsonic(preparedDraft, sourceId)
+            }
+        }
+    }
+
+    override suspend fun updateSubsonicSource(
+        sourceId: String,
+        draft: SubsonicSourceDraft,
+        keepExistingCredentialWhenBlankCredential: Boolean,
+    ): Result<ImportScanSummary> {
+        return runCatching {
+            val existing = requireRemoteSource(sourceId, ImportSourceType.SUBSONIC)
+            val preparedDraft = prepareSubsonicDraft(draft)
+            val updatedSource = createSubsonicSource(
+                sourceId = existing.id,
+                draft = preparedDraft,
+                createdAt = existing.createdAt,
+                enabled = existing.enabled,
+            )
+            assertUniqueImportSourceLabel(updatedSource.label, excludingSourceId = existing.id)
+            val credential = resolveUpdatedSubsonicCredential(
+                existing = existing,
+                draft = preparedDraft,
+                keepExistingCredentialWhenBlankCredential = keepExistingCredentialWhenBlankCredential,
+            )
+            if (credential.isBlank()) {
+                error("Subsonic 来源缺少有效凭据。")
+            }
+            val report = gateway.scanSubsonic(preparedDraft.copy(credential = credential), sourceId)
+            val credentialKey = resolveUpdatedCredentialKey(
+                sourceId = sourceId,
+                existingCredentialKey = existing.credentialKey,
+                password = credential,
+                keepExistingCredentialWhenBlankPassword = true,
+            )
+            persistUpdatedCredential(existing.credentialKey, credentialKey, credential)
+            persistScan(updatedSource.copy(credentialKey = credentialKey), report)
+        }
+    }
+
     override suspend fun rescanSource(sourceId: String): Result<ImportScanSummary?> {
         return runCatching {
             val entity = database.importSourceDao().getById(sourceId)
@@ -636,6 +742,20 @@ class RoomImportSourceRepository(
                                 baseUrl = normalizeNavidromeBaseUrl(source.rootReference),
                                 username = source.username.orEmpty(),
                                 password = password,
+                            ),
+                            sourceId = source.id,
+                        )
+                    }
+
+                    ImportSourceType.SUBSONIC -> {
+                        val credential = source.credentialKey?.let { secureCredentialStore.get(it) }.orEmpty()
+                        gateway.scanSubsonic(
+                            draft = SubsonicSourceDraft(
+                                label = source.label,
+                                baseUrl = normalizeSubsonicBaseUrl(source.rootReference),
+                                username = source.username.orEmpty(),
+                                credential = credential,
+                                authMode = source.subsonicAuthMode,
                             ),
                             sourceId = source.id,
                         )
@@ -697,6 +817,21 @@ class RoomImportSourceRepository(
             label = draft.label.trim(),
             baseUrl = normalizeNavidromeBaseUrl(draft.baseUrl),
             username = draft.username.trim(),
+        )
+    }
+
+    private fun prepareSubsonicDraft(draft: SubsonicSourceDraft): SubsonicSourceDraft {
+        val apiKeyMode = draft.authMode == SubsonicAuthMode.API_KEY
+        val credential = if (apiKeyMode) {
+            draft.credential.trim()
+        } else {
+            draft.credential
+        }
+        return draft.copy(
+            label = draft.label.trim(),
+            baseUrl = normalizeSubsonicBaseUrl(draft.baseUrl),
+            username = if (apiKeyMode) "" else draft.username.trim(),
+            credential = credential,
         )
     }
 
@@ -764,6 +899,25 @@ class RoomImportSourceRepository(
         )
     }
 
+    private fun createSubsonicSource(
+        sourceId: String,
+        draft: SubsonicSourceDraft,
+        createdAt: Long = now(),
+        enabled: Boolean = true,
+    ): ImportSource {
+        val label = draft.label.ifBlank { draft.baseUrl }
+        return ImportSource(
+            id = sourceId,
+            type = ImportSourceType.SUBSONIC,
+            label = label,
+            rootReference = draft.baseUrl,
+            username = draft.username.takeIf { draft.authMode == SubsonicAuthMode.PASSWORD },
+            subsonicAuthMode = draft.authMode,
+            createdAt = createdAt,
+            enabled = enabled,
+        )
+    }
+
     private fun credentialKeyForNewSource(password: String, sourceId: String): String? {
         return if (password.isBlank()) null else "credential-$sourceId"
     }
@@ -811,6 +965,23 @@ class RoomImportSourceRepository(
         }
     }
 
+    private suspend fun resolveUpdatedSubsonicCredential(
+        existing: ImportSource,
+        draft: SubsonicSourceDraft,
+        keepExistingCredentialWhenBlankCredential: Boolean,
+    ): String {
+        if (draft.credential.isNotBlank()) return draft.credential
+        if (existing.subsonicAuthMode != draft.authMode) {
+            val spacing = if (draft.authMode == SubsonicAuthMode.API_KEY) " " else ""
+            error("Subsonic 来源切换鉴权方式后需要重新填写$spacing${draft.authMode.credentialLabel()}。")
+        }
+        return resolveUpdatedPassword(
+            existingCredentialKey = existing.credentialKey,
+            password = draft.credential,
+            keepExistingCredentialWhenBlankPassword = keepExistingCredentialWhenBlankCredential,
+        )
+    }
+
     private suspend fun persistUpdatedCredential(
         previousCredentialKey: String?,
         nextCredentialKey: String?,
@@ -819,6 +990,13 @@ class RoomImportSourceRepository(
         when {
             nextCredentialKey == null && previousCredentialKey != null -> secureCredentialStore.remove(previousCredentialKey)
             nextCredentialKey != null && password.isNotBlank() -> secureCredentialStore.put(nextCredentialKey, password)
+        }
+    }
+
+    private fun SubsonicAuthMode.credentialLabel(): String {
+        return when (this) {
+            SubsonicAuthMode.PASSWORD -> "密码"
+            SubsonicAuthMode.API_KEY -> "API Key"
         }
     }
 
@@ -878,7 +1056,7 @@ class RoomImportSourceRepository(
                     )
                 }
         }
-        if (source.type != ImportSourceType.NAVIDROME) {
+        if (!isSubsonicCompatibleSourceType(source.type)) {
             database.favoriteTrackDao().deleteOrphansBySourceId(source.id)
         }
         rebuildLibrarySummaries()
@@ -1323,9 +1501,11 @@ class DefaultLyricsRepository(
                 logCacheHit(trackLabel, resolved.document)
                 return resolved.withArtworkOverride(manualArtworkOverride)
             }
-        if (parseNavidromeSongLocator(track.mediaLocator) != null) {
+        val subsonicLocator = parseSubsonicCompatibleSongLocator(track.mediaLocator)
+        val subsonicLyricsSourceId = subsonicLocator?.sourceType?.let(::lyricsSourceIdFor)
+        if (subsonicLocator != null && subsonicLyricsSourceId != null) {
             cachedRows
-                .firstOrNull { it.sourceId == NAVIDROME_LYRICS_SOURCE_ID }
+                .firstOrNull { it.sourceId == subsonicLyricsSourceId }
                 ?.let { row ->
                     resolveCachedLyricsForTrack(
                         track = track,
@@ -1337,17 +1517,17 @@ class DefaultLyricsRepository(
                     logCacheHit(trackLabel, resolved.document)
                     return resolved.withArtworkOverride(manualArtworkOverride)
                 }
-            requestNavidromeLyricsDocument(track)?.let { navidromeLyrics ->
-                storeLyricsDocument(track.id, navidromeLyrics)
+            requestNavidromeLyricsDocument(track)?.let { subsonicLyrics ->
+                storeLyricsDocument(track.id, subsonicLyrics)
                 logger.info(LYRICS_LOG_TAG) {
-                    "resolved track=$trackLabel source=${navidromeLyrics.sourceId} synced=${navidromeLyrics.isSynced} lines=${navidromeLyrics.lines.size}"
+                    "resolved track=$trackLabel source=${subsonicLyrics.sourceId} synced=${subsonicLyrics.isSynced} lines=${subsonicLyrics.lines.size}"
                 }
-                return ResolvedLyricsResult(document = navidromeLyrics)
+                return ResolvedLyricsResult(document = subsonicLyrics)
                     .withArtworkOverride(manualArtworkOverride)
             }
             cachedRows
                 .firstNotNullOfOrNull { cache ->
-                    cache.takeUnless { it.sourceId == NAVIDROME_LYRICS_SOURCE_ID }
+                    cache.takeUnless { it.sourceId == subsonicLyricsSourceId }
                         ?.let { row ->
                             resolveCachedLyricsForTrack(
                                 track = track,
@@ -1503,19 +1683,29 @@ class DefaultLyricsRepository(
     }
 
     private suspend fun requestNavidromeLyricsDocument(track: Track): LyricsDocument? {
-        val locator = parseNavidromeSongLocator(track.mediaLocator) ?: return null
-        val source = database.importSourceDao().getById(locator.first)
-            ?.takeIf { it.type == ImportSourceType.NAVIDROME.name && it.enabled }
+        val locator = parseSubsonicCompatibleSongLocator(track.mediaLocator) ?: return null
+        val source = database.importSourceDao().getById(locator.sourceId)
+            ?.takeIf { it.type == locator.sourceType.name && it.enabled }
             ?: return null
+        val sourceType = runCatching { ImportSourceType.valueOf(source.type) }.getOrNull() ?: return null
+        if (!isSubsonicCompatibleSourceType(sourceType)) return null
+        val authMode = source.authMode.toSubsonicAuthMode()
         val username = source.username?.trim().orEmpty()
-        val password = source.credentialKey?.let { secureCredentialStore.get(it) }.orEmpty()
-        if (username.isBlank() || password.isBlank()) return null
+        val credential = source.credentialKey?.let { secureCredentialStore.get(it) }.orEmpty()
+        if (authMode == SubsonicAuthMode.PASSWORD && (username.isBlank() || credential.isBlank())) return null
+        if (authMode == SubsonicAuthMode.API_KEY && credential.isBlank()) return null
         return requestNavidromeLyrics(
             httpClient = httpClient,
-            source = top.iwesley.lyn.music.domain.NavidromeResolvedSource(
-                baseUrl = normalizeNavidromeBaseUrl(source.rootReference),
+            source = NavidromeResolvedSource(
+                baseUrl = if (sourceType == ImportSourceType.NAVIDROME) {
+                    normalizeNavidromeBaseUrl(source.rootReference)
+                } else {
+                    normalizeSubsonicBaseUrl(source.rootReference)
+                },
                 username = username,
-                password = password,
+                password = credential,
+                authMode = authMode,
+                sourceType = sourceType,
             ),
             track = track,
             logger = logger,
@@ -1732,7 +1922,7 @@ class DefaultLyricsRepository(
     }
 
     private suspend fun buildTrackProvidedLyricsCandidates(track: Track): List<LyricsSearchCandidate> {
-        return if (parseNavidromeSongLocator(track.mediaLocator) != null) {
+        return if (parseSubsonicCompatibleSongLocator(track.mediaLocator) != null) {
             listOfNotNull(buildNavidromeTrackProvidedLyricsCandidate(track))
         } else {
             buildList {
@@ -1753,7 +1943,7 @@ class DefaultLyricsRepository(
             ?: return null
         return LyricsSearchCandidate(
             sourceId = document.sourceId,
-            sourceName = "Navidrome",
+            sourceName = if (document.sourceId == SUBSONIC_LYRICS_SOURCE_ID) "Subsonic" else "Navidrome",
             document = document,
             title = track.title.takeIf { it.isNotBlank() },
             artistName = track.artistName?.takeIf { it.isNotBlank() },
@@ -1839,7 +2029,7 @@ class DefaultLyricsRepository(
     }
 
     private suspend fun readLiveSameNameLyricsDocument(track: Track): SameNameLyricsLookup {
-        if (parseNavidromeSongLocator(track.mediaLocator) != null) return SameNameLyricsLookup.Missing
+        if (parseSubsonicCompatibleSongLocator(track.mediaLocator) != null) return SameNameLyricsLookup.Missing
         val rawPayload = sameNameLyricsFileGateway.readSameNameLyrics(track).fold(
             onSuccess = { it?.trim()?.takeIf { value -> value.isNotBlank() } },
             onFailure = { throwable -> return SameNameLyricsLookup.Failed(throwable) },
@@ -2177,11 +2367,11 @@ class DefaultLyricsRepository(
 
     private suspend fun trackArtworkCacheState(track: Track): TrackArtworkCacheState {
         val cacheKey = trackArtworkCacheKey(track)
-        val isNavidrome = parseNavidromeSongLocator(track.mediaLocator) != null
+        val isSubsonicCompatible = parseSubsonicCompatibleSongLocator(track.mediaLocator) != null
         if (cacheKey == null) {
             logger.warn(LYRICS_LOG_TAG) {
                 "artwork-cache-state track=${track.id} key=<none> hasCached=false hasReplaceable=false " +
-                    "hasReal=false isNavidrome=$isNavidrome source=${track.sourceId} albumId=${track.albumId.orEmpty()} " +
+                    "hasReal=false isSubsonicCompatible=$isSubsonicCompatible source=${track.sourceId} albumId=${track.albumId.orEmpty()} " +
                     "albumTitle=${track.albumTitle.orEmpty()} artist=${track.artistName.orEmpty()} " +
                     "trackArtwork=${track.artworkLocator.orEmpty()}"
             }
@@ -2189,7 +2379,7 @@ class DefaultLyricsRepository(
         }
         val hasCached = runCatching { artworkCacheStore.hasCached(cacheKey) }.getOrDefault(false)
         val hasReplaceablePlaceholder = hasCached &&
-            isNavidrome &&
+            isSubsonicCompatible &&
             runCatching {
                 artworkCacheStore.hasReplaceableNavidromePlaceholderCached(cacheKey)
             }.getOrDefault(false)
@@ -2200,7 +2390,7 @@ class DefaultLyricsRepository(
         logger.debug(LYRICS_LOG_TAG) {
             "artwork-cache-state track=${track.id} key=$cacheKey hasCached=$hasCached " +
                 "hasReplaceable=$hasReplaceablePlaceholder hasReal=${state.hasRealCachedArtwork} " +
-                "isNavidrome=$isNavidrome source=${track.sourceId} albumId=${track.albumId.orEmpty()} " +
+                "isSubsonicCompatible=$isSubsonicCompatible source=${track.sourceId} albumId=${track.albumId.orEmpty()} " +
                 "albumTitle=${track.albumTitle.orEmpty()} artist=${track.artistName.orEmpty()} " +
                 "trackArtwork=${track.artworkLocator.orEmpty()}"
         }
@@ -2592,10 +2782,26 @@ internal fun navidromeTrackIdFor(sourceId: String, songId: String): String {
     return "track:${sourceId}:navidrome:${songId.lowercase()}"
 }
 
+internal fun subsonicTrackIdFor(sourceId: String, songId: String): String {
+    return "track:${sourceId}:subsonic:${songId.lowercase()}"
+}
+
+internal fun subsonicCompatibleTrackIdFor(
+    sourceId: String,
+    songId: String,
+    sourceType: ImportSourceType,
+): String {
+    return if (sourceType == ImportSourceType.SUBSONIC) {
+        subsonicTrackIdFor(sourceId, songId)
+    } else {
+        navidromeTrackIdFor(sourceId, songId)
+    }
+}
+
 private fun trackIdFor(sourceId: String, relativePath: String, mediaLocator: String): String {
-    val navidromeSongId = parseNavidromeSongLocator(mediaLocator)?.second
-    return if (navidromeSongId != null) {
-        navidromeTrackIdFor(sourceId, navidromeSongId)
+    val subsonicSong = parseSubsonicCompatibleSongLocator(mediaLocator)
+    return if (subsonicSong != null) {
+        subsonicCompatibleTrackIdFor(sourceId, subsonicSong.itemId, subsonicSong.sourceType)
     } else {
         "track:${sourceId}:${relativePath.lowercase()}"
     }
@@ -2761,6 +2967,7 @@ private fun ImportSourceEntity.toDomain(): ImportSource {
         path = migratedPath.ifBlank { null }.takeIf { type.toImportSourceType() == ImportSourceType.SAMBA },
         username = username,
         credentialKey = credentialKey,
+        subsonicAuthMode = authMode.toSubsonicAuthMode(),
         allowInsecureTls = allowInsecureTls,
         enabled = enabled,
         lastScannedAt = lastScannedAt,
@@ -2783,6 +2990,7 @@ private fun ImportSource.toEntity(): ImportSourceEntity {
         enabled = enabled,
         lastScannedAt = lastScannedAt,
         createdAt = createdAt,
+        authMode = subsonicAuthMode.name,
     )
 }
 

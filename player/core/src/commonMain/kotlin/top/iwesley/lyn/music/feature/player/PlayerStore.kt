@@ -46,8 +46,8 @@ import top.iwesley.lyn.music.core.model.buildLyricsShareSuggestedName
 import top.iwesley.lyn.music.core.model.debug
 import top.iwesley.lyn.music.core.model.normalizeArtworkLocator
 import top.iwesley.lyn.music.core.model.parseLyricsShareImportedFontHash
-import top.iwesley.lyn.music.core.model.parseNavidromeCoverLocator
-import top.iwesley.lyn.music.core.model.parseNavidromeSongLocator
+import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleCoverLocator
+import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleSongLocator
 import top.iwesley.lyn.music.core.model.trackArtworkCacheKey
 import top.iwesley.lyn.music.core.model.warn
 import top.iwesley.lyn.music.core.mvi.BaseStore
@@ -848,7 +848,7 @@ class PlayerStore(
         val locator = track.mediaLocator.trim()
         val uri = when {
             isDirectCastUri(locator) -> locator
-            parseNavidromeSongLocator(locator) != null -> NavidromeLocatorRuntime.resolveStreamUrl(locator)
+            parseSubsonicCompatibleSongLocator(locator) != null -> NavidromeLocatorRuntime.resolveStreamUrl(locator)
             else -> null
         }?.takeIf(::isDirectCastUri)
 
@@ -892,7 +892,7 @@ class PlayerStore(
         val artworkLocator = snapshot.currentDisplayArtworkLocator?.trim().orEmpty()
         val artworkUri = when {
             isDirectCastUri(artworkLocator) -> artworkLocator
-            parseNavidromeCoverLocator(artworkLocator) != null -> NavidromeLocatorRuntime.resolveCoverArtUrl(artworkLocator)
+            parseSubsonicCompatibleCoverLocator(artworkLocator) != null -> NavidromeLocatorRuntime.resolveCoverArtUrl(artworkLocator)
             else -> null
         }
         return directCastUriOrNull(artworkUri)
@@ -1564,7 +1564,7 @@ class PlayerStore(
                     runCatching { artworkCacheStore.hasCached(key) }.getOrDefault(false)
                 } == true
                 val hasReplaceablePlaceholderCache =
-                    if (hasAlbumArtworkCache && parseNavidromeSongLocator(track.mediaLocator) != null) {
+                    if (hasAlbumArtworkCache && parseSubsonicCompatibleSongLocator(track.mediaLocator) != null) {
                         runCatching {
                             artworkCacheStore.hasReplaceableNavidromePlaceholderCached(cacheKey.orEmpty())
                         }.getOrDefault(false)

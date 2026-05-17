@@ -33,7 +33,7 @@ import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.buildBasicAuthorizationHeader
 import top.iwesley.lyn.music.core.model.buildWebDavTrackUrl
 import top.iwesley.lyn.music.core.model.info
-import top.iwesley.lyn.music.core.model.parseNavidromeSongLocator
+import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleSongLocator
 import top.iwesley.lyn.music.core.model.parseSambaLocator
 import top.iwesley.lyn.music.core.model.parseWebDavLocator
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
@@ -65,12 +65,12 @@ private class JvmOfflineDownloadGateway(
         partFile.delete()
         try {
             val totalBytes = when {
-                parseNavidromeSongLocator(track.mediaLocator) != null -> {
+                parseSubsonicCompatibleSongLocator(track.mediaLocator) != null -> {
                     val requestUrl = if (quality == NavidromeAudioQuality.Original) {
                         resolveNavidromeDownloadUrl(database, secureCredentialStore, track.mediaLocator)
                     } else {
                         resolveNavidromeStreamUrl(database, secureCredentialStore, track.mediaLocator, quality)
-                    } ?: error("Navidrome 来源不可用。")
+                    } ?: error("Subsonic-compatible 来源不可用。")
                     downloadHttpFile(
                         requestUrl = requestUrl,
                         authorizationHeader = null,
@@ -287,7 +287,7 @@ internal suspend fun resolveJvmOfflinePlaybackPath(
 
 private fun offlineFileName(track: Track, quality: NavidromeAudioQuality): String {
     val extension = when {
-        parseNavidromeSongLocator(track.mediaLocator) != null && quality != NavidromeAudioQuality.Original -> "mp3"
+        parseSubsonicCompatibleSongLocator(track.mediaLocator) != null && quality != NavidromeAudioQuality.Original -> "mp3"
         else -> track.relativePath.substringAfterLast('.', "").lowercase().ifBlank { "audio" }
     }
     val key = "${track.id}-${quality.name}".hashCode().toUInt().toString(16)

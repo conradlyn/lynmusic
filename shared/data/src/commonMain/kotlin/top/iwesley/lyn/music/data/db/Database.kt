@@ -49,6 +49,7 @@ data class ImportSourceEntity(
     val enabled: Boolean = true,
     val lastScannedAt: Long?,
     val createdAt: Long,
+    val authMode: String = "PASSWORD",
 )
 
 @Entity(tableName = "import_index_state")
@@ -707,7 +708,7 @@ interface OfflineDownloadDao {
         LyricsCacheEntity::class,
         OfflineDownloadEntity::class,
     ],
-    version = 14,
+    version = 15,
 )
 @ConstructedBy(LynMusicDatabaseConstructor::class)
 abstract class LynMusicDatabase : RoomDatabase() {
@@ -752,6 +753,7 @@ fun buildLynMusicDatabase(builder: Builder<LynMusicDatabase>): LynMusicDatabase 
         .addMigrations(MIGRATION_11_12)
         .addMigrations(MIGRATION_12_13)
         .addMigrations(MIGRATION_13_14)
+        .addMigrations(MIGRATION_14_15)
         .build()
 }
 
@@ -999,6 +1001,17 @@ val MIGRATION_13_14: Migration = object : Migration(13, 14) {
             """
             CREATE INDEX IF NOT EXISTS index_offline_download_sourceId
             ON offline_download(sourceId)
+            """.trimIndent(),
+        )
+    }
+}
+
+val MIGRATION_14_15: Migration = object : Migration(14, 15) {
+    override fun migrate(connection: SQLiteConnection) {
+        connection.execSql(
+            """
+            ALTER TABLE import_source
+            ADD COLUMN authMode TEXT NOT NULL DEFAULT 'PASSWORD'
             """.trimIndent(),
         )
     }

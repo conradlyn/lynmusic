@@ -552,7 +552,11 @@ internal fun selectedTracksInVisibleOrder(
 }
 
 internal fun hasNavidromeTracks(tracks: List<Track>): Boolean {
-    return tracks.any { offlineDownloadSourceType(it) == ImportSourceType.NAVIDROME }
+    return tracks.any { offlineDownloadSourceType(it).supportsSubsonicAudioQuality() }
+}
+
+private fun ImportSourceType?.supportsSubsonicAudioQuality(): Boolean {
+    return this == ImportSourceType.NAVIDROME || this == ImportSourceType.SUBSONIC
 }
 
 internal fun shouldHandleBatchSelectionRequest(
@@ -1017,7 +1021,7 @@ internal fun TrackOfflineActionMenuItems(
         )
         return
     }
-    if (sourceType == ImportSourceType.NAVIDROME) {
+    if (sourceType.supportsSubsonicAudioQuality()) {
         NavidromeAudioQuality.entries.forEach { quality ->
             val isCurrentOfflineQuality = isCurrentOfflineDownloadQuality(download, quality)
             val currentOfflineQualityColor = MaterialTheme.colorScheme.primary
@@ -1300,6 +1304,7 @@ internal fun SourceCard(
                             top.iwesley.lyn.music.core.model.ImportSourceType.WEBDAV ->
                                 displayWebDavRootUrl(state.source.rootReference)
                             top.iwesley.lyn.music.core.model.ImportSourceType.NAVIDROME -> state.source.rootReference
+                            top.iwesley.lyn.music.core.model.ImportSourceType.SUBSONIC -> state.source.rootReference
                         },
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 2,

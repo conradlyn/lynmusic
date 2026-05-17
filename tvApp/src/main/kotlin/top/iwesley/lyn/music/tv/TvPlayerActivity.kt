@@ -109,7 +109,7 @@ import top.iwesley.lyn.music.core.model.PlaybackSnapshot
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.effectiveAppDisplayDensity
 import top.iwesley.lyn.music.core.model.normalizedArtworkCacheLocator
-import top.iwesley.lyn.music.core.model.parseNavidromeSongLocator
+import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleSongLocator
 import top.iwesley.lyn.music.core.model.resolveArtworkCacheTarget
 import top.iwesley.lyn.music.core.model.trackArtworkCacheKey
 import top.iwesley.lyn.music.feature.favorites.FavoritesIntent
@@ -1111,7 +1111,7 @@ private fun formatTvCurrentPlaybackAudioQuality(
     navidromeQuality: NavidromeAudioQuality?,
 ): String? {
     val navidromeFallbackBitRate = navidromeQuality
-        ?.takeIf { parseNavidromeSongLocator(track.mediaLocator) != null }
+        ?.takeIf { parseSubsonicCompatibleSongLocator(track.mediaLocator) != null }
         ?.let(::formatTvNavidromeBitRateFallback)
     return listOfNotNull(
         audioFormat?.samplingRateHz?.takeIf { it > 0 }?.let(::formatTvSamplingRate),

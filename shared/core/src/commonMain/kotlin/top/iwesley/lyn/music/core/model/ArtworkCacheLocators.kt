@@ -32,7 +32,7 @@ fun albumArtworkCacheKey(
 
 suspend fun resolveArtworkCacheTarget(locator: String?): String? {
     val rawTarget = normalizedArtworkCacheLocator(locator) ?: return null
-    val target = if (parseNavidromeCoverLocator(rawTarget) != null) {
+    val target = if (parseSubsonicCompatibleCoverLocator(rawTarget) != null) {
         NavidromeLocatorRuntime.resolveCoverArtUrl(rawTarget).orEmpty()
     } else {
         rawTarget

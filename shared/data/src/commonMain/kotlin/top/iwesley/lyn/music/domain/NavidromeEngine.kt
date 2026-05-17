@@ -17,6 +17,7 @@ import top.iwesley.lyn.music.core.model.DiagnosticLogLevel
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
 import top.iwesley.lyn.music.core.model.ImportScanReport
 import top.iwesley.lyn.music.core.model.ImportSource
+import top.iwesley.lyn.music.core.model.ImportSourceType
 import top.iwesley.lyn.music.core.model.ImportedTrackCandidate
 import top.iwesley.lyn.music.core.model.LyricsDocument
 import top.iwesley.lyn.music.core.model.LyricsHttpClient
@@ -28,26 +29,65 @@ import top.iwesley.lyn.music.core.model.NonNavidromeAudioScanResult
 import top.iwesley.lyn.music.core.model.NoopDiagnosticLogger
 import top.iwesley.lyn.music.core.model.RequestMethod
 import top.iwesley.lyn.music.core.model.SecureCredentialStore
+import top.iwesley.lyn.music.core.model.SubsonicAuthMode
+import top.iwesley.lyn.music.core.model.SubsonicSourceDraft
 import top.iwesley.lyn.music.core.model.Track
-import top.iwesley.lyn.music.core.model.buildNavidromeCoverLocator
-import top.iwesley.lyn.music.core.model.buildNavidromeSongLocator
+import top.iwesley.lyn.music.core.model.buildSubsonicCompatibleCoverLocator
+import top.iwesley.lyn.music.core.model.buildSubsonicCompatibleSongLocator
 import top.iwesley.lyn.music.core.model.classifyAudioExtensionForImport
-import top.iwesley.lyn.music.core.model.parseNavidromeCoverLocator
-import top.iwesley.lyn.music.core.model.parseNavidromeSongLocator
+import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleCoverLocator
+import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleSongLocator
 import top.iwesley.lyn.music.core.model.unsupportedAudioImportFailure
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
 
 const val NAVIDROME_LYRICS_SOURCE_ID = "navidrome-lyrics"
+const val SUBSONIC_LYRICS_SOURCE_ID = "subsonic-lyrics"
 
-private const val NAVIDROME_CLIENT_NAME = "LynMusic"
-private const val NAVIDROME_API_VERSION = "1.16.1"
-private val navidromeJson = Json { ignoreUnknownKeys = true }
+private const val SUBSONIC_CLIENT_NAME = "LynMusic"
+private const val SUBSONIC_API_VERSION = "1.16.1"
+private val subsonicJson = Json { ignoreUnknownKeys = true }
 
 data class NavidromeResolvedSource(
     val baseUrl: String,
     val username: String,
     val password: String,
-)
+    val authMode: SubsonicAuthMode = SubsonicAuthMode.PASSWORD,
+    val sourceType: ImportSourceType = ImportSourceType.NAVIDROME,
+) {
+    val displayName: String
+        get() = if (sourceType == ImportSourceType.SUBSONIC) "Subsonic" else "Navidrome"
+
+    val logTag: String
+        get() = displayName
+}
+
+private fun prepareSubsonicResolvedSource(
+    baseUrl: String,
+    username: String,
+    credential: String,
+    authMode: SubsonicAuthMode,
+    sourceType: ImportSourceType,
+    serverLabel: String,
+): NavidromeResolvedSource {
+    val normalizedCredential = credential.trim().takeIf { authMode == SubsonicAuthMode.API_KEY } ?: credential
+    when (authMode) {
+        SubsonicAuthMode.PASSWORD -> {
+            require(username.isNotBlank()) { "请填写 $serverLabel 用户名。" }
+            require(credential.isNotBlank()) { "请填写 $serverLabel 密码。" }
+        }
+
+        SubsonicAuthMode.API_KEY -> {
+            require(normalizedCredential.isNotBlank()) { "请填写 $serverLabel API Key。" }
+        }
+    }
+    return NavidromeResolvedSource(
+        baseUrl = baseUrl,
+        username = username.trim(),
+        password = normalizedCredential,
+        authMode = authMode,
+        sourceType = sourceType,
+    )
+}
 
 data class NavidromeSongCandidate(
     val songId: String,
@@ -67,13 +107,21 @@ data class NavidromeSongCandidate(
 )
 
 fun normalizeNavidromeBaseUrl(rawUrl: String?): String {
+    return normalizeSubsonicBaseUrl(rawUrl, serverLabel = "Navidrome")
+}
+
+fun normalizeSubsonicBaseUrl(rawUrl: String?): String {
+    return normalizeSubsonicBaseUrl(rawUrl, serverLabel = "Subsonic")
+}
+
+private fun normalizeSubsonicBaseUrl(rawUrl: String?, serverLabel: String): String {
     val value = rawUrl.orEmpty().trim()
-    require(value.isNotBlank()) { "请填写 Navidrome 服务器地址。" }
-    require('?' !in value && '#' !in value) { "Navidrome 地址不能包含 query 或 fragment。" }
-    val parsed = parseUrl(value) ?: error("Navidrome 地址无效。")
-    require(parsed.protocol.name in setOf("http", "https")) { "Navidrome 地址只支持 http 或 https。" }
-    require(parsed.host.isNotBlank()) { "Navidrome 地址缺少主机名。" }
-    require(parsed.user == null && parsed.password == null) { "请不要在 Navidrome URL 中内嵌用户名或密码。" }
+    require(value.isNotBlank()) { "请填写 $serverLabel 服务器地址。" }
+    require('?' !in value && '#' !in value) { "$serverLabel 地址不能包含 query 或 fragment。" }
+    val parsed = parseUrl(value) ?: error("$serverLabel 地址无效。")
+    require(parsed.protocol.name in setOf("http", "https")) { "$serverLabel 地址只支持 http 或 https。" }
+    require(parsed.host.isNotBlank()) { "$serverLabel 地址缺少主机名。" }
+    require(parsed.user == null && parsed.password == null) { "请不要在 $serverLabel URL 中内嵌用户名或密码。" }
     val pathSegments = parsed.encodedPath
         .split('/')
         .filter { it.isNotBlank() }
@@ -110,10 +158,36 @@ fun buildNavidromeStreamUrl(
     songId: String,
     audioQuality: NavidromeAudioQuality = NavidromeAudioQuality.Original,
 ): String {
-    return buildNavidromeRestUrl(
+    return buildSubsonicRestUrl(
         baseUrl = baseUrl,
         username = username,
-        password = password,
+        credential = password,
+        authMode = SubsonicAuthMode.PASSWORD,
+        endpoint = "stream",
+        parameters = buildMap {
+            put("id", songId)
+            audioQuality.maxBitRateKbps?.let { maxBitRate ->
+                put("maxBitRate", maxBitRate.toString())
+                put("format", "mp3")
+            }
+        },
+        includeJsonFormat = false,
+    )
+}
+
+fun buildSubsonicStreamUrl(
+    baseUrl: String,
+    username: String,
+    credential: String,
+    authMode: SubsonicAuthMode,
+    songId: String,
+    audioQuality: NavidromeAudioQuality = NavidromeAudioQuality.Original,
+): String {
+    return buildSubsonicRestUrl(
+        baseUrl = baseUrl,
+        username = username,
+        credential = credential,
+        authMode = authMode,
         endpoint = "stream",
         parameters = buildMap {
             put("id", songId)
@@ -132,10 +206,29 @@ fun buildNavidromeDownloadUrl(
     password: String,
     songId: String,
 ): String {
-    return buildNavidromeRestUrl(
+    return buildSubsonicRestUrl(
         baseUrl = baseUrl,
         username = username,
-        password = password,
+        credential = password,
+        authMode = SubsonicAuthMode.PASSWORD,
+        endpoint = "download",
+        parameters = mapOf("id" to songId),
+        includeJsonFormat = false,
+    )
+}
+
+fun buildSubsonicDownloadUrl(
+    baseUrl: String,
+    username: String,
+    credential: String,
+    authMode: SubsonicAuthMode,
+    songId: String,
+): String {
+    return buildSubsonicRestUrl(
+        baseUrl = baseUrl,
+        username = username,
+        credential = credential,
+        authMode = authMode,
         endpoint = "download",
         parameters = mapOf("id" to songId),
         includeJsonFormat = false,
@@ -148,10 +241,29 @@ fun buildNavidromeCoverArtUrl(
     password: String,
     coverArtId: String,
 ): String {
-    return buildNavidromeRestUrl(
+    return buildSubsonicRestUrl(
         baseUrl = baseUrl,
         username = username,
-        password = password,
+        credential = password,
+        authMode = SubsonicAuthMode.PASSWORD,
+        endpoint = "getCoverArt",
+        parameters = mapOf("id" to coverArtId),
+        includeJsonFormat = false,
+    )
+}
+
+fun buildSubsonicCoverArtUrl(
+    baseUrl: String,
+    username: String,
+    credential: String,
+    authMode: SubsonicAuthMode,
+    coverArtId: String,
+): String {
+    return buildSubsonicRestUrl(
+        baseUrl = baseUrl,
+        username = username,
+        credential = credential,
+        authMode = authMode,
         endpoint = "getCoverArt",
         parameters = mapOf("id" to coverArtId),
         includeJsonFormat = false,
@@ -168,28 +280,70 @@ suspend fun scanNavidromeLibrary(
     val baseUrl = normalizeNavidromeBaseUrl(draft.baseUrl)
     require(draft.username.isNotBlank()) { "请填写 Navidrome 用户名。" }
     require(draft.password.isNotBlank()) { "请填写 Navidrome 密码。" }
-    val resolved = NavidromeResolvedSource(
-        baseUrl = baseUrl,
-        username = draft.username.trim(),
-        password = draft.password,
+    return scanSubsonicCompatibleLibrary(
+        sourceId = sourceId,
+        source = NavidromeResolvedSource(
+            baseUrl = baseUrl,
+            username = draft.username.trim(),
+            password = draft.password,
+            authMode = SubsonicAuthMode.PASSWORD,
+            sourceType = ImportSourceType.NAVIDROME,
+        ),
+        httpClient = httpClient,
+        supportedImportExtensions = supportedImportExtensions,
+        logger = logger,
     )
-    val artistIds = requestNavidromeArtistIds(httpClient, resolved)
+}
+
+suspend fun scanSubsonicLibrary(
+    draft: SubsonicSourceDraft,
+    sourceId: String,
+    httpClient: LyricsHttpClient,
+    supportedImportExtensions: Set<String>,
+    logger: DiagnosticLogger = NoopDiagnosticLogger,
+): ImportScanReport {
+    val baseUrl = normalizeSubsonicBaseUrl(draft.baseUrl)
+    val resolved = prepareSubsonicResolvedSource(
+        baseUrl = baseUrl,
+        username = draft.username,
+        credential = draft.credential,
+        authMode = draft.authMode,
+        sourceType = ImportSourceType.SUBSONIC,
+        serverLabel = "Subsonic",
+    )
+    return scanSubsonicCompatibleLibrary(
+        sourceId = sourceId,
+        source = resolved,
+        httpClient = httpClient,
+        supportedImportExtensions = supportedImportExtensions,
+        logger = logger,
+    )
+}
+
+private suspend fun scanSubsonicCompatibleLibrary(
+    sourceId: String,
+    source: NavidromeResolvedSource,
+    httpClient: LyricsHttpClient,
+    supportedImportExtensions: Set<String>,
+    logger: DiagnosticLogger,
+): ImportScanReport {
+    val artistIds = requestNavidromeArtistIds(httpClient, source)
     val tracks = mutableListOf<ImportedTrackCandidate>()
     val failures = mutableListOf<top.iwesley.lyn.music.core.model.ImportScanFailure>()
     val seenAlbumIds = linkedSetOf<String>()
     val seenSongIds = linkedSetOf<String>()
     var discoveredAudioFileCount = 0
     artistIds.forEach { artistId ->
-        requestNavidromeAlbumIds(httpClient, resolved, artistId).forEach { albumId ->
+        requestNavidromeAlbumIds(httpClient, source, artistId).forEach { albumId ->
             if (!seenAlbumIds.add(albumId)) return@forEach
-            requestNavidromeAlbumSongs(httpClient, resolved, albumId).forEach { candidate ->
+            requestNavidromeAlbumSongs(httpClient, source, albumId).forEach { candidate ->
                 if (candidate.songId.isNotBlank() && !seenSongIds.add(candidate.songId)) {
                     return@forEach
                 }
                 discoveredAudioFileCount += 1
                 when (classifyAudioExtensionForImport(candidate.suffix, supportedImportExtensions)) {
                     NonNavidromeAudioScanResult.IMPORT_SUPPORTED -> {
-                        tracks += candidate.toImportedTrackCandidate(sourceId)
+                        tracks += candidate.toImportedTrackCandidate(sourceId, source.sourceType)
                     }
 
                     NonNavidromeAudioScanResult.IMPORT_UNSUPPORTED,
@@ -202,12 +356,12 @@ suspend fun scanNavidromeLibrary(
     }
     logger.log(
         level = DiagnosticLogLevel.INFO,
-        tag = "Navidrome",
-        message = "scan-complete source=$sourceId baseUrl=$baseUrl artists=${artistIds.size} discovered=$discoveredAudioFileCount imported=${tracks.size} failures=${failures.size}",
+        tag = source.logTag,
+        message = "scan-complete source=$sourceId baseUrl=${source.baseUrl} artists=${artistIds.size} discovered=$discoveredAudioFileCount imported=${tracks.size} failures=${failures.size}",
     )
     return ImportScanReport(
         tracks = tracks,
-        warnings = if (discoveredAudioFileCount == 0) listOf("当前 Navidrome 账号下没有可同步的歌曲。") else emptyList(),
+        warnings = if (discoveredAudioFileCount == 0) listOf("当前 ${source.displayName} 账号下没有可同步的歌曲。") else emptyList(),
         discoveredAudioFileCount = discoveredAudioFileCount,
         failures = failures,
     )
@@ -218,10 +372,35 @@ suspend fun testNavidromeConnection(
     httpClient: LyricsHttpClient,
     logger: DiagnosticLogger = NoopDiagnosticLogger,
 ) {
+    require(draft.username.isNotBlank()) { "请填写 Navidrome 用户名。" }
+    require(draft.password.isNotBlank()) { "请填写 Navidrome 密码。" }
     val resolved = NavidromeResolvedSource(
         baseUrl = normalizeNavidromeBaseUrl(draft.baseUrl),
         username = draft.username.trim(),
         password = draft.password,
+        authMode = SubsonicAuthMode.PASSWORD,
+        sourceType = ImportSourceType.NAVIDROME,
+    )
+    requestNavidromeJson(
+        httpClient = httpClient,
+        source = resolved,
+        endpoint = "ping",
+        logger = logger,
+    )
+}
+
+suspend fun testSubsonicConnection(
+    draft: SubsonicSourceDraft,
+    httpClient: LyricsHttpClient,
+    logger: DiagnosticLogger = NoopDiagnosticLogger,
+) {
+    val resolved = prepareSubsonicResolvedSource(
+        baseUrl = normalizeSubsonicBaseUrl(draft.baseUrl),
+        username = draft.username,
+        credential = draft.credential,
+        authMode = draft.authMode,
+        sourceType = ImportSourceType.SUBSONIC,
+        serverLabel = "Subsonic",
     )
     requestNavidromeJson(
         httpClient = httpClient,
@@ -255,12 +434,12 @@ suspend fun requestNavidromeLyrics(
     val document = LyricsDocument(
         lines = lines,
         offsetMs = 0L,
-        sourceId = NAVIDROME_LYRICS_SOURCE_ID,
+        sourceId = lyricsSourceIdFor(source.sourceType),
         rawPayload = payload,
     )
     logger.log(
         level = DiagnosticLogLevel.INFO,
-        tag = "Navidrome",
+        tag = source.logTag,
         message = buildString {
             append("lyrics-resolved ")
             append(formatNavidromeLyricsContext(track.title, track.artistName))
@@ -282,7 +461,8 @@ private suspend fun requestNavidromeStructuredLyrics(
     track: Track,
     logger: DiagnosticLogger,
 ): LyricsDocument? {
-    val (_, songId) = parseNavidromeSongLocator(track.mediaLocator) ?: return null
+    val locator = parseSubsonicCompatibleSongLocator(track.mediaLocator) ?: return null
+    val songId = locator.itemId
     val response = runCatching {
         requestNavidromeJson(
             httpClient = httpClient,
@@ -303,7 +483,7 @@ private suspend fun requestNavidromeStructuredLyrics(
     }.getOrElse { throwable ->
         logger.log(
             level = DiagnosticLogLevel.WARN,
-            tag = "Navidrome",
+            tag = source.logTag,
             message = buildString {
                 append("structured-lyrics-fallback ")
                 append("songId=\"")
@@ -317,12 +497,15 @@ private suspend fun requestNavidromeStructuredLyrics(
         )
         return null
     }
-    val document = parseNavidromeStructuredLyricsDocument(response)
+    val document = parseNavidromeStructuredLyricsDocument(
+        payload = response,
+        sourceId = lyricsSourceIdFor(source.sourceType),
+    )
         ?.takeIf { it.lines.isNotEmpty() }
         ?: return null
     logger.log(
         level = DiagnosticLogLevel.INFO,
-        tag = "Navidrome",
+        tag = source.logTag,
         message = buildString {
             append("lyrics-resolved endpoint=getLyricsBySongId ")
             append("songId=\"")
@@ -349,13 +532,23 @@ suspend fun resolveNavidromeStreamUrl(
     locator: String,
     audioQuality: NavidromeAudioQuality = NavidromeAudioQuality.Original,
 ): String? {
-    val (_, songId) = parseNavidromeSongLocator(locator) ?: return null
-    val source = resolveNavidromeSource(database, secureCredentialStore, locator) ?: return null
-    return buildNavidromeStreamUrl(
+    return resolveSubsonicCompatibleStreamUrl(database, secureCredentialStore, locator, audioQuality)
+}
+
+suspend fun resolveSubsonicCompatibleStreamUrl(
+    database: LynMusicDatabase,
+    secureCredentialStore: SecureCredentialStore,
+    locator: String,
+    audioQuality: NavidromeAudioQuality = NavidromeAudioQuality.Original,
+): String? {
+    val parsed = parseSubsonicCompatibleSongLocator(locator) ?: return null
+    val source = resolveSubsonicCompatibleSource(database, secureCredentialStore, locator) ?: return null
+    return buildSubsonicStreamUrl(
         baseUrl = source.baseUrl,
         username = source.username,
-        password = source.password,
-        songId = songId,
+        credential = source.password,
+        authMode = source.authMode,
+        songId = parsed.itemId,
         audioQuality = audioQuality,
     )
 }
@@ -365,13 +558,22 @@ suspend fun resolveNavidromeDownloadUrl(
     secureCredentialStore: SecureCredentialStore,
     locator: String,
 ): String? {
-    val (_, songId) = parseNavidromeSongLocator(locator) ?: return null
-    val source = resolveNavidromeSource(database, secureCredentialStore, locator) ?: return null
-    return buildNavidromeDownloadUrl(
+    return resolveSubsonicCompatibleDownloadUrl(database, secureCredentialStore, locator)
+}
+
+suspend fun resolveSubsonicCompatibleDownloadUrl(
+    database: LynMusicDatabase,
+    secureCredentialStore: SecureCredentialStore,
+    locator: String,
+): String? {
+    val parsed = parseSubsonicCompatibleSongLocator(locator) ?: return null
+    val source = resolveSubsonicCompatibleSource(database, secureCredentialStore, locator) ?: return null
+    return buildSubsonicDownloadUrl(
         baseUrl = source.baseUrl,
         username = source.username,
-        password = source.password,
-        songId = songId,
+        credential = source.password,
+        authMode = source.authMode,
+        songId = parsed.itemId,
     )
 }
 
@@ -380,13 +582,22 @@ suspend fun resolveNavidromeCoverArtUrl(
     secureCredentialStore: SecureCredentialStore,
     locator: String,
 ): String? {
-    val (_, coverArtId) = parseNavidromeCoverLocator(locator) ?: return null
-    val source = resolveNavidromeSource(database, secureCredentialStore, locator) ?: return null
-    return buildNavidromeCoverArtUrl(
+    return resolveSubsonicCompatibleCoverArtUrl(database, secureCredentialStore, locator)
+}
+
+suspend fun resolveSubsonicCompatibleCoverArtUrl(
+    database: LynMusicDatabase,
+    secureCredentialStore: SecureCredentialStore,
+    locator: String,
+): String? {
+    val parsed = parseSubsonicCompatibleCoverLocator(locator) ?: return null
+    val source = resolveSubsonicCompatibleSource(database, secureCredentialStore, locator) ?: return null
+    return buildSubsonicCoverArtUrl(
         baseUrl = source.baseUrl,
         username = source.username,
-        password = source.password,
-        coverArtId = coverArtId,
+        credential = source.password,
+        authMode = source.authMode,
+        coverArtId = parsed.itemId,
     )
 }
 
@@ -395,15 +606,37 @@ private suspend fun resolveNavidromeSource(
     secureCredentialStore: SecureCredentialStore,
     locator: String,
 ): NavidromeResolvedSource? {
-    val sourceId = parseNavidromeSongLocator(locator)?.first ?: parseNavidromeCoverLocator(locator)?.first ?: return null
-    val entity = database.importSourceDao().getById(sourceId)?.takeIf { it.type == "NAVIDROME" && it.enabled } ?: return null
+    return resolveSubsonicCompatibleSource(database, secureCredentialStore, locator)
+        ?.takeIf { it.sourceType == ImportSourceType.NAVIDROME }
+}
+
+private suspend fun resolveSubsonicCompatibleSource(
+    database: LynMusicDatabase,
+    secureCredentialStore: SecureCredentialStore,
+    locator: String,
+): NavidromeResolvedSource? {
+    val parsed = parseSubsonicCompatibleSongLocator(locator)
+        ?: parseSubsonicCompatibleCoverLocator(locator)
+        ?: return null
+    val entity = database.importSourceDao().getById(parsed.sourceId)
+        ?.takeIf { it.type == parsed.sourceType.name && it.enabled }
+        ?: return null
+    val sourceType = runCatching { ImportSourceType.valueOf(entity.type) }.getOrNull() ?: return null
+    if (sourceType !in subsonicCompatibleSourceTypes) return null
+    val authMode = entity.authMode.toSubsonicAuthMode()
     val username = entity.username?.trim().orEmpty()
-    val password = entity.credentialKey?.let { secureCredentialStore.get(it) }.orEmpty()
-    if (username.isBlank() || password.isBlank()) return null
+    val credential = entity.credentialKey?.let { secureCredentialStore.get(it) }.orEmpty()
+    if (authMode == SubsonicAuthMode.PASSWORD && (username.isBlank() || credential.isBlank())) return null
+    if (authMode == SubsonicAuthMode.API_KEY && credential.isBlank()) return null
     return NavidromeResolvedSource(
-        baseUrl = normalizeNavidromeBaseUrl(entity.rootReference),
+        baseUrl = normalizeSubsonicBaseUrl(
+            rawUrl = entity.rootReference,
+            serverLabel = if (sourceType == ImportSourceType.NAVIDROME) "Navidrome" else "Subsonic",
+        ),
         username = username,
-        password = password,
+        password = credential,
+        authMode = authMode,
+        sourceType = sourceType,
     )
 }
 
@@ -512,10 +745,11 @@ internal suspend fun requestNavidromeJson(
 ): JsonObject {
     val request = LyricsRequest(
         method = RequestMethod.GET,
-        url = buildNavidromeRestUrl(
+        url = buildSubsonicRestUrl(
             baseUrl = source.baseUrl,
             username = source.username,
-            password = source.password,
+            credential = source.password,
+            authMode = source.authMode,
             endpoint = endpoint,
             parameters = parameters,
             includeJsonFormat = true,
@@ -524,7 +758,7 @@ internal suspend fun requestNavidromeJson(
     if (logger !== NoopDiagnosticLogger) {
         logger.log(
             level = DiagnosticLogLevel.INFO,
-            tag = "Navidrome",
+            tag = source.logTag,
             message = buildString {
                 append("request endpoint=")
                 append(endpoint)
@@ -534,17 +768,17 @@ internal suspend fun requestNavidromeJson(
                 }
                 append('\n')
                 append("url: ")
-                append(redactNavidromeUrlForLog(request.url))
+                append(redactSubsonicUrlForLog(request.url))
             },
         )
     }
     val response = httpClient.request(request).getOrElse { throwable ->
-        throw IllegalStateException("Navidrome $endpoint 请求失败: ${throwable.message.orEmpty()}", throwable)
+        throw IllegalStateException("${source.displayName} $endpoint 请求失败: ${throwable.message.orEmpty()}", throwable)
     }
     if (logger !== NoopDiagnosticLogger) {
         logger.log(
             level = DiagnosticLogLevel.INFO,
-            tag = "Navidrome",
+            tag = source.logTag,
             message = buildString {
                 append("response endpoint=")
                 append(endpoint)
@@ -560,14 +794,14 @@ internal suspend fun requestNavidromeJson(
             },
         )
     }
-    require(response.statusCode in 200..299) { "Navidrome $endpoint 失败，HTTP ${response.statusCode}" }
-    val root = navidromeJson.parseToJsonElement(response.body) as? JsonObject
-        ?: error("Navidrome $endpoint 返回不是 JSON 对象。")
+    require(response.statusCode in 200..299) { "${source.displayName} $endpoint 失败，HTTP ${response.statusCode}" }
+    val root = subsonicJson.parseToJsonElement(response.body) as? JsonObject
+        ?: error("${source.displayName} $endpoint 返回不是 JSON 对象。")
     val payload = root["subsonic-response"].asObject("subsonic-response")
     val status = payload.string("status").orEmpty()
     if (!status.equals("ok", ignoreCase = true)) {
         val error = payload["error"].asObjectOrNull()
-        val message = error?.string("message").orEmpty().ifBlank { "Navidrome $endpoint 返回失败状态。" }
+        val message = error?.string("message").orEmpty().ifBlank { "${source.displayName} $endpoint 返回失败状态。" }
         error(message)
     }
     return payload
@@ -589,34 +823,42 @@ private fun formatNavidromeLyricsContext(
     }
 }
 
-private fun redactNavidromeUrlForLog(url: String): String {
+private fun redactSubsonicUrlForLog(url: String): String {
     return url
         .replace(Regex("([?&]t=)[^&]*"), "$1<redacted>")
         .replace(Regex("([?&]s=)[^&]*"), "$1<redacted>")
+        .replace(Regex("([?&]apiKey=)[^&]*"), "$1<redacted>")
+        .replace(Regex("([?&]p=)[^&]*"), "$1<redacted>")
 }
 
 private fun parseNavidromeStructuredLyricsDocument(payload: JsonObject): LyricsDocument? {
+    return parseNavidromeStructuredLyricsDocument(payload, NAVIDROME_LYRICS_SOURCE_ID)
+}
+
+private fun parseNavidromeStructuredLyricsDocument(
+    payload: JsonObject,
+    sourceId: String,
+): LyricsDocument? {
     val parsed = parseNavidromeStructuredLyricsPayload(payload)
         ?: return null
     return LyricsDocument(
         lines = parsed.lines,
         offsetMs = parsed.offsetMs,
-        sourceId = NAVIDROME_LYRICS_SOURCE_ID,
+        sourceId = sourceId,
         rawPayload = payload.toString(),
     )
 }
 
-private fun buildNavidromeRestUrl(
+private fun buildSubsonicRestUrl(
     baseUrl: String,
     username: String,
-    password: String,
+    credential: String,
+    authMode: SubsonicAuthMode,
     endpoint: String,
     parameters: Map<String, String>,
     includeJsonFormat: Boolean,
 ): String {
-    val normalizedBaseUrl = normalizeNavidromeBaseUrl(baseUrl)
-    val salt = randomNavidromeSalt()
-    val token = md5Hex(password + salt)
+    val normalizedBaseUrl = normalizeSubsonicBaseUrl(baseUrl)
     return URLBuilder(normalizedBaseUrl).apply {
         appendPathSegments("rest", endpoint)
         parameters.forEach { (key, value) ->
@@ -624,11 +866,21 @@ private fun buildNavidromeRestUrl(
                 this.parameters.append(key, value)
             }
         }
-        this.parameters.append("u", username)
-        this.parameters.append("t", token)
-        this.parameters.append("s", salt)
-        this.parameters.append("v", NAVIDROME_API_VERSION)
-        this.parameters.append("c", NAVIDROME_CLIENT_NAME)
+        when (authMode) {
+            SubsonicAuthMode.PASSWORD -> {
+                val salt = randomNavidromeSalt()
+                val token = md5Hex(credential + salt)
+                this.parameters.append("u", username)
+                this.parameters.append("t", token)
+                this.parameters.append("s", salt)
+            }
+
+            SubsonicAuthMode.API_KEY -> {
+                this.parameters.append("apiKey", credential)
+            }
+        }
+        this.parameters.append("v", SUBSONIC_API_VERSION)
+        this.parameters.append("c", SUBSONIC_CLIENT_NAME)
         if (includeJsonFormat) {
             this.parameters.append("f", "json")
         }
@@ -664,7 +916,10 @@ private fun NavidromeSongCandidate.relativePath(): String {
     )
 }
 
-private fun NavidromeSongCandidate.toImportedTrackCandidate(sourceId: String): ImportedTrackCandidate {
+private fun NavidromeSongCandidate.toImportedTrackCandidate(
+    sourceId: String,
+    sourceType: ImportSourceType,
+): ImportedTrackCandidate {
     return ImportedTrackCandidate(
         title = title,
         artistName = artistName,
@@ -672,9 +927,9 @@ private fun NavidromeSongCandidate.toImportedTrackCandidate(sourceId: String): I
         durationMs = durationMs,
         trackNumber = trackNumber,
         discNumber = discNumber,
-        mediaLocator = buildNavidromeSongLocator(sourceId, songId),
+        mediaLocator = buildSubsonicCompatibleSongLocator(sourceType, sourceId, songId),
         relativePath = relativePath(),
-        artworkLocator = coverArtId?.let { buildNavidromeCoverLocator(sourceId, it) },
+        artworkLocator = coverArtId?.let { buildSubsonicCompatibleCoverLocator(sourceType, sourceId, it) },
         embeddedLyrics = null,
         sizeBytes = sizeBytes,
         modifiedAt = 0L,
@@ -699,6 +954,24 @@ private fun randomNavidromeSalt(length: Int = 12): String {
             append(alphabet[Random.nextInt(alphabet.length)])
         }
     }
+}
+
+private val subsonicCompatibleSourceTypes = setOf(
+    ImportSourceType.NAVIDROME,
+    ImportSourceType.SUBSONIC,
+)
+
+fun isSubsonicCompatibleSourceType(type: ImportSourceType): Boolean {
+    return type in subsonicCompatibleSourceTypes
+}
+
+fun lyricsSourceIdFor(type: ImportSourceType): String {
+    return if (type == ImportSourceType.SUBSONIC) SUBSONIC_LYRICS_SOURCE_ID else NAVIDROME_LYRICS_SOURCE_ID
+}
+
+fun String?.toSubsonicAuthMode(): SubsonicAuthMode {
+    return runCatching { SubsonicAuthMode.valueOf(this.orEmpty()) }
+        .getOrDefault(SubsonicAuthMode.PASSWORD)
 }
 
 private fun JsonElement?.asObject(context: String): JsonObject {

@@ -344,12 +344,12 @@ class LyricsEngineTest {
     fun `default lyrics sources include unified lrclib entry`() {
         val configs = defaultLyricsSourceConfigs()
 
-        assertEquals(1, configs.size)
+        assertEquals(2, configs.size)
         assertEquals("lrclib", configs[0].id)
         assertEquals(LRCLIB_JSON_MAP_EXTRACTOR, configs[0].extractor)
         assertEquals("LRCLIB", configs[0].name)
-        assertTrue(configs.all { it.urlTemplate == "https://lrclib.net/api/search" })
-        assertTrue(configs.all { it.queryTemplate == "track_name={title}&artist_name={artist}" })
+        assertEquals("https://lrclib.net/api/search", configs[0].urlTemplate)
+        assertEquals("track_name={title}&artist_name={artist}", configs[0].queryTemplate)
     }
 
     @Test

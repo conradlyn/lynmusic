@@ -432,7 +432,7 @@ private fun TvLibraryScreen(
     TvMediaBrowserScreen(
         title = "曲库",
         emptyTitle = "曲库还是空的",
-        emptyBody = "先导入本地文件夹、Samba、WebDAV 或 Navidrome，扫描完成后会出现在这里。",
+        emptyBody = "先导入本地文件夹、Samba、WebDAV、Navidrome 或 Subsonic，扫描完成后会出现在这里。",
         isLoading = state.isLoadingContent,
         query = state.query,
         mode = tvState.libraryMode,

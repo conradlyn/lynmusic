@@ -133,7 +133,7 @@ class MyStore(
                     updateState {
                         it.copy(
                             isRefreshingNavidrome = false,
-                            message = throwable.message.orEmpty().ifBlank { "Navidrome 最近播放同步失败，已显示本地统计。" },
+                            message = throwable.message.orEmpty().ifBlank { "远程最近播放同步失败，已显示本地统计。" },
                         )
                     }
                 }

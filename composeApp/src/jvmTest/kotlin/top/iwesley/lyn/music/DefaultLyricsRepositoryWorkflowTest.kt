@@ -438,7 +438,10 @@ class DefaultLyricsRepositoryWorkflowTest {
         assertEquals("https://img.test/direct-rain.jpg", cachedRow.artworkLocator)
         assertEquals(listOf("https://img.test/direct-rain.jpg" to "album:nav-source:jay:album 1"), artworkCacheStore.requests)
         assertEquals(listOf(true), artworkCacheStore.replaceExistingRequests)
-        assertEquals(listOf("album:nav-source:jay:album 1"), artworkCacheStore.replaceablePlaceholderRequests)
+        assertEquals(
+            listOf("album:nav-source:jay:album 1", "album:nav-source:jay:album 1"),
+            artworkCacheStore.replaceablePlaceholderRequests,
+        )
     }
 
     @Test

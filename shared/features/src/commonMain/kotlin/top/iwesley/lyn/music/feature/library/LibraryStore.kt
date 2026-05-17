@@ -24,6 +24,7 @@ enum class LibrarySourceFilter {
     SAMBA,
     WEBDAV,
     NAVIDROME,
+    SUBSONIC,
     DOWNLOADED,
 }
 
@@ -239,6 +240,7 @@ class LibraryStore(
             LibrarySourceFilter.SAMBA,
             LibrarySourceFilter.WEBDAV,
             LibrarySourceFilter.NAVIDROME,
+            LibrarySourceFilter.SUBSONIC,
         )
     }
 }
@@ -276,6 +278,7 @@ fun ImportSourceType.toLibrarySourceFilter(): LibrarySourceFilter {
         ImportSourceType.SAMBA -> LibrarySourceFilter.SAMBA
         ImportSourceType.WEBDAV -> LibrarySourceFilter.WEBDAV
         ImportSourceType.NAVIDROME -> LibrarySourceFilter.NAVIDROME
+        ImportSourceType.SUBSONIC -> LibrarySourceFilter.SUBSONIC
     }
 }
 

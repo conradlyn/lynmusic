@@ -18,6 +18,8 @@ import top.iwesley.lyn.music.core.model.LocalFolderSelection
 import top.iwesley.lyn.music.core.model.NavidromeSourceDraft
 import top.iwesley.lyn.music.core.model.SambaSourceDraft
 import top.iwesley.lyn.music.core.model.SecureCredentialStore
+import top.iwesley.lyn.music.core.model.SubsonicAuthMode
+import top.iwesley.lyn.music.core.model.SubsonicSourceDraft
 import top.iwesley.lyn.music.core.model.WebDavSourceDraft
 import top.iwesley.lyn.music.core.model.normalizeWebDavRootUrl
 import top.iwesley.lyn.music.data.db.ImportSourceEntity
@@ -416,6 +418,84 @@ class ImportSourceRepositoryTest {
     }
 
     @Test
+    fun `updating subsonic source requires credential when auth mode changes`() = runTest {
+        val database = createImportTestDatabase()
+        val gateway = RecordingImportSourceGateway()
+        val credentials = ImportTestSecureCredentialStore(mutableMapOf("credential-sub-1" to "old-password"))
+        database.importSourceDao().upsert(
+            ImportSourceEntity(
+                id = "sub-1",
+                type = ImportSourceType.SUBSONIC.name,
+                label = "Subsonic",
+                rootReference = "https://sub.example.com",
+                server = null,
+                shareName = null,
+                directoryPath = null,
+                username = "demo",
+                credentialKey = "credential-sub-1",
+                allowInsecureTls = false,
+                enabled = true,
+                lastScannedAt = null,
+                createdAt = 1L,
+                authMode = SubsonicAuthMode.PASSWORD.name,
+            ),
+        )
+        val repository = RoomImportSourceRepository(
+            database = database,
+            gateway = gateway,
+            secureCredentialStore = credentials,
+        )
+
+        val result = repository.updateSubsonicSource(
+            sourceId = "sub-1",
+            draft = SubsonicSourceDraft(
+                label = "Subsonic",
+                baseUrl = "https://sub.example.com",
+                credential = "",
+                authMode = SubsonicAuthMode.API_KEY,
+            ),
+            keepExistingCredentialWhenBlankCredential = true,
+        )
+
+        assertEquals("Subsonic 来源切换鉴权方式后需要重新填写 API Key。", result.exceptionOrNull()?.message)
+        assertEquals(0, gateway.subsonicScanCount)
+        assertNull(gateway.lastSubsonicScanDraft)
+        val unchanged = assertNotNull(database.importSourceDao().getById("sub-1"))
+        assertEquals(SubsonicAuthMode.PASSWORD.name, unchanged.authMode)
+        assertEquals("old-password", credentials.get("credential-sub-1"))
+    }
+
+    @Test
+    fun `adding subsonic api key source does not persist username`() = runTest {
+        val database = createImportTestDatabase()
+        val gateway = RecordingImportSourceGateway()
+        val credentials = ImportTestSecureCredentialStore()
+        val repository = RoomImportSourceRepository(
+            database = database,
+            gateway = gateway,
+            secureCredentialStore = credentials,
+        )
+
+        val summary = repository.addSubsonicSource(
+            SubsonicSourceDraft(
+                label = "Subsonic",
+                baseUrl = "https://sub.example.com",
+                username = "demo",
+                credential = " api-key ",
+                authMode = SubsonicAuthMode.API_KEY,
+            ),
+        ).getOrThrow()
+
+        assertEquals(1, gateway.subsonicScanCount)
+        assertEquals("", gateway.lastSubsonicScanDraft?.username)
+        assertEquals("api-key", gateway.lastSubsonicScanDraft?.credential)
+        val stored = assertNotNull(database.importSourceDao().getById(summary.sourceId))
+        assertNull(stored.username)
+        assertEquals(SubsonicAuthMode.API_KEY.name, stored.authMode)
+        assertEquals("api-key", credentials.get("credential-${summary.sourceId}"))
+    }
+
+    @Test
     fun `rescanning navidrome source returns scan summary with failures`() = runTest {
         val database = createImportTestDatabase()
         val gateway = RecordingImportSourceGateway(
@@ -503,11 +583,12 @@ class ImportSourceRepositoryTest {
 private fun createRepository(
     database: LynMusicDatabase,
     gateway: RecordingImportSourceGateway = RecordingImportSourceGateway(),
+    secureCredentialStore: SecureCredentialStore = ImportTestSecureCredentialStore(),
 ): RoomImportSourceRepository {
     return RoomImportSourceRepository(
         database = database,
         gateway = gateway,
-        secureCredentialStore = ImportTestSecureCredentialStore(),
+        secureCredentialStore = secureCredentialStore,
     )
 }
 
@@ -552,6 +633,9 @@ private class RecordingImportSourceGateway(
     var navidromeTestCount: Int = 0
     var navidromeScanCount: Int = 0
     var lastNavidromeScanDraft: NavidromeSourceDraft? = null
+    var subsonicTestCount: Int = 0
+    var subsonicScanCount: Int = 0
+    var lastSubsonicScanDraft: SubsonicSourceDraft? = null
 
     override suspend fun pickLocalFolder(): LocalFolderSelection? = nextLocalFolderSelection
 
@@ -585,6 +669,16 @@ private class RecordingImportSourceGateway(
     override suspend fun scanNavidrome(draft: NavidromeSourceDraft, sourceId: String): ImportScanReport {
         navidromeScanCount += 1
         lastNavidromeScanDraft = draft
+        return scanReport
+    }
+
+    override suspend fun testSubsonic(draft: SubsonicSourceDraft) {
+        subsonicTestCount += 1
+    }
+
+    override suspend fun scanSubsonic(draft: SubsonicSourceDraft, sourceId: String): ImportScanReport {
+        subsonicScanCount += 1
+        lastSubsonicScanDraft = draft
         return scanReport
     }
 }

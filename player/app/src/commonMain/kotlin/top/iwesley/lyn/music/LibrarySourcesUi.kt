@@ -97,6 +97,7 @@ import top.iwesley.lyn.music.core.model.ImportScanSummary
 import top.iwesley.lyn.music.core.model.ImportSourceType
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.PlatformDescriptor
+import top.iwesley.lyn.music.core.model.SubsonicAuthMode
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.trackArtworkCacheKey
 import top.iwesley.lyn.music.feature.favorites.FavoritesIntent
@@ -157,7 +158,7 @@ internal fun LibraryTab(
             sectionSubtitle = "",
             songsIcon = Icons.Rounded.LibraryMusic,
             emptyCollectionTitle = "曲库还是空的",
-            emptyCollectionBody = "先到“来源”页导入本地文件夹、Samba、WebDAV 或 Navidrome，扫描完成后会出现在这里。",
+            emptyCollectionBody = "先到“来源”页导入本地文件夹、Samba、WebDAV、Navidrome 或 Subsonic，扫描完成后会出现在这里。",
             emptyFilterBody = "试试切回“全部来源”、更换过滤项，或调整搜索词。",
             emptySearchBody = "试试调整搜索词，或切换来源过滤。",
             trackLabel = "歌曲",
@@ -1265,6 +1266,7 @@ private fun librarySourceFilterButtonLabel(filter: LibrarySourceFilter): String 
         LibrarySourceFilter.SAMBA -> "Samba"
         LibrarySourceFilter.WEBDAV -> "WebDAV"
         LibrarySourceFilter.NAVIDROME -> "Navidrome"
+        LibrarySourceFilter.SUBSONIC -> "Subsonic"
         LibrarySourceFilter.DOWNLOADED -> "已下载"
     }
 }
@@ -1462,6 +1464,7 @@ internal fun SourcesTab(
     val activeScanOperation = state.activeScanOperation
     val isLocalFolderScanning = activeScanOperation == ImportScanOperation.CreateLocalFolder
     val isNavidromeCreating = activeScanOperation == ImportScanOperation.CreateRemote(ImportSourceType.NAVIDROME)
+    val isSubsonicCreating = activeScanOperation == ImportScanOperation.CreateRemote(ImportSourceType.SUBSONIC)
     val isSambaCreating = activeScanOperation == ImportScanOperation.CreateRemote(ImportSourceType.SAMBA)
     val isWebDavCreating = activeScanOperation == ImportScanOperation.CreateRemote(ImportSourceType.WEBDAV)
     state.editingSource?.let { editingSource ->
@@ -1561,7 +1564,7 @@ internal fun SourcesTab(
         ) {
             SectionTitle(
                 title = "导入来源",
-                subtitle = "本地文件夹原地索引，Samba、WebDAV 与 Navidrome 作为远程音乐库。"
+                subtitle = "本地文件夹原地索引，Samba、WebDAV、Navidrome 与 Subsonic/OpenSubsonic 作为远程音乐库。"
             )
             state.message?.let { message ->
                 BannerCard(message = message, onDismiss = { onImportIntent(ImportIntent.ClearMessage) })
@@ -1591,6 +1594,88 @@ internal fun SourcesTab(
                     }
                     Spacer(Modifier.width(8.dp))
                     Text(if (isLocalFolderScanning) "扫描中" else "选择文件夹")
+                }
+            }
+        }
+            MainShellElevatedCard(shape = RoundedCornerShape(28.dp)) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                Text("Subsonic / OpenSubsonic", fontWeight = FontWeight.Bold)
+                if (!state.capabilities.supportsSubsonicImport) {
+                    Text("当前平台暂未开放应用内 Subsonic 导入。")
+                }
+                ImeAwareOutlinedTextField(
+                    value = state.subsonicLabel,
+                    onValueChange = { onImportIntent(ImportIntent.SubsonicLabelChanged(it)) },
+                    label = { Text("名称") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = importFieldColors,
+                )
+                ImeAwareOutlinedTextField(
+                    value = state.subsonicBaseUrl,
+                    onValueChange = { onImportIntent(ImportIntent.SubsonicBaseUrlChanged(it)) },
+                    label = { Text("服务器地址") },
+                    placeholder = { Text("https://music.example.com") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = importFieldColors,
+                )
+                SubsonicAuthModeSelector(
+                    selected = state.subsonicAuthMode,
+                    enabled = !state.isWorking,
+                    onSelect = { onImportIntent(ImportIntent.SubsonicAuthModeChanged(it)) },
+                )
+                if (state.subsonicAuthMode == SubsonicAuthMode.PASSWORD) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        ImeAwareOutlinedTextField(
+                            value = state.subsonicUsername,
+                            onValueChange = { onImportIntent(ImportIntent.SubsonicUsernameChanged(it)) },
+                            label = { Text("用户名") },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(18.dp),
+                            colors = importFieldColors,
+                        )
+                        ImeAwareOutlinedTextField(
+                            value = state.subsonicCredential,
+                            onValueChange = { onImportIntent(ImportIntent.SubsonicCredentialChanged(it)) },
+                            label = { Text("密码") },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(18.dp),
+                            colors = importFieldColors,
+                        )
+                    }
+                } else {
+                    ImeAwareOutlinedTextField(
+                        value = state.subsonicCredential,
+                        onValueChange = { onImportIntent(ImportIntent.SubsonicCredentialChanged(it)) },
+                        label = { Text("API Key") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(18.dp),
+                        colors = importFieldColors,
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedButton(
+                        onClick = { onImportIntent(ImportIntent.TestSubsonicSource) },
+                        enabled = state.capabilities.supportsSubsonicImport && !state.isWorking,
+                    ) {
+                        Text("测试连接")
+                    }
+                    Button(
+                        onClick = { onImportIntent(ImportIntent.AddSubsonicSource) },
+                        enabled = state.capabilities.supportsSubsonicImport && !state.isWorking,
+                    ) {
+                        if (isSubsonicCreating) {
+                            ButtonLoadingIndicator()
+                        } else {
+                            Icon(Icons.Rounded.CloudSync, null)
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (isSubsonicCreating) "同步中" else "连接并同步")
+                    }
                 }
             }
         }
@@ -1884,6 +1969,39 @@ internal fun SourcesTab(
 }
 
 @Composable
+private fun SubsonicAuthModeSelector(
+    selected: SubsonicAuthMode,
+    enabled: Boolean,
+    onSelect: (SubsonicAuthMode) -> Unit,
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        SubsonicAuthMode.entries.forEach { mode ->
+            val label = when (mode) {
+                SubsonicAuthMode.PASSWORD -> "用户名 / 密码"
+                SubsonicAuthMode.API_KEY -> "API Key"
+            }
+            if (mode == selected) {
+                Button(
+                    onClick = { onSelect(mode) },
+                    enabled = enabled,
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                ) {
+                    Text(label)
+                }
+            } else {
+                OutlinedButton(
+                    onClick = { onSelect(mode) },
+                    enabled = enabled,
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                ) {
+                    Text(label)
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun RemoteSourceEditorDialog(
     state: top.iwesley.lyn.music.feature.importing.RemoteSourceEditorState,
     isWorking: Boolean,
@@ -1936,6 +2054,7 @@ private fun RemoteSourceEditorDialog(
                                 ImportSourceType.SAMBA -> "编辑 Samba 来源"
                                 ImportSourceType.WEBDAV -> "编辑 WebDAV 来源"
                                 ImportSourceType.NAVIDROME -> "编辑 Navidrome 来源"
+                                ImportSourceType.SUBSONIC -> "编辑 Subsonic 来源"
                                 ImportSourceType.LOCAL_FOLDER -> "编辑来源"
                             },
                             color = MaterialTheme.colorScheme.onSurface,
@@ -1996,6 +2115,7 @@ private fun RemoteSourceEditorDialog(
 
                                 ImportSourceType.WEBDAV,
                                 ImportSourceType.NAVIDROME,
+                                ImportSourceType.SUBSONIC,
                                 -> {
                                     ImeAwareOutlinedTextField(
                                         value = state.rootUrl,
@@ -2011,25 +2131,47 @@ private fun RemoteSourceEditorDialog(
 
                                 ImportSourceType.LOCAL_FOLDER -> Unit
                             }
-                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                ImeAwareOutlinedTextField(
-                                    value = state.username,
-                                    onValueChange = { onIntent(ImportIntent.RemoteSourceUsernameChanged(it)) },
-                                    label = { Text("用户名") },
-                                    modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(18.dp),
-                                    colors = fieldColors,
+                            if (state.type == ImportSourceType.SUBSONIC) {
+                                SubsonicAuthModeSelector(
+                                    selected = state.subsonicAuthMode,
+                                    enabled = !isWorking,
+                                    onSelect = { onIntent(ImportIntent.RemoteSourceSubsonicAuthModeChanged(it)) },
                                 )
+                            }
+                            if (state.type == ImportSourceType.SUBSONIC && state.subsonicAuthMode == SubsonicAuthMode.API_KEY) {
                                 ImeAwareOutlinedTextField(
                                     value = state.password,
                                     onValueChange = { onIntent(ImportIntent.RemoteSourcePasswordChanged(it)) },
                                     label = {
-                                        Text(if (state.hasStoredCredential) "密码（留空沿用）" else "密码")
+                                        Text(if (state.hasStoredCredential) "API Key（留空沿用）" else "API Key")
                                     },
-                                    modifier = Modifier.weight(1f),
+                                    modifier = Modifier.fillMaxWidth(),
                                     shape = RoundedCornerShape(18.dp),
                                     colors = fieldColors,
                                 )
+                            } else {
+                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    ImeAwareOutlinedTextField(
+                                        value = state.username,
+                                        onValueChange = { onIntent(ImportIntent.RemoteSourceUsernameChanged(it)) },
+                                        label = {
+                                            Text(if (state.type == ImportSourceType.WEBDAV) "用户名（选填）" else "用户名")
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(18.dp),
+                                        colors = fieldColors,
+                                    )
+                                    ImeAwareOutlinedTextField(
+                                        value = state.password,
+                                        onValueChange = { onIntent(ImportIntent.RemoteSourcePasswordChanged(it)) },
+                                        label = {
+                                            Text(if (state.hasStoredCredential) "密码（留空沿用）" else "密码")
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(18.dp),
+                                        colors = fieldColors,
+                                    )
+                                }
                             }
                             if (state.type == ImportSourceType.WEBDAV) {
                                 Row(

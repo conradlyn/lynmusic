@@ -9,6 +9,8 @@ import top.iwesley.lyn.music.core.model.NavidromeSourceDraft
 import top.iwesley.lyn.music.core.model.PlatformCapabilities
 import top.iwesley.lyn.music.core.model.SambaSourceDraft
 import top.iwesley.lyn.music.core.model.SourceWithStatus
+import top.iwesley.lyn.music.core.model.SubsonicAuthMode
+import top.iwesley.lyn.music.core.model.SubsonicSourceDraft
 import top.iwesley.lyn.music.core.model.WebDavSourceDraft
 import top.iwesley.lyn.music.core.model.displayWebDavRootUrl
 import top.iwesley.lyn.music.core.mvi.BaseStore
@@ -25,6 +27,7 @@ data class RemoteSourceEditorState(
     val username: String = "",
     val password: String = "",
     val allowInsecureTls: Boolean = false,
+    val subsonicAuthMode: SubsonicAuthMode = SubsonicAuthMode.PASSWORD,
     val hasStoredCredential: Boolean = false,
     val keepExistingCredential: Boolean = true,
 )
@@ -54,6 +57,11 @@ data class ImportState(
     val navidromeBaseUrl: String = "",
     val navidromeUsername: String = "",
     val navidromePassword: String = "",
+    val subsonicLabel: String = "",
+    val subsonicBaseUrl: String = "",
+    val subsonicUsername: String = "",
+    val subsonicCredential: String = "",
+    val subsonicAuthMode: SubsonicAuthMode = SubsonicAuthMode.PASSWORD,
     val creatingSourceType: ImportSourceType? = null,
     val editingSource: RemoteSourceEditorState? = null,
     val isWorking: Boolean = false,
@@ -72,6 +80,8 @@ sealed interface ImportIntent {
     data object AddWebDavSource : ImportIntent
     data object TestNavidromeSource : ImportIntent
     data object AddNavidromeSource : ImportIntent
+    data object TestSubsonicSource : ImportIntent
+    data object AddSubsonicSource : ImportIntent
     data class OpenRemoteSourceCreator(val type: ImportSourceType) : ImportIntent
     data object DismissRemoteSourceCreator : ImportIntent
     data class OpenRemoteSourceEditor(val sourceId: String) : ImportIntent
@@ -96,6 +106,11 @@ sealed interface ImportIntent {
     data class NavidromeBaseUrlChanged(val value: String) : ImportIntent
     data class NavidromeUsernameChanged(val value: String) : ImportIntent
     data class NavidromePasswordChanged(val value: String) : ImportIntent
+    data class SubsonicLabelChanged(val value: String) : ImportIntent
+    data class SubsonicBaseUrlChanged(val value: String) : ImportIntent
+    data class SubsonicUsernameChanged(val value: String) : ImportIntent
+    data class SubsonicCredentialChanged(val value: String) : ImportIntent
+    data class SubsonicAuthModeChanged(val value: SubsonicAuthMode) : ImportIntent
     data class RemoteSourceLabelChanged(val value: String) : ImportIntent
     data class RemoteSourceServerChanged(val value: String) : ImportIntent
     data class RemoteSourcePortChanged(val value: String) : ImportIntent
@@ -104,6 +119,7 @@ sealed interface ImportIntent {
     data class RemoteSourceUsernameChanged(val value: String) : ImportIntent
     data class RemoteSourcePasswordChanged(val value: String) : ImportIntent
     data class RemoteSourceAllowInsecureTlsChanged(val value: Boolean) : ImportIntent
+    data class RemoteSourceSubsonicAuthModeChanged(val value: SubsonicAuthMode) : ImportIntent
     data object ClearMessage : ImportIntent
     data object ClearTestMessage : ImportIntent
 }
@@ -266,6 +282,52 @@ class ImportStore(
                 }
             }
 
+            ImportIntent.TestSubsonicSource -> {
+                val draft = subsonicDraftOrNull(
+                    label = state.value.subsonicLabel,
+                    baseUrl = state.value.subsonicBaseUrl,
+                    username = state.value.subsonicUsername,
+                    credential = state.value.subsonicCredential,
+                    authMode = state.value.subsonicAuthMode,
+                    allowBlankCredential = false,
+                ) ?: return
+                runImport {
+                    repository.testSubsonicSource(draft)
+                        .onSuccess { setTestMessage("Subsonic 连接测试成功。") }
+                        .onFailure { setTestMessage("Subsonic 连接测试失败: ${it.message}") }
+                }
+            }
+
+            ImportIntent.AddSubsonicSource -> {
+                val draft = subsonicDraftOrNull(
+                    label = state.value.subsonicLabel,
+                    baseUrl = state.value.subsonicBaseUrl,
+                    username = state.value.subsonicUsername,
+                    credential = state.value.subsonicCredential,
+                    authMode = state.value.subsonicAuthMode,
+                    allowBlankCredential = false,
+                ) ?: return
+                runImport(ImportScanOperation.CreateRemote(ImportSourceType.SUBSONIC)) {
+                    repository.addSubsonicSource(draft)
+                        .onSuccess { summary ->
+                            updateState {
+                                it.copy(
+                                    creatingSourceType = null,
+                                    subsonicLabel = "",
+                                    subsonicBaseUrl = "",
+                                    subsonicUsername = "",
+                                    subsonicCredential = "",
+                                    subsonicAuthMode = SubsonicAuthMode.PASSWORD,
+                                    testMessage = null,
+                                )
+                            }
+                            recordScanSummary(summary)
+                            setMessage(scanSuccessMessage("Subsonic 音乐源已导入。", summary))
+                        }
+                        .onFailure { setCreateOrPageMessage(ImportSourceType.SUBSONIC, "Subsonic 导入失败: ${it.message}") }
+                }
+            }
+
             is ImportIntent.OpenRemoteSourceCreator -> {
                 if (intent.type == ImportSourceType.LOCAL_FOLDER) return
                 updateState { state ->
@@ -306,6 +368,7 @@ class ImportStore(
                             username = source.username.orEmpty(),
                             password = "",
                             allowInsecureTls = source.allowInsecureTls,
+                            subsonicAuthMode = source.subsonicAuthMode,
                             hasStoredCredential = source.credentialKey != null,
                             keepExistingCredential = true,
                         ),
@@ -359,6 +422,21 @@ class ImportStore(
                                 setTestMessage("Navidrome 连接测试成功。")
                             }.onFailure {
                                 setTestMessage("Navidrome 连接测试失败: ${it.message}")
+                            }
+                        }
+                    }
+
+                    ImportSourceType.SUBSONIC -> {
+                        val draft = editingSubsonicDraftOrNull(editor) ?: return
+                        runImport {
+                            repository.testUpdatedSubsonicSource(
+                                sourceId = editor.sourceId,
+                                draft = draft,
+                                keepExistingCredentialWhenBlankCredential = editor.keepExistingCredential,
+                            ).onSuccess {
+                                setTestMessage("Subsonic 连接测试成功。")
+                            }.onFailure {
+                                setTestMessage("Subsonic 连接测试失败: ${it.message}")
                             }
                         }
                     }
@@ -421,6 +499,23 @@ class ImportStore(
                         }
                     }
 
+                    ImportSourceType.SUBSONIC -> {
+                        val draft = editingSubsonicDraftOrNull(editor) ?: return
+                        runImport(ImportScanOperation.UpdateRemote(editor.sourceId)) {
+                            repository.updateSubsonicSource(
+                                sourceId = editor.sourceId,
+                                draft = draft,
+                                keepExistingCredentialWhenBlankCredential = editor.keepExistingCredential,
+                            ).onSuccess { summary ->
+                                updateState { it.copy(editingSource = null) }
+                                recordScanSummary(summary)
+                                setMessage(scanSuccessMessage("来源已更新并重新扫描。", summary))
+                            }.onFailure {
+                                setMessage("更新来源失败: ${it.message}")
+                            }
+                        }
+                    }
+
                     ImportSourceType.LOCAL_FOLDER -> Unit
                 }
             }
@@ -466,6 +561,21 @@ class ImportStore(
             is ImportIntent.NavidromeBaseUrlChanged -> updateState { it.copy(navidromeBaseUrl = intent.value) }
             is ImportIntent.NavidromeUsernameChanged -> updateState { it.copy(navidromeUsername = intent.value) }
             is ImportIntent.NavidromePasswordChanged -> updateState { it.copy(navidromePassword = intent.value) }
+            is ImportIntent.SubsonicLabelChanged -> updateState { it.copy(subsonicLabel = intent.value) }
+            is ImportIntent.SubsonicBaseUrlChanged -> updateState { it.copy(subsonicBaseUrl = intent.value) }
+            is ImportIntent.SubsonicUsernameChanged -> updateState { it.copy(subsonicUsername = intent.value) }
+            is ImportIntent.SubsonicCredentialChanged -> updateState { it.copy(subsonicCredential = intent.value) }
+            is ImportIntent.SubsonicAuthModeChanged -> updateState {
+                if (it.subsonicAuthMode == intent.value) {
+                    it
+                } else {
+                    it.copy(
+                        subsonicAuthMode = intent.value,
+                        subsonicUsername = if (intent.value == SubsonicAuthMode.API_KEY) "" else it.subsonicUsername,
+                        subsonicCredential = "",
+                    )
+                }
+            }
             is ImportIntent.RemoteSourceLabelChanged -> updateEditingSource { it.copy(label = intent.value) }
             is ImportIntent.RemoteSourceServerChanged -> updateEditingSource { it.copy(server = intent.value) }
             is ImportIntent.RemoteSourcePortChanged -> updateEditingSource { it.copy(port = intent.value) }
@@ -479,6 +589,18 @@ class ImportStore(
                 )
             }
             is ImportIntent.RemoteSourceAllowInsecureTlsChanged -> updateEditingSource { it.copy(allowInsecureTls = intent.value) }
+            is ImportIntent.RemoteSourceSubsonicAuthModeChanged -> updateEditingSource {
+                if (it.subsonicAuthMode == intent.value) {
+                    it
+                } else {
+                    it.copy(
+                        subsonicAuthMode = intent.value,
+                        username = if (intent.value == SubsonicAuthMode.API_KEY) "" else it.username,
+                        password = "",
+                        keepExistingCredential = false,
+                    )
+                }
+            }
             ImportIntent.ClearMessage -> updateState { it.copy(message = null) }
             ImportIntent.ClearTestMessage -> updateState { it.copy(testMessage = null) }
         }
@@ -560,6 +682,36 @@ class ImportStore(
         )
     }
 
+    private fun subsonicDraftOrNull(
+        label: String,
+        baseUrl: String,
+        username: String,
+        credential: String,
+        authMode: SubsonicAuthMode,
+        allowBlankCredential: Boolean,
+    ): SubsonicSourceDraft? {
+        if (baseUrl.isBlank()) {
+            setCreateOrPageMessage(ImportSourceType.SUBSONIC, "请先填写 Subsonic 服务器地址。")
+            return null
+        }
+        if (authMode == SubsonicAuthMode.PASSWORD && username.isBlank()) {
+            setCreateOrPageMessage(ImportSourceType.SUBSONIC, "请先填写 Subsonic 用户名。")
+            return null
+        }
+        if (!allowBlankCredential && credential.isBlank()) {
+            val labelText = if (authMode == SubsonicAuthMode.API_KEY) "API Key" else "密码"
+            setCreateOrPageMessage(ImportSourceType.SUBSONIC, "请先填写 Subsonic $labelText。")
+            return null
+        }
+        return SubsonicSourceDraft(
+            label = label,
+            baseUrl = baseUrl,
+            username = username,
+            credential = credential,
+            authMode = authMode,
+        )
+    }
+
     private fun editingSambaDraftOrNull(editor: RemoteSourceEditorState): SambaSourceDraft? {
         val port = editor.port.trim().takeIf { it.isNotBlank() }?.toIntOrNull()
         if (editor.server.isBlank()) {
@@ -617,6 +769,18 @@ class ImportStore(
         )
     }
 
+    private fun editingSubsonicDraftOrNull(editor: RemoteSourceEditorState): SubsonicSourceDraft? {
+        val canReuseStoredCredential = editor.keepExistingCredential && editor.hasStoredCredential
+        return subsonicDraftOrNull(
+            label = editor.label,
+            baseUrl = editor.rootUrl,
+            username = editor.username,
+            credential = editor.password,
+            authMode = editor.subsonicAuthMode,
+            allowBlankCredential = canReuseStoredCredential,
+        )
+    }
+
     private fun updateEditingSource(transform: (RemoteSourceEditorState) -> RemoteSourceEditorState) {
         updateState { state ->
             state.copy(editingSource = state.editingSource?.let(transform))
@@ -647,6 +811,14 @@ class ImportStore(
                 navidromeBaseUrl = "",
                 navidromeUsername = "",
                 navidromePassword = "",
+            )
+
+            ImportSourceType.SUBSONIC -> copy(
+                subsonicLabel = "",
+                subsonicBaseUrl = "",
+                subsonicUsername = "",
+                subsonicCredential = "",
+                subsonicAuthMode = SubsonicAuthMode.PASSWORD,
             )
 
             ImportSourceType.LOCAL_FOLDER -> this

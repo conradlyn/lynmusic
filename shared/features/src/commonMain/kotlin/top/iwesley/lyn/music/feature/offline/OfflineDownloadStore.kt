@@ -267,7 +267,11 @@ internal fun shouldSkipBatchDownload(
     if (download?.status != OfflineDownloadStatus.Completed || !download.hasLocalFileReference) {
         return false
     }
-    return sourceType != ImportSourceType.NAVIDROME || download.quality == quality
+    return !sourceType.supportsSubsonicAudioQuality() || download.quality == quality
+}
+
+private fun ImportSourceType.supportsSubsonicAudioQuality(): Boolean {
+    return this == ImportSourceType.NAVIDROME || this == ImportSourceType.SUBSONIC
 }
 
 internal fun batchDownloadSummaryMessage(

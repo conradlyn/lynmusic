@@ -7,15 +7,18 @@ import top.iwesley.lyn.music.core.model.LyricsHttpClient
 import top.iwesley.lyn.music.core.model.NoopDiagnosticLogger
 import top.iwesley.lyn.music.core.model.PlaybackStatsReporter
 import top.iwesley.lyn.music.core.model.SecureCredentialStore
+import top.iwesley.lyn.music.core.model.SubsonicAuthMode
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.info
-import top.iwesley.lyn.music.core.model.parseNavidromeSongLocator
+import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleSongLocator
 import top.iwesley.lyn.music.core.model.warn
 import top.iwesley.lyn.music.data.db.ImportSourceEntity
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
 import top.iwesley.lyn.music.domain.NavidromeResolvedSource
-import top.iwesley.lyn.music.domain.normalizeNavidromeBaseUrl
+import top.iwesley.lyn.music.domain.isSubsonicCompatibleSourceType
+import top.iwesley.lyn.music.domain.normalizeSubsonicBaseUrl
 import top.iwesley.lyn.music.domain.requestNavidromeJson
+import top.iwesley.lyn.music.domain.toSubsonicAuthMode
 
 class NavidromePlaybackStatsReporter(
     private val database: LynMusicDatabase,
@@ -61,27 +64,37 @@ class NavidromePlaybackStatsReporter(
     }
 
     private suspend fun resolveNavidromeScrobbleTarget(track: Track): NavidromeScrobbleTarget? {
-        val (sourceId, songId) = parseNavidromeSongLocator(track.mediaLocator) ?: return null
-        if (sourceId != track.sourceId) return null
-        val source = database.importSourceDao().getById(sourceId)
-            ?.takeIf { it.type == ImportSourceType.NAVIDROME.name && it.enabled }
+        val parsed = parseSubsonicCompatibleSongLocator(track.mediaLocator) ?: return null
+        if (parsed.sourceId != track.sourceId) return null
+        val source = database.importSourceDao().getById(parsed.sourceId)
+            ?.takeIf { it.subsonicCompatibleSourceType() != null && it.enabled }
             ?: return null
-        val resolvedSource = source.toNavidromeResolvedSource() ?: return null
+        val resolvedSource = source.toSubsonicCompatibleResolvedSource() ?: return null
         return NavidromeScrobbleTarget(
             source = resolvedSource,
-            songId = songId,
+            songId = parsed.itemId,
         )
     }
 
-    private suspend fun ImportSourceEntity.toNavidromeResolvedSource(): NavidromeResolvedSource? {
+    private suspend fun ImportSourceEntity.toSubsonicCompatibleResolvedSource(): NavidromeResolvedSource? {
+        val sourceType = subsonicCompatibleSourceType() ?: return null
+        val authMode = authMode.toSubsonicAuthMode()
         val username = username?.trim().orEmpty()
-        val password = credentialKey?.let { secureCredentialStore.get(it) }.orEmpty()
-        if (username.isBlank() || password.isBlank()) return null
+        val credential = credentialKey?.let { secureCredentialStore.get(it) }.orEmpty()
+        if (authMode == SubsonicAuthMode.PASSWORD && (username.isBlank() || credential.isBlank())) return null
+        if (authMode == SubsonicAuthMode.API_KEY && credential.isBlank()) return null
         return NavidromeResolvedSource(
-            baseUrl = normalizeNavidromeBaseUrl(rootReference),
+            baseUrl = normalizeSubsonicBaseUrl(rootReference),
             username = username,
-            password = password,
+            password = credential,
+            authMode = authMode,
+            sourceType = sourceType,
         )
+    }
+
+    private fun ImportSourceEntity.subsonicCompatibleSourceType(): ImportSourceType? {
+        val sourceType = runCatching { ImportSourceType.valueOf(type) }.getOrNull() ?: return null
+        return sourceType.takeIf(::isSubsonicCompatibleSourceType)
     }
 }
 

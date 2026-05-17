@@ -6,7 +6,15 @@ import io.ktor.http.encodeURLParameter
 private const val SAMBA_SCHEME = "lynmusic-smb://"
 private const val NAVIDROME_SCHEME = "lynmusic-navidrome://"
 private const val NAVIDROME_COVER_SCHEME = "lynmusic-navidrome-cover://"
+private const val SUBSONIC_SCHEME = "lynmusic-subsonic://"
+private const val SUBSONIC_COVER_SCHEME = "lynmusic-subsonic-cover://"
 const val DEFAULT_SAMBA_PORT = 445
+
+data class SubsonicCompatibleLocator(
+    val sourceId: String,
+    val itemId: String,
+    val sourceType: ImportSourceType,
+)
 
 data class SambaPath(
     val shareName: String,
@@ -112,7 +120,71 @@ fun parseNavidromeCoverLocator(locator: String): Pair<String, String>? {
     return parseNavidromeLocator(locator, NAVIDROME_COVER_SCHEME)
 }
 
+fun buildSubsonicSongLocator(sourceId: String, songId: String): String {
+    return SUBSONIC_SCHEME + sourceId.encodeURLParameter() + "/" + songId.encodeURLParameter()
+}
+
+fun parseSubsonicSongLocator(locator: String): Pair<String, String>? {
+    return parseSubsonicLocator(locator, SUBSONIC_SCHEME)
+}
+
+fun buildSubsonicCoverLocator(sourceId: String, coverArtId: String): String {
+    return SUBSONIC_COVER_SCHEME + sourceId.encodeURLParameter() + "/" + coverArtId.encodeURLParameter()
+}
+
+fun parseSubsonicCoverLocator(locator: String): Pair<String, String>? {
+    return parseSubsonicLocator(locator, SUBSONIC_COVER_SCHEME)
+}
+
+fun buildSubsonicCompatibleSongLocator(
+    sourceType: ImportSourceType,
+    sourceId: String,
+    songId: String,
+): String {
+    return when (sourceType) {
+        ImportSourceType.NAVIDROME -> buildNavidromeSongLocator(sourceId, songId)
+        ImportSourceType.SUBSONIC -> buildSubsonicSongLocator(sourceId, songId)
+        else -> error("Unsupported Subsonic-compatible source type: $sourceType")
+    }
+}
+
+fun buildSubsonicCompatibleCoverLocator(
+    sourceType: ImportSourceType,
+    sourceId: String,
+    coverArtId: String,
+): String {
+    return when (sourceType) {
+        ImportSourceType.NAVIDROME -> buildNavidromeCoverLocator(sourceId, coverArtId)
+        ImportSourceType.SUBSONIC -> buildSubsonicCoverLocator(sourceId, coverArtId)
+        else -> error("Unsupported Subsonic-compatible source type: $sourceType")
+    }
+}
+
+fun parseSubsonicCompatibleSongLocator(locator: String): SubsonicCompatibleLocator? {
+    parseNavidromeSongLocator(locator)?.let { (sourceId, itemId) ->
+        return SubsonicCompatibleLocator(sourceId, itemId, ImportSourceType.NAVIDROME)
+    }
+    parseSubsonicSongLocator(locator)?.let { (sourceId, itemId) ->
+        return SubsonicCompatibleLocator(sourceId, itemId, ImportSourceType.SUBSONIC)
+    }
+    return null
+}
+
+fun parseSubsonicCompatibleCoverLocator(locator: String): SubsonicCompatibleLocator? {
+    parseNavidromeCoverLocator(locator)?.let { (sourceId, itemId) ->
+        return SubsonicCompatibleLocator(sourceId, itemId, ImportSourceType.NAVIDROME)
+    }
+    parseSubsonicCoverLocator(locator)?.let { (sourceId, itemId) ->
+        return SubsonicCompatibleLocator(sourceId, itemId, ImportSourceType.SUBSONIC)
+    }
+    return null
+}
+
 private fun parseNavidromeLocator(locator: String, scheme: String): Pair<String, String>? {
+    return parseSubsonicLocator(locator, scheme)
+}
+
+private fun parseSubsonicLocator(locator: String, scheme: String): Pair<String, String>? {
     if (!locator.startsWith(scheme)) return null
     val payload = locator.removePrefix(scheme)
     val dividerIndex = payload.indexOf('/')
