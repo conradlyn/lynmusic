@@ -21,6 +21,7 @@ import top.iwesley.lyn.music.core.model.ImportScanFailure
 import top.iwesley.lyn.music.core.model.ImportScanSummary
 import top.iwesley.lyn.music.core.model.ImportSource
 import top.iwesley.lyn.music.core.model.ImportSourceType
+import top.iwesley.lyn.music.core.model.LocalFolderPickerMode
 import top.iwesley.lyn.music.core.model.NavidromeSourceDraft
 import top.iwesley.lyn.music.core.model.PlatformCapabilities
 import top.iwesley.lyn.music.core.model.SambaSourceDraft
@@ -63,6 +64,29 @@ class ImportStoreTest {
         advanceUntilIdle()
 
         assertEquals("导入本地文件夹失败: 该本地文件夹已导入。", store.state.value.message)
+        harness.close()
+    }
+
+    @Test
+    fun `local folder import uses requested automatic picker mode`() = runTest {
+        assertLocalFolderImportUsesRequestedPickerMode(LocalFolderPickerMode.Automatic)
+    }
+
+    @Test
+    fun `local folder import uses requested built in picker mode`() = runTest {
+        assertLocalFolderImportUsesRequestedPickerMode(LocalFolderPickerMode.BuiltIn)
+    }
+
+    private suspend fun TestScope.assertLocalFolderImportUsesRequestedPickerMode(mode: LocalFolderPickerMode) {
+        val repository = FakeImportSourceRepository()
+        val harness = createStore(repository)
+        val store = harness.store
+
+        store.dispatch(ImportIntent.ImportLocalFolderWithPickerMode(mode))
+        advanceUntilIdle()
+
+        assertEquals(mode, repository.lastLocalFolderMode)
+        assertEquals("本地音乐源已导入。发现 1 个音频文件，成功导入 1 首，0 个失败。", store.state.value.message)
         harness.close()
     }
 
@@ -709,10 +733,21 @@ private class FakeImportSourceRepository(
     var lastUpdatedSubsonicSourceId: String? = null
     var lastUpdatedSubsonicDraft: SubsonicSourceDraft? = null
     var lastUpdatedSubsonicKeepExisting: Boolean = false
+    var lastLocalFolderMode: LocalFolderPickerMode? = null
 
     override fun observeSources(): Flow<List<SourceWithStatus>> = mutableSources.asStateFlow()
 
     override suspend fun importLocalFolder(): Result<ImportScanSummary?> {
+        lastLocalFolderMode = LocalFolderPickerMode.Automatic
+        return importLocalFolderResult()
+    }
+
+    override suspend fun importLocalFolder(mode: LocalFolderPickerMode): Result<ImportScanSummary?> {
+        lastLocalFolderMode = mode
+        return importLocalFolderResult()
+    }
+
+    private suspend fun importLocalFolderResult(): Result<ImportScanSummary?> {
         return pendingResult?.await()?.map { testScanSummary("local-1") } ?: localFolderResult
     }
 

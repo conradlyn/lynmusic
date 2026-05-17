@@ -25,6 +25,7 @@ import top.iwesley.lyn.music.core.model.ImportScanSummary
 import top.iwesley.lyn.music.core.model.ImportSource
 import top.iwesley.lyn.music.core.model.ImportSourceGateway
 import top.iwesley.lyn.music.core.model.ImportSourceType
+import top.iwesley.lyn.music.core.model.LocalFolderPickerMode
 import top.iwesley.lyn.music.core.model.LocalFolderSelection
 import top.iwesley.lyn.music.core.model.EmbySourceDraft
 import top.iwesley.lyn.music.core.model.LyricsDocument
@@ -166,6 +167,9 @@ interface TrackPlaybackStatsRepository {
 interface ImportSourceRepository {
     fun observeSources(): Flow<List<SourceWithStatus>>
     suspend fun importLocalFolder(): Result<ImportScanSummary?>
+    suspend fun importLocalFolder(mode: LocalFolderPickerMode): Result<ImportScanSummary?> {
+        return importLocalFolder()
+    }
     suspend fun importSelectedLocalFolder(selection: LocalFolderSelection): Result<ImportScanSummary> {
         return Result.failure(UnsupportedOperationException("Importing a preselected local folder is not supported."))
     }
@@ -400,8 +404,12 @@ class RoomImportSourceRepository(
     }
 
     override suspend fun importLocalFolder(): Result<ImportScanSummary?> {
+        return importLocalFolder(LocalFolderPickerMode.Automatic)
+    }
+
+    override suspend fun importLocalFolder(mode: LocalFolderPickerMode): Result<ImportScanSummary?> {
         return runCatching {
-            val selection = gateway.pickLocalFolder() ?: return@runCatching null
+            val selection = gateway.pickLocalFolder(mode) ?: return@runCatching null
             importSelectedLocalFolder(selection).getOrThrow()
         }
     }

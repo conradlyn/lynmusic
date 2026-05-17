@@ -95,6 +95,7 @@ import top.iwesley.lyn.music.core.model.Album
 import top.iwesley.lyn.music.core.model.Artist
 import top.iwesley.lyn.music.core.model.ImportScanSummary
 import top.iwesley.lyn.music.core.model.ImportSourceType
+import top.iwesley.lyn.music.core.model.LocalFolderPickerMode
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.PlatformDescriptor
 import top.iwesley.lyn.music.core.model.SubsonicAuthMode
@@ -1449,6 +1450,7 @@ internal fun SourcesTab(
     val shellColors = mainShellColors
     var pendingDeleteSourceId by rememberSaveable { mutableStateOf<String?>(null) }
     var failureDetailSummary by remember { mutableStateOf<ImportScanSummary?>(null) }
+    var showLocalFolderPickerModeDialog by rememberSaveable { mutableStateOf(false) }
     val pendingDeleteSource = remember(state.sources, pendingDeleteSourceId) {
         state.sources.firstOrNull { it.source.id == pendingDeleteSourceId }
     }
@@ -1469,6 +1471,14 @@ internal fun SourcesTab(
     val isEmbyCreating = activeScanOperation == ImportScanOperation.CreateRemote(ImportSourceType.EMBY)
     val isSambaCreating = activeScanOperation == ImportScanOperation.CreateRemote(ImportSourceType.SAMBA)
     val isWebDavCreating = activeScanOperation == ImportScanOperation.CreateRemote(ImportSourceType.WEBDAV)
+    val localFolderClickAction = remember(platform.name, state.capabilities.supportsSystemLocalFolderPicker) {
+        resolveLocalFolderImportClickAction(platform)
+    }
+    LaunchedEffect(state.isWorking) {
+        if (state.isWorking) {
+            showLocalFolderPickerModeDialog = false
+        }
+    }
     state.editingSource?.let { editingSource ->
         RemoteSourceEditorDialog(
             state = editingSource,
@@ -1479,6 +1489,16 @@ internal fun SourcesTab(
             fieldColors = importFieldColors,
             onDismiss = { onImportIntent(ImportIntent.DismissRemoteSourceEditor) },
             onIntent = onImportIntent,
+        )
+    }
+    if (showLocalFolderPickerModeDialog) {
+        LocalFolderPickerModeDialog(
+            isWorking = state.isWorking,
+            onDismiss = { showLocalFolderPickerModeDialog = false },
+            onSelectMode = { mode ->
+                showLocalFolderPickerModeDialog = false
+                onImportIntent(ImportIntent.ImportLocalFolderWithPickerMode(mode))
+            },
         )
     }
     pendingDeleteSource?.let { source ->
@@ -1576,29 +1596,49 @@ internal fun SourcesTab(
                     modifier = Modifier.padding(18.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                Text("本地文件夹", fontWeight = FontWeight.Bold)
-                Text(
-                    if (platform.name == "Android") {
-                        "导入时会优先请求“管理所有文件”权限，用于后续编辑音乐标签；未授权时会回退到 SAF 只读导入。"
-                    } else {
-                        "通过系统文件夹选择器授予目录权限并建立索引。"
-                    },
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Button(
-                    onClick = { onImportIntent(ImportIntent.ImportLocalFolder) },
-                    enabled = state.capabilities.supportsLocalFolderImport && !state.isWorking,
-                ) {
-                    if (isLocalFolderScanning) {
-                        ButtonLoadingIndicator()
-                    } else {
-                        Icon(Icons.Rounded.FolderOpen, null)
+                    Text("本地文件夹", fontWeight = FontWeight.Bold)
+                    Text(
+                        if (platform.supportsLocalFolderPickerModeChoice()) {
+                            if (state.capabilities.supportsSystemLocalFolderPicker) {
+                                "可选择系统文件管理器或内置管理器导入本地音乐。"
+                            } else {
+                                "当前设备没有可用的系统文件管理器，将使用内置管理器导入本地音乐。"
+                            }
+                        } else {
+                            "通过系统文件夹选择器授予目录权限并建立索引。"
+                        },
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Button(
+                        onClick = {
+                            when (localFolderClickAction) {
+                                LocalFolderImportClickAction.ShowPickerModeDialog -> {
+                                    showLocalFolderPickerModeDialog = true
+                                }
+
+                                LocalFolderImportClickAction.ImportBuiltIn -> {
+                                    onImportIntent(
+                                        ImportIntent.ImportLocalFolderWithPickerMode(LocalFolderPickerMode.BuiltIn),
+                                    )
+                                }
+
+                                LocalFolderImportClickAction.ImportAutomatic -> {
+                                    onImportIntent(ImportIntent.ImportLocalFolder)
+                                }
+                            }
+                        },
+                        enabled = state.capabilities.supportsLocalFolderImport && !state.isWorking,
+                    ) {
+                        if (isLocalFolderScanning) {
+                            ButtonLoadingIndicator()
+                        } else {
+                            Icon(Icons.Rounded.FolderOpen, null)
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (isLocalFolderScanning) "扫描中" else "选择文件夹")
                     }
-                    Spacer(Modifier.width(8.dp))
-                    Text(if (isLocalFolderScanning) "扫描中" else "选择文件夹")
                 }
             }
-        }
             MainShellElevatedCard(shape = RoundedCornerShape(28.dp)) {
                 Column(
                     modifier = Modifier.padding(18.dp),
@@ -2067,6 +2107,119 @@ private fun SubsonicAuthModeSelector(
             }
         }
     }
+}
+
+@Composable
+private fun LocalFolderPickerModeDialog(
+    isWorking: Boolean,
+    onDismiss: () -> Unit,
+    onSelectMode: (LocalFolderPickerMode) -> Unit,
+) {
+    val appDensity = LocalDensity.current
+    Dialog(
+        onDismissRequest = {
+            if (!isWorking) {
+                onDismiss()
+            }
+        },
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        CompositionLocalProvider(LocalDensity provides appDensity) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 20.dp, vertical = 24.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                MainShellElevatedCard(
+                    modifier = Modifier
+                        .fillMaxWidth(0.94f)
+                        .widthIn(max = 460.dp)
+                        .heightIn(max = 560.dp),
+                    shape = RoundedCornerShape(28.dp),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 24.dp, vertical = 22.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        Text(
+                            text = "选择文件夹管理器",
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = "系统文件管理器将按系统权限流程选择文件夹；无法使用系统选择器时会回退内置管理器。",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Button(
+                                onClick = { onSelectMode(localFolderPickerDialogSystemMode()) },
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !isWorking,
+                                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
+                            ) {
+                                Icon(Icons.Rounded.FolderOpen, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("系统文件管理器")
+                            }
+                            OutlinedButton(
+                                onClick = { onSelectMode(LocalFolderPickerMode.BuiltIn) },
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !isWorking,
+                                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
+                            ) {
+                                Icon(Icons.Rounded.FolderOpen, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("内置管理器")
+                            }
+                        }
+                        TextButton(
+                            onClick = onDismiss,
+                            enabled = !isWorking,
+                            modifier = Modifier.align(Alignment.End),
+                            colors = ButtonDefaults.textButtonColors(
+                                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            ),
+                        ) {
+                            Text("取消")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+internal fun localFolderPickerDialogSystemMode(): LocalFolderPickerMode {
+    return LocalFolderPickerMode.Automatic
+}
+
+internal enum class LocalFolderImportClickAction {
+    ShowPickerModeDialog,
+    ImportBuiltIn,
+    ImportAutomatic,
+}
+
+internal fun resolveLocalFolderImportClickAction(platform: PlatformDescriptor): LocalFolderImportClickAction {
+    if (!platform.supportsLocalFolderPickerModeChoice()) {
+        return LocalFolderImportClickAction.ImportAutomatic
+    }
+    return if (platform.capabilities.supportsSystemLocalFolderPicker) {
+        LocalFolderImportClickAction.ShowPickerModeDialog
+    } else {
+        LocalFolderImportClickAction.ImportBuiltIn
+    }
+}
+
+internal fun PlatformDescriptor.supportsLocalFolderPickerModeChoice(): Boolean {
+    return name == ANDROID_PLATFORM_NAME || isAndroidAutomotivePlatform()
 }
 
 @Composable

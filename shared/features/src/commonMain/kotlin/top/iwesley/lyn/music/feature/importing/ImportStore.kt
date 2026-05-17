@@ -5,6 +5,7 @@ import kotlinx.coroutines.launch
 import top.iwesley.lyn.music.core.model.EmbySourceDraft
 import top.iwesley.lyn.music.core.model.ImportScanSummary
 import top.iwesley.lyn.music.core.model.ImportSourceType
+import top.iwesley.lyn.music.core.model.LocalFolderPickerMode
 import top.iwesley.lyn.music.core.model.LocalFolderSelection
 import top.iwesley.lyn.music.core.model.NavidromeSourceDraft
 import top.iwesley.lyn.music.core.model.PlatformCapabilities
@@ -78,6 +79,7 @@ data class ImportState(
 
 sealed interface ImportIntent {
     data object ImportLocalFolder : ImportIntent
+    data class ImportLocalFolderWithPickerMode(val mode: LocalFolderPickerMode) : ImportIntent
     data class ImportSelectedLocalFolder(val selection: LocalFolderSelection) : ImportIntent
     data object TestSambaSource : ImportIntent
     data object AddSambaSource : ImportIntent
@@ -164,15 +166,12 @@ class ImportStore(
 
     override suspend fun handleIntent(intent: ImportIntent) {
         when (intent) {
-            ImportIntent.ImportLocalFolder -> runImport(ImportScanOperation.CreateLocalFolder) {
-                repository.importLocalFolder()
-                    .onSuccess { summary ->
-                        summary?.let {
-                            recordScanSummary(it)
-                            setMessage(scanSuccessMessage("本地音乐源已导入。", it))
-                        }
-                    }
-                    .onFailure { setMessage("导入本地文件夹失败: ${it.message}") }
+            ImportIntent.ImportLocalFolder -> {
+                importLocalFolder(LocalFolderPickerMode.Automatic)
+            }
+
+            is ImportIntent.ImportLocalFolderWithPickerMode -> {
+                importLocalFolder(intent.mode)
             }
 
             is ImportIntent.ImportSelectedLocalFolder -> runImport(ImportScanOperation.CreateLocalFolder) {
@@ -705,6 +704,19 @@ class ImportStore(
             }
             ImportIntent.ClearMessage -> updateState { it.copy(message = null) }
             ImportIntent.ClearTestMessage -> updateState { it.copy(testMessage = null) }
+        }
+    }
+
+    private suspend fun importLocalFolder(mode: LocalFolderPickerMode) {
+        runImport(ImportScanOperation.CreateLocalFolder) {
+            repository.importLocalFolder(mode)
+                .onSuccess { summary ->
+                    summary?.let {
+                        recordScanSummary(it)
+                        setMessage(scanSuccessMessage("本地音乐源已导入。", it))
+                    }
+                }
+                .onFailure { setMessage("导入本地文件夹失败: ${it.message}") }
         }
     }
 

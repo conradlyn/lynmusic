@@ -78,6 +78,7 @@ import top.iwesley.lyn.music.core.model.ImportScanFailure
 import top.iwesley.lyn.music.core.model.ImportScanReport
 import top.iwesley.lyn.music.core.model.ImportSourceGateway
 import top.iwesley.lyn.music.core.model.ImportSourceType
+import top.iwesley.lyn.music.core.model.LocalFolderPickerMode
 import top.iwesley.lyn.music.core.model.LocalFolderSelection
 import top.iwesley.lyn.music.core.model.LyricsHttpClient
 import top.iwesley.lyn.music.core.model.LyricsHttpResponse
@@ -227,6 +228,7 @@ fun createAndroidRuntimeGraph(
             supportsDesktopLyrics = true,
             supportsEqualizer = platformName.supportsAndroidEqualizer(),
             supportsPlaybackBackgroundArtworkBlur = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S,
+            supportsSystemLocalFolderPicker = canResolveOpenDocumentTree(activity),
         ),
     )
     val desktopLyricsPlatformService = AndroidDesktopLyricsPlatformService(activity.applicationContext)
@@ -1066,9 +1068,13 @@ class AndroidLocalFolderPicker(
     }
 
     suspend fun pickLocalFolder(): LocalFolderSelection? {
+        return pickLocalFolder(LocalFolderPickerMode.Automatic)
+    }
+
+    suspend fun pickLocalFolder(mode: LocalFolderPickerMode): LocalFolderSelection? {
         return withContext(Dispatchers.Main) {
             suspendCancellableCoroutine { continuation ->
-                logPickerState(stage = "start")
+                logPickerState(stage = "start mode=${mode.name}")
                 folderContinuation = { selection ->
                     if (continuation.isActive) {
                         continuation.resume(selection)
@@ -1078,10 +1084,22 @@ class AndroidLocalFolderPicker(
                     folderContinuation = null
                     legacyPermissionContinuation = null
                 }
-                if (shouldRequestManageAllFilesAccess()) {
-                    showManageAllFilesAccessPrompt()
-                } else {
-                    launchPickerAfterLegacyPermissionCheck()
+                when (mode) {
+                    LocalFolderPickerMode.Automatic -> {
+                        if (shouldRequestManageAllFilesAccess()) {
+                            showManageAllFilesAccessPrompt()
+                        } else {
+                            launchPickerAfterLegacyPermissionCheck()
+                        }
+                    }
+
+                    LocalFolderPickerMode.System -> {
+                        launchSafPickerOrFallback()
+                    }
+
+                    LocalFolderPickerMode.BuiltIn -> {
+                        launchFallbackPicker()
+                    }
                 }
             }
         }
@@ -1220,6 +1238,10 @@ private class AndroidImportSourceGateway(
 
     override suspend fun pickLocalFolder(): LocalFolderSelection? {
         return localFolderPicker.pickLocalFolder()
+    }
+
+    override suspend fun pickLocalFolder(mode: LocalFolderPickerMode): LocalFolderSelection? {
+        return localFolderPicker.pickLocalFolder(mode)
     }
 
     override suspend fun scanLocalFolder(selection: LocalFolderSelection, sourceId: String): ImportScanReport {

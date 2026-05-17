@@ -161,6 +161,12 @@ data class LocalFolderSelection(
     val persistentReference: String,
 )
 
+enum class LocalFolderPickerMode {
+    Automatic,
+    System,
+    BuiltIn,
+}
+
 data class SambaSourceDraft(
     val label: String,
     val server: String,
@@ -445,6 +451,7 @@ data class PlatformCapabilities(
     val supportsDesktopLyrics: Boolean = false,
     val supportsEqualizer: Boolean = false,
     val supportsPlaybackBackgroundArtworkBlur: Boolean = true,
+    val supportsSystemLocalFolderPicker: Boolean = false,
 )
 
 data class PlatformDescriptor(
@@ -454,6 +461,9 @@ data class PlatformDescriptor(
 
 interface ImportSourceGateway {
     suspend fun pickLocalFolder(): LocalFolderSelection?
+    suspend fun pickLocalFolder(mode: LocalFolderPickerMode): LocalFolderSelection? {
+        return pickLocalFolder()
+    }
     suspend fun scanLocalFolder(selection: LocalFolderSelection, sourceId: String): ImportScanReport
     suspend fun testSamba(draft: SambaSourceDraft)
     suspend fun scanSamba(draft: SambaSourceDraft, sourceId: String): ImportScanReport
