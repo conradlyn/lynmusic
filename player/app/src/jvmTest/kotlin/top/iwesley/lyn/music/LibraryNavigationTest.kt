@@ -131,6 +131,7 @@ class LibraryNavigationTest {
             track = track,
             showDuration = true,
             metadataNavigationEnabled = true,
+            preferredSourceFilter = LibrarySourceFilter.WEBDAV,
         )
         val mobileTargets = resolveTrackRowLibraryNavigationTargets(
             track = track,
@@ -144,11 +145,17 @@ class LibraryNavigationTest {
         )
 
         assertEquals(
-            LibraryNavigationTarget.Album(libraryAlbumId("Coldplay", "Parachutes")),
+            LibraryNavigationTarget.Album(
+                albumId = libraryAlbumId("Coldplay", "Parachutes"),
+                preferredSourceFilter = LibrarySourceFilter.WEBDAV,
+            ),
             desktopTargets.albumTarget,
         )
         assertEquals(
-            LibraryNavigationTarget.Artist(libraryArtistId("Coldplay")),
+            LibraryNavigationTarget.Artist(
+                artistId = libraryArtistId("Coldplay"),
+                preferredSourceFilter = LibrarySourceFilter.WEBDAV,
+            ),
             desktopTargets.artistTarget,
         )
         assertNull(mobileTargets.albumTarget)
@@ -158,29 +165,150 @@ class LibraryNavigationTest {
     }
 
     @Test
-    fun `resolve command resets filters when query is active`() {
+    fun `resolve command clears query before navigation`() {
         val result = resolveLibraryNavigationCommand(
             target = LibraryNavigationTarget.Artist(libraryArtistId("Coldplay")),
             query = "cold",
             selectedSourceFilter = LibrarySourceFilter.ALL,
+            availableSourceFilters = listOf(LibrarySourceFilter.ALL),
             filteredAlbums = emptyList(),
             filteredArtists = emptyList(),
         )
 
-        assertEquals(LibraryNavigationCommand.ResetFilters, result)
+        assertEquals(
+            LibraryNavigationCommand.ApplyContext(
+                sourceFilter = LibrarySourceFilter.ALL,
+                clearQuery = true,
+            ),
+            result,
+        )
     }
 
     @Test
-    fun `resolve command resets filters when source filter is not all`() {
+    fun `resolve command applies default all source for global targets`() {
         val result = resolveLibraryNavigationCommand(
             target = LibraryNavigationTarget.Album(libraryAlbumId("Coldplay", "Parachutes")),
             query = "",
             selectedSourceFilter = LibrarySourceFilter.LOCAL_FOLDER,
+            availableSourceFilters = listOf(LibrarySourceFilter.ALL, LibrarySourceFilter.LOCAL_FOLDER),
             filteredAlbums = emptyList(),
             filteredArtists = emptyList(),
         )
 
-        assertEquals(LibraryNavigationCommand.ResetFilters, result)
+        assertEquals(
+            LibraryNavigationCommand.ApplyContext(
+                sourceFilter = LibrarySourceFilter.ALL,
+                clearQuery = false,
+            ),
+            result,
+        )
+    }
+
+    @Test
+    fun `resolve command keeps library source when target prefers current source`() {
+        val albumId = libraryAlbumId("Coldplay", "Parachutes")
+
+        val result = resolveLibraryNavigationCommand(
+            target = LibraryNavigationTarget.Album(
+                albumId = albumId,
+                preferredSourceFilter = LibrarySourceFilter.NAVIDROME,
+            ),
+            query = "",
+            selectedSourceFilter = LibrarySourceFilter.NAVIDROME,
+            availableSourceFilters = listOf(LibrarySourceFilter.ALL, LibrarySourceFilter.NAVIDROME),
+            filteredAlbums = listOf(Album(id = albumId, title = "Parachutes", artistName = "Coldplay")),
+            filteredArtists = emptyList(),
+        )
+
+        val navigate = assertIs<LibraryNavigationCommand.Navigate>(result)
+        assertEquals(LibraryBrowserRootView.Albums, navigate.resolution.rootView)
+        assertEquals(albumId, navigate.resolution.selectedAlbumId)
+    }
+
+    @Test
+    fun `resolve command applies favorite source before opening album`() {
+        val albumId = libraryAlbumId("Coldplay", "Parachutes")
+        val target = LibraryNavigationTarget.Album(
+            albumId = albumId,
+            preferredSourceFilter = LibrarySourceFilter.WEBDAV,
+        )
+
+        val applyContext = resolveLibraryNavigationCommand(
+            target = target,
+            query = "",
+            selectedSourceFilter = LibrarySourceFilter.NAVIDROME,
+            availableSourceFilters = listOf(
+                LibrarySourceFilter.ALL,
+                LibrarySourceFilter.WEBDAV,
+                LibrarySourceFilter.NAVIDROME,
+            ),
+            filteredAlbums = emptyList(),
+            filteredArtists = emptyList(),
+        )
+
+        assertEquals(
+            LibraryNavigationCommand.ApplyContext(
+                sourceFilter = LibrarySourceFilter.WEBDAV,
+                clearQuery = false,
+            ),
+            applyContext,
+        )
+
+        val navigate = resolveLibraryNavigationCommand(
+            target = target,
+            query = "",
+            selectedSourceFilter = LibrarySourceFilter.WEBDAV,
+            availableSourceFilters = listOf(
+                LibrarySourceFilter.ALL,
+                LibrarySourceFilter.WEBDAV,
+                LibrarySourceFilter.NAVIDROME,
+            ),
+            filteredAlbums = listOf(Album(id = albumId, title = "Parachutes", artistName = "Coldplay")),
+            filteredArtists = emptyList(),
+        )
+
+        val navigation = assertIs<LibraryNavigationCommand.Navigate>(navigate)
+        assertEquals(LibraryBrowserRootView.Albums, navigation.resolution.rootView)
+        assertEquals(albumId, navigation.resolution.selectedAlbumId)
+    }
+
+    @Test
+    fun `resolve command falls back to all when preferred source is unavailable`() {
+        val albumId = libraryAlbumId("Coldplay", "Parachutes")
+        val target = LibraryNavigationTarget.Album(
+            albumId = albumId,
+            preferredSourceFilter = LibrarySourceFilter.EMBY,
+        )
+
+        val applyContext = resolveLibraryNavigationCommand(
+            target = target,
+            query = "",
+            selectedSourceFilter = LibrarySourceFilter.WEBDAV,
+            availableSourceFilters = listOf(LibrarySourceFilter.ALL, LibrarySourceFilter.WEBDAV),
+            filteredAlbums = emptyList(),
+            filteredArtists = emptyList(),
+        )
+
+        assertEquals(
+            LibraryNavigationCommand.ApplyContext(
+                sourceFilter = LibrarySourceFilter.ALL,
+                clearQuery = false,
+            ),
+            applyContext,
+        )
+
+        val navigate = resolveLibraryNavigationCommand(
+            target = target,
+            query = "",
+            selectedSourceFilter = LibrarySourceFilter.ALL,
+            availableSourceFilters = listOf(LibrarySourceFilter.ALL, LibrarySourceFilter.WEBDAV),
+            filteredAlbums = listOf(Album(id = albumId, title = "Parachutes", artistName = "Coldplay")),
+            filteredArtists = emptyList(),
+        )
+
+        val navigation = assertIs<LibraryNavigationCommand.Navigate>(navigate)
+        assertEquals(LibraryBrowserRootView.Albums, navigation.resolution.rootView)
+        assertEquals(albumId, navigation.resolution.selectedAlbumId)
     }
 
     @Test
@@ -191,6 +319,7 @@ class LibraryNavigationTest {
             target = LibraryNavigationTarget.Album(albumId),
             query = "",
             selectedSourceFilter = LibrarySourceFilter.ALL,
+            availableSourceFilters = listOf(LibrarySourceFilter.ALL),
             filteredAlbums = listOf(Album(id = albumId, title = "Parachutes", artistName = "Coldplay")),
             filteredArtists = emptyList(),
         )
@@ -209,6 +338,7 @@ class LibraryNavigationTest {
             target = LibraryNavigationTarget.Artist(artistId),
             query = "",
             selectedSourceFilter = LibrarySourceFilter.ALL,
+            availableSourceFilters = listOf(LibrarySourceFilter.ALL),
             filteredAlbums = emptyList(),
             filteredArtists = listOf(Artist(id = artistId, name = "Coldplay")),
         )
@@ -225,6 +355,7 @@ class LibraryNavigationTest {
             target = LibraryNavigationTarget.Album(libraryAlbumId("Coldplay", "Parachutes")),
             query = "",
             selectedSourceFilter = LibrarySourceFilter.ALL,
+            availableSourceFilters = listOf(LibrarySourceFilter.ALL),
             filteredAlbums = emptyList(),
             filteredArtists = emptyList(),
         )
@@ -240,6 +371,7 @@ class LibraryNavigationTest {
             target = LibraryNavigationTarget.Artist(libraryArtistId("Coldplay")),
             query = "",
             selectedSourceFilter = LibrarySourceFilter.ALL,
+            availableSourceFilters = listOf(LibrarySourceFilter.ALL),
             filteredAlbums = emptyList(),
             filteredArtists = emptyList(),
         )

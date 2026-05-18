@@ -296,9 +296,13 @@ internal fun resolveTrackRowLibraryNavigationTargets(
     track: Track,
     showDuration: Boolean,
     metadataNavigationEnabled: Boolean,
+    preferredSourceFilter: LibrarySourceFilter = LibrarySourceFilter.ALL,
 ): PlaybackLibraryNavigationTargets {
     return if (showDuration && metadataNavigationEnabled) {
-        deriveTrackLibraryNavigationTargets(track)
+        deriveTrackLibraryNavigationTargets(
+            track = track,
+            preferredSourceFilter = preferredSourceFilter,
+        )
     } else {
         PlaybackLibraryNavigationTargets(albumTarget = null, artistTarget = null)
     }
@@ -500,16 +504,17 @@ private fun LibraryBrowserTab(
                 target = target,
                 query = state.query,
                 selectedSourceFilter = state.selectedSourceFilter,
+                availableSourceFilters = state.availableSourceFilters,
                 filteredAlbums = state.filteredAlbums,
                 filteredArtists = state.filteredArtists,
             )
         ) {
-            LibraryNavigationCommand.ResetFilters -> {
-                if (state.query.isNotBlank()) {
+            is LibraryNavigationCommand.ApplyContext -> {
+                if (command.clearQuery && state.query.isNotBlank()) {
                     onSearchChanged("")
                 }
-                if (state.selectedSourceFilter != LibrarySourceFilter.ALL) {
-                    onSourceFilterChanged(LibrarySourceFilter.ALL)
+                if (state.selectedSourceFilter != command.sourceFilter) {
+                    onSourceFilterChanged(command.sourceFilter)
                 }
             }
 
@@ -567,6 +572,7 @@ private fun LibraryBrowserTab(
             track = track,
             showDuration = showDuration,
             metadataNavigationEnabled = onOpenLibraryNavigationTarget != null,
+            preferredSourceFilter = state.selectedSourceFilter,
         )
     }
     fun navigationTargetClick(target: LibraryNavigationTarget?): (() -> Unit)? {

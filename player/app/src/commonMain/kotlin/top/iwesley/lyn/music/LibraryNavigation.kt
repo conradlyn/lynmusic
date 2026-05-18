@@ -9,9 +9,15 @@ import top.iwesley.lyn.music.feature.library.libraryAlbumId
 import top.iwesley.lyn.music.feature.library.libraryArtistId
 
 internal sealed interface LibraryNavigationTarget {
-    data class Album(val albumId: String) : LibraryNavigationTarget
+    data class Album(
+        val albumId: String,
+        val preferredSourceFilter: LibrarySourceFilter = LibrarySourceFilter.ALL,
+    ) : LibraryNavigationTarget
 
-    data class Artist(val artistId: String) : LibraryNavigationTarget
+    data class Artist(
+        val artistId: String,
+        val preferredSourceFilter: LibrarySourceFilter = LibrarySourceFilter.ALL,
+    ) : LibraryNavigationTarget
 }
 
 internal data class PlaybackLibraryNavigationTargets(
@@ -26,7 +32,10 @@ internal data class LibraryNavigationResolution(
 )
 
 internal sealed interface LibraryNavigationCommand {
-    data object ResetFilters : LibraryNavigationCommand
+    data class ApplyContext(
+        val sourceFilter: LibrarySourceFilter,
+        val clearQuery: Boolean,
+    ) : LibraryNavigationCommand
 
     data class Navigate(val resolution: LibraryNavigationResolution) : LibraryNavigationCommand
 }
@@ -52,13 +61,35 @@ internal fun deriveTrackLibraryNavigationTargets(track: Track): PlaybackLibraryN
     )
 }
 
+internal fun deriveTrackLibraryNavigationTargets(
+    track: Track,
+    preferredSourceFilter: LibrarySourceFilter,
+): PlaybackLibraryNavigationTargets {
+    return deriveLibraryNavigationTargets(
+        artistName = normalizedLibraryNavigationValue(track.artistName),
+        albumTitle = normalizedLibraryNavigationValue(track.albumTitle),
+        preferredSourceFilter = preferredSourceFilter,
+    )
+}
+
 private fun deriveLibraryNavigationTargets(
     artistName: String?,
     albumTitle: String?,
+    preferredSourceFilter: LibrarySourceFilter = LibrarySourceFilter.ALL,
 ): PlaybackLibraryNavigationTargets {
     return PlaybackLibraryNavigationTargets(
-        albumTarget = albumTitle?.let { LibraryNavigationTarget.Album(libraryAlbumId(artistName, it)) },
-        artistTarget = artistName?.let { LibraryNavigationTarget.Artist(libraryArtistId(it)) },
+        albumTarget = albumTitle?.let {
+            LibraryNavigationTarget.Album(
+                albumId = libraryAlbumId(artistName, it),
+                preferredSourceFilter = preferredSourceFilter,
+            )
+        },
+        artistTarget = artistName?.let {
+            LibraryNavigationTarget.Artist(
+                artistId = libraryArtistId(it),
+                preferredSourceFilter = preferredSourceFilter,
+            )
+        },
     )
 }
 
@@ -66,11 +97,18 @@ internal fun resolveLibraryNavigationCommand(
     target: LibraryNavigationTarget,
     query: String,
     selectedSourceFilter: LibrarySourceFilter,
+    availableSourceFilters: List<LibrarySourceFilter>,
     filteredAlbums: List<Album>,
     filteredArtists: List<Artist>,
 ): LibraryNavigationCommand {
-    if (query.isNotBlank() || selectedSourceFilter != LibrarySourceFilter.ALL) {
-        return LibraryNavigationCommand.ResetFilters
+    val targetSourceFilter = target.navigationSourceFilter
+        .takeIf { it == LibrarySourceFilter.ALL || it in availableSourceFilters }
+        ?: LibrarySourceFilter.ALL
+    if (query.isNotBlank() || selectedSourceFilter != targetSourceFilter) {
+        return LibraryNavigationCommand.ApplyContext(
+            sourceFilter = targetSourceFilter,
+            clearQuery = query.isNotBlank(),
+        )
     }
     return LibraryNavigationCommand.Navigate(
         when (target) {
@@ -94,6 +132,12 @@ internal fun resolveLibraryNavigationCommand(
         },
     )
 }
+
+private val LibraryNavigationTarget.navigationSourceFilter: LibrarySourceFilter
+    get() = when (this) {
+        is LibraryNavigationTarget.Album -> preferredSourceFilter
+        is LibraryNavigationTarget.Artist -> preferredSourceFilter
+    }
 
 private fun normalizedLibraryNavigationValue(value: String?): String? {
     return value?.trim()?.takeIf { it.isNotBlank() }
