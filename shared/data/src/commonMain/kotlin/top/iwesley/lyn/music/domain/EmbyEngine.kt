@@ -45,6 +45,7 @@ private const val EMBY_CLIENT_NAME = "LynMusic"
 private const val EMBY_DEVICE_NAME = "LynMusic"
 private const val EMBY_VERSION = "1.0.0"
 private const val EMBY_PAGE_SIZE = 200
+private const val EMBY_IMPORT_PAGE_SIZE = 100
 private val embyJson = Json { ignoreUnknownKeys = true }
 
 const val EMBY_LYRICS_SOURCE_ID = "emby-lyrics"
@@ -126,6 +127,7 @@ suspend fun authenticateEmby(
     deviceId: String,
     httpClient: LyricsHttpClient,
     logger: DiagnosticLogger = NoopDiagnosticLogger,
+    timeoutMillis: Long? = null,
 ): EmbyCredential {
     require(draft.username.isNotBlank()) { "请填写 Emby 用户名。" }
     require(draft.password.isNotBlank()) { "请填写 Emby 密码。" }
@@ -144,6 +146,7 @@ suspend fun authenticateEmby(
                 "Pw" to JsonPrimitive(draft.password),
             ),
         ).toString(),
+        timeoutMillis = timeoutMillis,
     )
     logEmbyRequest(logger, "AuthenticateByName", request.url)
     val response = httpClient.request(request).getOrElse { throwable ->
@@ -163,8 +166,9 @@ suspend fun testEmbyConnection(
     deviceId: String,
     httpClient: LyricsHttpClient,
     logger: DiagnosticLogger = NoopDiagnosticLogger,
+    timeoutMillis: Long? = null,
 ): EmbyCredential {
-    return authenticateEmby(draft, deviceId, httpClient, logger)
+    return authenticateEmby(draft, deviceId, httpClient, logger, timeoutMillis)
 }
 
 suspend fun testEmbyConnection(
@@ -173,6 +177,7 @@ suspend fun testEmbyConnection(
     deviceId: String,
     httpClient: LyricsHttpClient,
     logger: DiagnosticLogger = NoopDiagnosticLogger,
+    timeoutMillis: Long? = null,
 ) {
     require(credential.userId.isNotBlank()) { "Emby 用户 ID 为空。" }
     require(credential.accessToken.isNotBlank()) { "Emby token 为空。" }
@@ -197,6 +202,7 @@ suspend fun testEmbyConnection(
         body = null,
         operation = "ConnectionTest",
         logger = logger,
+        timeoutMillis = timeoutMillis,
     )
 }
 
@@ -209,6 +215,7 @@ suspend fun scanEmbyLibrary(
     supportedImportExtensions: Set<String>,
     logger: DiagnosticLogger = NoopDiagnosticLogger,
     progressSink: ImportScanProgressSink = ImportScanProgressSink.NoOp,
+    timeoutMillis: Long? = null,
 ): ImportScanReport {
     val baseUrl = normalizeEmbyBaseUrl(draft.baseUrl)
     require(credential.userId.isNotBlank()) { "Emby 用户 ID 为空。" }
@@ -228,6 +235,7 @@ suspend fun scanEmbyLibrary(
             startIndex = startIndex,
             httpClient = httpClient,
             logger = logger,
+            timeoutMillis = timeoutMillis,
         )
         totalTrackCount = page.totalRecordCount
         progressSink.onProgress(
@@ -775,6 +783,7 @@ private suspend fun requestEmbyItemsPage(
     startIndex: Int,
     httpClient: LyricsHttpClient,
     logger: DiagnosticLogger,
+    timeoutMillis: Long? = null,
 ): EmbyItemsPage {
     val url = URLBuilder(baseUrl).apply {
         appendPathSegments("Users", credential.userId, "Items")
@@ -785,7 +794,7 @@ private suspend fun requestEmbyItemsPage(
         parameters.append("EnableImages", "true")
         parameters.append("EnableImageTypes", "Primary")
         parameters.append("StartIndex", startIndex.toString())
-        parameters.append("Limit", EMBY_PAGE_SIZE.toString())
+        parameters.append("Limit", EMBY_IMPORT_PAGE_SIZE.toString())
     }.buildString()
     val response = requestEmbyJson(
         httpClient = httpClient,
@@ -796,6 +805,7 @@ private suspend fun requestEmbyItemsPage(
         body = null,
         operation = "Items",
         logger = logger,
+        timeoutMillis = timeoutMillis,
     )
     val items = response["Items"].asObjectList().map { it.toEmbyAudioItem() }
     return EmbyItemsPage(
@@ -974,6 +984,7 @@ private suspend fun requestEmbyJson(
     body: String?,
     operation: String,
     logger: DiagnosticLogger,
+    timeoutMillis: Long? = null,
 ): JsonObject {
     return parseEmbyObject(
         requestEmbyText(
@@ -985,6 +996,7 @@ private suspend fun requestEmbyJson(
             body = body,
             operation = operation,
             logger = logger,
+            timeoutMillis = timeoutMillis,
         ),
         operation,
     )
@@ -999,6 +1011,7 @@ private suspend fun requestEmbyText(
     body: String?,
     operation: String,
     logger: DiagnosticLogger,
+    timeoutMillis: Long? = null,
 ): String {
     return requestEmbyTextOrNull(
         httpClient = httpClient,
@@ -1010,6 +1023,7 @@ private suspend fun requestEmbyText(
         operation = operation,
         logger = logger,
         notFoundAsNull = false,
+        timeoutMillis = timeoutMillis,
     ) ?: error("Emby $operation 返回为空。")
 }
 
@@ -1023,6 +1037,7 @@ private suspend fun requestEmbyTextOrNull(
     operation: String,
     logger: DiagnosticLogger,
     notFoundAsNull: Boolean,
+    timeoutMillis: Long? = null,
 ): String? {
     val request = LyricsRequest(
         method = method,
@@ -1034,6 +1049,7 @@ private suspend fun requestEmbyTextOrNull(
             if (body != null) put("Content-Type", "application/json")
         },
         body = body,
+        timeoutMillis = timeoutMillis,
     )
     logEmbyRequest(logger, operation, request.url)
     val response = httpClient.request(request).getOrElse { throwable ->

@@ -283,6 +283,7 @@ suspend fun scanNavidromeLibrary(
     supportedImportExtensions: Set<String>,
     logger: DiagnosticLogger = NoopDiagnosticLogger,
     progressSink: ImportScanProgressSink = ImportScanProgressSink.NoOp,
+    timeoutMillis: Long? = null,
 ): ImportScanReport {
     val baseUrl = normalizeNavidromeBaseUrl(draft.baseUrl)
     require(draft.username.isNotBlank()) { "请填写 Navidrome 用户名。" }
@@ -300,6 +301,7 @@ suspend fun scanNavidromeLibrary(
         supportedImportExtensions = supportedImportExtensions,
         logger = logger,
         progressSink = progressSink,
+        timeoutMillis = timeoutMillis,
     )
 }
 
@@ -310,6 +312,7 @@ suspend fun scanSubsonicLibrary(
     supportedImportExtensions: Set<String>,
     logger: DiagnosticLogger = NoopDiagnosticLogger,
     progressSink: ImportScanProgressSink = ImportScanProgressSink.NoOp,
+    timeoutMillis: Long? = null,
 ): ImportScanReport {
     val baseUrl = normalizeSubsonicBaseUrl(draft.baseUrl)
     val resolved = prepareSubsonicResolvedSource(
@@ -327,6 +330,7 @@ suspend fun scanSubsonicLibrary(
         supportedImportExtensions = supportedImportExtensions,
         logger = logger,
         progressSink = progressSink,
+        timeoutMillis = timeoutMillis,
     )
 }
 
@@ -337,17 +341,18 @@ private suspend fun scanSubsonicCompatibleLibrary(
     supportedImportExtensions: Set<String>,
     logger: DiagnosticLogger,
     progressSink: ImportScanProgressSink,
+    timeoutMillis: Long? = null,
 ): ImportScanReport {
-    val artistIds = requestNavidromeArtistIds(httpClient, source)
+    val artistIds = requestNavidromeArtistIds(httpClient, source, timeoutMillis)
     val tracks = mutableListOf<ImportedTrackCandidate>()
     val failures = mutableListOf<top.iwesley.lyn.music.core.model.ImportScanFailure>()
     val seenAlbumIds = linkedSetOf<String>()
     val seenSongIds = linkedSetOf<String>()
     var discoveredAudioFileCount = 0
     artistIds.forEach { artistId ->
-        requestNavidromeAlbumIds(httpClient, source, artistId).forEach { albumId ->
+        requestNavidromeAlbumIds(httpClient, source, artistId, timeoutMillis).forEach { albumId ->
             if (!seenAlbumIds.add(albumId)) return@forEach
-            requestNavidromeAlbumSongs(httpClient, source, albumId).forEach { candidate ->
+            requestNavidromeAlbumSongs(httpClient, source, albumId, timeoutMillis).forEach { candidate ->
                 if (candidate.songId.isNotBlank() && !seenSongIds.add(candidate.songId)) {
                     return@forEach
                 }
@@ -389,6 +394,7 @@ suspend fun testNavidromeConnection(
     draft: NavidromeSourceDraft,
     httpClient: LyricsHttpClient,
     logger: DiagnosticLogger = NoopDiagnosticLogger,
+    timeoutMillis: Long? = null,
 ) {
     require(draft.username.isNotBlank()) { "请填写 Navidrome 用户名。" }
     require(draft.password.isNotBlank()) { "请填写 Navidrome 密码。" }
@@ -404,6 +410,7 @@ suspend fun testNavidromeConnection(
         source = resolved,
         endpoint = "ping",
         logger = logger,
+        timeoutMillis = timeoutMillis,
     )
 }
 
@@ -411,6 +418,7 @@ suspend fun testSubsonicConnection(
     draft: SubsonicSourceDraft,
     httpClient: LyricsHttpClient,
     logger: DiagnosticLogger = NoopDiagnosticLogger,
+    timeoutMillis: Long? = null,
 ) {
     val resolved = prepareSubsonicResolvedSource(
         baseUrl = normalizeSubsonicBaseUrl(draft.baseUrl),
@@ -425,6 +433,7 @@ suspend fun testSubsonicConnection(
         source = resolved,
         endpoint = "ping",
         logger = logger,
+        timeoutMillis = timeoutMillis,
     )
 }
 
@@ -775,11 +784,13 @@ private suspend fun resolveSubsonicCompatibleSource(
 private suspend fun requestNavidromeArtistIds(
     httpClient: LyricsHttpClient,
     source: NavidromeResolvedSource,
+    timeoutMillis: Long? = null,
 ): List<String> {
     val response = requestNavidromeJson(
         httpClient = httpClient,
         source = source,
         endpoint = "getArtists",
+        timeoutMillis = timeoutMillis,
     )
     return response["artists"].asObject("artists")["index"].asObjectList()
         .flatMap { index -> index["artist"].asObjectList() }
@@ -790,12 +801,14 @@ private suspend fun requestNavidromeAlbumIds(
     httpClient: LyricsHttpClient,
     source: NavidromeResolvedSource,
     artistId: String,
+    timeoutMillis: Long? = null,
 ): List<String> {
     val response = requestNavidromeJson(
         httpClient = httpClient,
         source = source,
         endpoint = "getArtist",
         parameters = mapOf("id" to artistId),
+        timeoutMillis = timeoutMillis,
     )
     return response["artist"].asObject("artist")["album"].asObjectList()
         .mapNotNull { album -> album.string("id") }
@@ -805,12 +818,14 @@ private suspend fun requestNavidromeAlbumSongs(
     httpClient: LyricsHttpClient,
     source: NavidromeResolvedSource,
     albumId: String,
+    timeoutMillis: Long? = null,
 ): List<NavidromeSongCandidate> {
     val response = requestNavidromeJson(
         httpClient = httpClient,
         source = source,
         endpoint = "getAlbum",
         parameters = mapOf("id" to albumId),
+        timeoutMillis = timeoutMillis,
     )
     val album = response["album"].asObject("album")
     val albumTitle = album.string("name") ?: album.string("title") ?: album.string("album")
@@ -874,6 +889,7 @@ internal suspend fun requestNavidromeJson(
     parameters: Map<String, String> = emptyMap(),
     logger: DiagnosticLogger = NoopDiagnosticLogger,
     logContext: String? = null,
+    timeoutMillis: Long? = null,
 ): JsonObject {
     val selector = source.addressSelector
     val sourceId = source.sourceId
@@ -896,6 +912,7 @@ internal suspend fun requestNavidromeJson(
                 parameters = parameters,
                 logger = logger,
                 logContext = logContext,
+                timeoutMillis = timeoutMillis,
             )
         }
     }
@@ -906,6 +923,7 @@ internal suspend fun requestNavidromeJson(
         parameters = parameters,
         logger = logger,
         logContext = logContext,
+        timeoutMillis = timeoutMillis,
     )
 }
 
@@ -916,6 +934,7 @@ private suspend fun requestNavidromeJsonWithoutAddressFallback(
     parameters: Map<String, String>,
     logger: DiagnosticLogger,
     logContext: String?,
+    timeoutMillis: Long? = null,
 ): JsonObject {
     val request = LyricsRequest(
         method = RequestMethod.GET,
@@ -928,6 +947,7 @@ private suspend fun requestNavidromeJsonWithoutAddressFallback(
             parameters = parameters,
             includeJsonFormat = true,
         ),
+        timeoutMillis = timeoutMillis,
     )
     if (logger !== NoopDiagnosticLogger) {
         logger.log(

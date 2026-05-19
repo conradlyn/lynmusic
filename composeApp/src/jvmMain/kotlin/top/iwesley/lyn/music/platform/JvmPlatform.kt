@@ -4,6 +4,7 @@ import androidx.room.Room
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.request
 import io.ktor.client.request.setBody
 import io.ktor.client.request.url
@@ -56,6 +57,7 @@ import top.iwesley.lyn.music.core.model.DesktopVlcPreferencesStore
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
 import top.iwesley.lyn.music.core.model.EmbyCredential
 import top.iwesley.lyn.music.core.model.EmbySourceDraft
+import top.iwesley.lyn.music.core.model.IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS
 import top.iwesley.lyn.music.core.model.ImportScanFailure
 import top.iwesley.lyn.music.core.model.ImportScanPhase
 import top.iwesley.lyn.music.core.model.ImportScanProgress
@@ -323,6 +325,13 @@ private class JvmLyricsHttpClient : LyricsHttpClient {
                 }
                 request.headers.forEach { (key, value) -> headers.append(key, value) }
                 request.body?.let { setBody(it) }
+                request.timeoutMillis?.takeIf { it > 0L }?.let { timeoutMillis ->
+                    timeout {
+                        requestTimeoutMillis = timeoutMillis
+                        connectTimeoutMillis = timeoutMillis
+                        socketTimeoutMillis = timeoutMillis
+                    }
+                }
             }
             LyricsHttpResponse(
                 statusCode = response.status.value,
@@ -1111,7 +1120,12 @@ private class JvmImportSourceGateway(
     }
 
     override suspend fun testNavidrome(draft: NavidromeSourceDraft) {
-        testNavidromeConnection(draft, navidromeHttpClient, logger)
+        testNavidromeConnection(
+            draft = draft,
+            httpClient = navidromeHttpClient,
+            logger = logger,
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
+        )
     }
 
     override suspend fun scanNavidrome(draft: NavidromeSourceDraft, sourceId: String): ImportScanReport {
@@ -1130,11 +1144,17 @@ private class JvmImportSourceGateway(
             supportedImportExtensions = JVM_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
             logger = logger,
             progressSink = progressSink,
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
         )
     }
 
     override suspend fun testSubsonic(draft: SubsonicSourceDraft) {
-        testSubsonicConnection(draft, navidromeHttpClient, logger)
+        testSubsonicConnection(
+            draft = draft,
+            httpClient = navidromeHttpClient,
+            logger = logger,
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
+        )
     }
 
     override suspend fun scanSubsonic(draft: SubsonicSourceDraft, sourceId: String): ImportScanReport {
@@ -1153,11 +1173,18 @@ private class JvmImportSourceGateway(
             supportedImportExtensions = JVM_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
             logger = logger,
             progressSink = progressSink,
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
         )
     }
 
     override suspend fun testEmby(draft: EmbySourceDraft, deviceId: String): EmbyCredential {
-        return testEmbyConnection(draft, deviceId, navidromeHttpClient, logger)
+        return testEmbyConnection(
+            draft = draft,
+            deviceId = deviceId,
+            httpClient = navidromeHttpClient,
+            logger = logger,
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
+        )
     }
 
     override suspend fun testEmbyCredential(
@@ -1165,7 +1192,14 @@ private class JvmImportSourceGateway(
         credential: EmbyCredential,
         deviceId: String,
     ) {
-        testEmbyConnection(draft, credential, deviceId, navidromeHttpClient, logger)
+        testEmbyConnection(
+            draft = draft,
+            credential = credential,
+            deviceId = deviceId,
+            httpClient = navidromeHttpClient,
+            logger = logger,
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
+        )
     }
 
     override suspend fun scanEmby(
@@ -1193,6 +1227,7 @@ private class JvmImportSourceGateway(
             supportedImportExtensions = JVM_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
             logger = logger,
             progressSink = progressSink,
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
         )
     }
 

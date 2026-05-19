@@ -48,6 +48,7 @@ class LyricsEngineTest {
         assertTrue(request.url.contains("title=Blue%20Sky"))
         assertTrue(request.url.contains("artist=Nova"))
         assertTrue(request.url.contains("duration=218"))
+        assertEquals(null, request.timeoutMillis)
     }
 
     @Test

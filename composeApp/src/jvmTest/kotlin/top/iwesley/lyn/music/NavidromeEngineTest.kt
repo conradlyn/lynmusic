@@ -7,6 +7,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
+import top.iwesley.lyn.music.core.model.IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS
 import top.iwesley.lyn.music.core.model.ImportScanPhase
 import top.iwesley.lyn.music.core.model.ImportScanProgress
 import top.iwesley.lyn.music.core.model.ImportScanProgressSink
@@ -89,6 +90,7 @@ class NavidromeEngineTest {
             httpClient = client,
             supportedImportExtensions = setOf("flac"),
             progressSink = ImportScanProgressSink { progressEvents += it },
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
         )
 
         val candidate = report.tracks.single()
@@ -120,6 +122,14 @@ class NavidromeEngineTest {
         assertEquals("Artist A/Album A/Blue.flac", candidate.relativePath)
         assertEquals("lynmusic-navidrome://nav-source/song-1", candidate.mediaLocator)
         assertEquals("lynmusic-navidrome-cover://nav-source/cover-1", candidate.artworkLocator)
+        assertEquals(
+            listOf(
+                IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
+                IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
+                IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
+            ),
+            client.requests.map { it.timeoutMillis },
+        )
     }
 
     @Test
@@ -216,10 +226,10 @@ class NavidromeEngineTest {
 
     @Test
     fun `request lyrics uses token auth without plaintext password`() = runTest {
-        var capturedUrl: String? = null
+        var capturedRequest: LyricsRequest? = null
         val client = object : LyricsHttpClient {
             override suspend fun request(request: LyricsRequest): Result<LyricsHttpResponse> {
-                capturedUrl = request.url
+                capturedRequest = request
                 return Result.success(
                     LyricsHttpResponse(
                         statusCode = 200,
@@ -246,7 +256,8 @@ class NavidromeEngineTest {
             ),
         )
 
-        val requestUrl = requireNotNull(capturedUrl)
+        val request = requireNotNull(capturedRequest)
+        val requestUrl = request.url
         val parsed = requireNotNull(parseUrl(requestUrl))
         assertNotNull(lyrics)
         assertEquals(NAVIDROME_LYRICS_SOURCE_ID, lyrics.sourceId)
@@ -256,6 +267,7 @@ class NavidromeEngineTest {
         assertEquals("json", parsed.parameters["f"])
         assertFalse(requestUrl.contains("plain-pass"))
         assertFalse(parsed.parameters.names().contains("p"))
+        assertEquals(null, request.timeoutMillis)
         assertTrue(lyrics.isSynced)
     }
 
@@ -296,7 +308,10 @@ class NavidromeEngineTest {
 private class RoutingNavidromeHttpClient(
     private val responses: Map<String, String>,
 ) : LyricsHttpClient {
+    val requests = mutableListOf<LyricsRequest>()
+
     override suspend fun request(request: LyricsRequest): Result<LyricsHttpResponse> {
+        requests += request
         val endpoint = requireNotNull(parseUrl(request.url)).encodedPath.substringAfterLast('/')
         val body = responses[endpoint]
             ?: return Result.failure(IllegalArgumentException("Unexpected Navidrome endpoint: $endpoint"))

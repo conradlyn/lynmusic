@@ -4,6 +4,7 @@ import androidx.room.Room
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.darwin.Darwin
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.request
 import io.ktor.client.request.setBody
 import io.ktor.client.request.url
@@ -28,6 +29,7 @@ import top.iwesley.lyn.music.core.model.ConsoleDiagnosticLogger
 import top.iwesley.lyn.music.core.model.CompactPlayerLyricsPreferencesStore
 import top.iwesley.lyn.music.core.model.EmbyCredential
 import top.iwesley.lyn.music.core.model.EmbySourceDraft
+import top.iwesley.lyn.music.core.model.IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS
 import top.iwesley.lyn.music.core.model.ImportScanReport
 import top.iwesley.lyn.music.core.model.ImportScanProgressSink
 import top.iwesley.lyn.music.core.model.ImportSourceGateway
@@ -266,6 +268,13 @@ private class IosLyricsHttpClient : LyricsHttpClient {
                 }
                 request.headers.forEach { (key, value) -> headers.append(key, value) }
                 request.body?.let { setBody(it) }
+                request.timeoutMillis?.takeIf { it > 0L }?.let { timeoutMillis ->
+                    timeout {
+                        requestTimeoutMillis = timeoutMillis
+                        connectTimeoutMillis = timeoutMillis
+                        socketTimeoutMillis = timeoutMillis
+                    }
+                }
             }
             LyricsHttpResponse(
                 statusCode = response.status.value,
@@ -612,7 +621,11 @@ private class IosImportSourceGateway(
     }
 
     override suspend fun testNavidrome(draft: NavidromeSourceDraft) {
-        testNavidromeConnection(draft, navidromeHttpClient)
+        testNavidromeConnection(
+            draft = draft,
+            httpClient = navidromeHttpClient,
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
+        )
     }
 
     override suspend fun scanNavidrome(draft: NavidromeSourceDraft, sourceId: String): ImportScanReport {
@@ -630,11 +643,16 @@ private class IosImportSourceGateway(
             httpClient = navidromeHttpClient,
             supportedImportExtensions = IOS_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
             progressSink = progressSink,
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
         )
     }
 
     override suspend fun testSubsonic(draft: SubsonicSourceDraft) {
-        testSubsonicConnection(draft, navidromeHttpClient)
+        testSubsonicConnection(
+            draft = draft,
+            httpClient = navidromeHttpClient,
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
+        )
     }
 
     override suspend fun scanSubsonic(draft: SubsonicSourceDraft, sourceId: String): ImportScanReport {
@@ -652,11 +670,17 @@ private class IosImportSourceGateway(
             httpClient = navidromeHttpClient,
             supportedImportExtensions = IOS_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
             progressSink = progressSink,
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
         )
     }
 
     override suspend fun testEmby(draft: EmbySourceDraft, deviceId: String): EmbyCredential {
-        return testEmbyConnection(draft, deviceId, navidromeHttpClient)
+        return testEmbyConnection(
+            draft = draft,
+            deviceId = deviceId,
+            httpClient = navidromeHttpClient,
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
+        )
     }
 
     override suspend fun testEmbyCredential(
@@ -664,7 +688,13 @@ private class IosImportSourceGateway(
         credential: EmbyCredential,
         deviceId: String,
     ) {
-        testEmbyConnection(draft, credential, deviceId, navidromeHttpClient)
+        testEmbyConnection(
+            draft = draft,
+            credential = credential,
+            deviceId = deviceId,
+            httpClient = navidromeHttpClient,
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
+        )
     }
 
     override suspend fun scanEmby(
@@ -691,6 +721,7 @@ private class IosImportSourceGateway(
             httpClient = navidromeHttpClient,
             supportedImportExtensions = IOS_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
             progressSink = progressSink,
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
         )
     }
 }

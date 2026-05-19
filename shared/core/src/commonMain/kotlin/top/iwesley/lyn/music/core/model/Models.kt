@@ -456,7 +456,10 @@ data class LyricsRequest(
     val url: String,
     val headers: Map<String, String> = emptyMap(),
     val body: String? = null,
+    val timeoutMillis: Long? = null,
 )
+
+const val IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS = 60_000L
 
 data class LyricsHttpResponse(
     val statusCode: Int,

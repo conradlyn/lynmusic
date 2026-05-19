@@ -10,6 +10,7 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import top.iwesley.lyn.music.core.model.EmbyCredential
 import top.iwesley.lyn.music.core.model.EmbySourceDraft
+import top.iwesley.lyn.music.core.model.IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS
 import top.iwesley.lyn.music.core.model.ImportScanPhase
 import top.iwesley.lyn.music.core.model.ImportScanProgress
 import top.iwesley.lyn.music.core.model.ImportScanProgressSink
@@ -42,6 +43,7 @@ class EmbyEngineTest {
             assertTrue(request.headers["X-Emby-Authorization"].orEmpty().contains("Client=\"LynMusic\""))
             assertTrue(request.headers["X-Emby-Authorization"].orEmpty().contains("DeviceId=\"device-1\""))
             assertEquals("""{"Username":"demo","Pw":"secret"}""", request.body)
+            assertEquals(IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS, request.timeoutMillis)
             LyricsHttpResponse(
                 statusCode = 200,
                 body = """{"AccessToken":"access-token","User":{"Id":"user-1"}}""",
@@ -57,6 +59,7 @@ class EmbyEngineTest {
             ),
             deviceId = "device-1",
             httpClient = httpClient,
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
         )
 
         assertEquals(EmbyCredential(userId = "user-1", accessToken = "access-token"), credential)
@@ -73,6 +76,7 @@ class EmbyEngineTest {
             assertEquals("1", request.queryParam("Limit"))
             assertEquals("access-token", request.headers["X-Emby-Token"])
             assertTrue(request.headers["X-Emby-Authorization"].orEmpty().contains("DeviceId=\"device-1\""))
+            assertEquals(IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS, request.timeoutMillis)
             LyricsHttpResponse(
                 statusCode = 200,
                 body = """{"Items":[],"TotalRecordCount":0}""",
@@ -89,6 +93,7 @@ class EmbyEngineTest {
             credential = EmbyCredential(userId = "user-1", accessToken = "access-token"),
             deviceId = "device-1",
             httpClient = httpClient,
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
         )
 
         assertEquals(1, httpClient.requests.size)
@@ -103,9 +108,10 @@ class EmbyEngineTest {
             assertEquals("Audio", request.queryParam("MediaTypes"))
             assertEquals("Audio", request.queryParam("IncludeItemTypes"))
             assertEquals("0", request.queryParam("StartIndex"))
-            assertEquals("200", request.queryParam("Limit"))
+            assertEquals("100", request.queryParam("Limit"))
             assertEquals("access-token", request.headers["X-Emby-Token"])
             assertTrue(request.headers["X-Emby-Authorization"].orEmpty().contains("DeviceId=\"device-1\""))
+            assertEquals(IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS, request.timeoutMillis)
             LyricsHttpResponse(
                 statusCode = 200,
                 body = """
@@ -165,6 +171,7 @@ class EmbyEngineTest {
             httpClient = httpClient,
             supportedImportExtensions = setOf("flac", "mp3"),
             progressSink = ImportScanProgressSink { progressEvents += it },
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
         )
 
         assertEquals(2, report.discoveredAudioFileCount)
