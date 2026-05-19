@@ -7,6 +7,9 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
+import top.iwesley.lyn.music.core.model.ImportScanPhase
+import top.iwesley.lyn.music.core.model.ImportScanProgress
+import top.iwesley.lyn.music.core.model.ImportScanProgressSink
 import top.iwesley.lyn.music.core.model.LyricsHttpClient
 import top.iwesley.lyn.music.core.model.LyricsHttpResponse
 import top.iwesley.lyn.music.core.model.LyricsRequest
@@ -74,6 +77,7 @@ class NavidromeEngineTest {
             ),
         )
 
+        val progressEvents = mutableListOf<ImportScanProgress>()
         val report = scanNavidromeLibrary(
             draft = NavidromeSourceDraft(
                 label = "Navidrome",
@@ -84,12 +88,24 @@ class NavidromeEngineTest {
             sourceId = "nav-source",
             httpClient = client,
             supportedImportExtensions = setOf("flac"),
+            progressSink = ImportScanProgressSink { progressEvents += it },
         )
 
         val candidate = report.tracks.single()
         assertEquals(1, report.discoveredAudioFileCount)
+        assertEquals(null, report.totalTrackCount)
         assertTrue(report.failures.isEmpty())
         assertTrue(report.warnings.isEmpty())
+        assertEquals(
+            listOf(
+                ImportScanProgress(
+                    sourceId = "nav-source",
+                    phase = ImportScanPhase.Scanning,
+                    importedTrackCount = 1,
+                ),
+            ),
+            progressEvents,
+        )
         assertEquals("Blue", candidate.title)
         assertEquals("Artist A", candidate.artistName)
         assertEquals("Album A", candidate.albumTitle)

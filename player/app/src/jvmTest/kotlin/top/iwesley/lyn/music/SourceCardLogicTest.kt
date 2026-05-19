@@ -5,6 +5,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import top.iwesley.lyn.music.core.model.ImportScanPhase
+import top.iwesley.lyn.music.core.model.ImportScanProgress
 import top.iwesley.lyn.music.core.model.ImportScanFailure
 import top.iwesley.lyn.music.core.model.ImportScanSummary
 
@@ -77,5 +79,53 @@ class SourceCardLogicTest {
 
         requireNotNull(presentation)
         assertFalse(presentation.showFailuresButton)
+    }
+
+    @Test
+    fun `scan progress label omits total when source total is unknown`() {
+        val progress = ImportScanProgress(
+            sourceId = "nav-1",
+            phase = ImportScanPhase.Scanning,
+            importedTrackCount = 128,
+        )
+
+        assertEquals("已导入第 128 首", importScanProgressLabel(progress))
+        assertNull(importScanProgressFraction(progress))
+    }
+
+    @Test
+    fun `scan progress label includes total when source total is known`() {
+        val progress = ImportScanProgress(
+            sourceId = "emby-1",
+            phase = ImportScanPhase.Scanning,
+            importedTrackCount = 128,
+            totalTrackCount = 430,
+        )
+
+        assertEquals("正在导入第 128/430 首", importScanProgressLabel(progress))
+        assertEquals(128f / 430f, importScanProgressFraction(progress))
+    }
+
+    @Test
+    fun `persisting progress label shows library update state`() {
+        val progress = ImportScanProgress(
+            sourceId = "emby-1",
+            phase = ImportScanPhase.Persisting,
+            importedTrackCount = 430,
+            totalTrackCount = 430,
+        )
+
+        assertEquals("正在更新曲库…", importScanProgressLabel(progress))
+        assertNull(importScanProgressFraction(progress))
+    }
+
+    @Test
+    fun `remote source editor shows current imported track count`() {
+        assertEquals("当前已导入 32 首歌曲", remoteSourceEditorTrackCountLabel(32))
+    }
+
+    @Test
+    fun `remote source editor shows empty imported track count state`() {
+        assertEquals("当前还没有导入歌曲", remoteSourceEditorTrackCountLabel(null))
     }
 }

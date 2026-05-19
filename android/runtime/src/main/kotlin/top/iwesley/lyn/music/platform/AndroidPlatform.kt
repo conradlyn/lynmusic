@@ -77,6 +77,9 @@ import top.iwesley.lyn.music.core.model.EmbyCredential
 import top.iwesley.lyn.music.core.model.EmbySourceDraft
 import top.iwesley.lyn.music.core.model.GlobalDiagnosticLogger
 import top.iwesley.lyn.music.core.model.ImportScanFailure
+import top.iwesley.lyn.music.core.model.ImportScanPhase
+import top.iwesley.lyn.music.core.model.ImportScanProgress
+import top.iwesley.lyn.music.core.model.ImportScanProgressSink
 import top.iwesley.lyn.music.core.model.ImportScanReport
 import top.iwesley.lyn.music.core.model.ImportSourceGateway
 import top.iwesley.lyn.music.core.model.ImportSourceType
@@ -1328,6 +1331,14 @@ private class AndroidImportSourceGateway(
     }
 
     override suspend fun scanLocalFolder(selection: LocalFolderSelection, sourceId: String): ImportScanReport {
+        return scanLocalFolder(selection, sourceId, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun scanLocalFolder(
+        selection: LocalFolderSelection,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
         val directLocalFileAccess = hasDirectLocalFileAccess(activity)
         resolveAndroidLocalTrackFile(selection.persistentReference)
             ?.takeIf { it.isDirectory }
@@ -1339,6 +1350,7 @@ private class AndroidImportSourceGateway(
                         root = root,
                         sourceId = sourceId,
                         branch = branch,
+                        progressSink = progressSink,
                     )
                 }
                 logger.warn(LOCAL_IMPORT_LOG_TAG) {
@@ -1360,6 +1372,7 @@ private class AndroidImportSourceGateway(
                         root = root,
                         sourceId = sourceId,
                         branch = "direct-permission",
+                        progressSink = progressSink,
                     )
                 }.onFailure { throwable ->
                     logger.warn(LOCAL_IMPORT_LOG_TAG) {
@@ -1374,6 +1387,7 @@ private class AndroidImportSourceGateway(
                             treeUri = treeUri,
                             sourceId = sourceId,
                             branch = "saf-tree",
+                            progressSink = progressSink,
                         )
                     } else {
                         report
@@ -1383,6 +1397,7 @@ private class AndroidImportSourceGateway(
                         treeUri = treeUri,
                         sourceId = sourceId,
                         branch = "saf-tree",
+                        progressSink = progressSink,
                     )
                 }
         }
@@ -1390,6 +1405,7 @@ private class AndroidImportSourceGateway(
             treeUri = treeUri,
             sourceId = sourceId,
             branch = "saf-tree",
+            progressSink = progressSink,
         )
     }
 
@@ -1427,6 +1443,14 @@ private class AndroidImportSourceGateway(
     }
 
     override suspend fun scanSamba(draft: SambaSourceDraft, sourceId: String): ImportScanReport {
+        return scanSamba(draft, sourceId, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun scanSamba(
+        draft: SambaSourceDraft,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
         val sambaPath = parseSambaPath(draft.path)
             ?: error("SMB 路径至少需要包含共享名，例如 Media 或 Media/Music。")
         val endpoint = formatSambaEndpoint(draft.server, draft.port, draft.path)
@@ -1454,6 +1478,7 @@ private class AndroidImportSourceGateway(
                     sourceId = sourceId,
                     sink = tracks,
                     failures = failures,
+                    progressSink = progressSink,
                 )
                 ImportScanReport(
                     tracks = tracks,
@@ -1477,11 +1502,20 @@ private class AndroidImportSourceGateway(
     }
 
     override suspend fun scanWebDav(draft: WebDavSourceDraft, sourceId: String): ImportScanReport {
+        return scanWebDav(draft, sourceId, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun scanWebDav(
+        draft: WebDavSourceDraft,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
         return scanAndroidWebDav(
             draft = draft,
             sourceId = sourceId,
             artworkDirectory = File(activity.cacheDir, "artwork"),
             logger = logger,
+            progressSink = progressSink,
         )
     }
 
@@ -1490,12 +1524,21 @@ private class AndroidImportSourceGateway(
     }
 
     override suspend fun scanNavidrome(draft: NavidromeSourceDraft, sourceId: String): ImportScanReport {
+        return scanNavidrome(draft, sourceId, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun scanNavidrome(
+        draft: NavidromeSourceDraft,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
         return scanNavidromeLibrary(
             draft = draft,
             sourceId = sourceId,
             httpClient = navidromeHttpClient,
             supportedImportExtensions = ANDROID_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
             logger = logger,
+            progressSink = progressSink,
         )
     }
 
@@ -1504,12 +1547,21 @@ private class AndroidImportSourceGateway(
     }
 
     override suspend fun scanSubsonic(draft: SubsonicSourceDraft, sourceId: String): ImportScanReport {
+        return scanSubsonic(draft, sourceId, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun scanSubsonic(
+        draft: SubsonicSourceDraft,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
         return scanSubsonicLibrary(
             draft = draft,
             sourceId = sourceId,
             httpClient = navidromeHttpClient,
             supportedImportExtensions = ANDROID_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
             logger = logger,
+            progressSink = progressSink,
         )
     }
 
@@ -1531,6 +1583,16 @@ private class AndroidImportSourceGateway(
         sourceId: String,
         deviceId: String,
     ): ImportScanReport {
+        return scanEmby(draft, credential, sourceId, deviceId, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun scanEmby(
+        draft: EmbySourceDraft,
+        credential: EmbyCredential,
+        sourceId: String,
+        deviceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
         return scanEmbyLibrary(
             draft = draft,
             credential = credential,
@@ -1539,14 +1601,19 @@ private class AndroidImportSourceGateway(
             httpClient = navidromeHttpClient,
             supportedImportExtensions = ANDROID_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
             logger = logger,
+            progressSink = progressSink,
         )
     }
 
-    private fun scanLocalTree(treeUri: Uri): ImportScanReport {
+    private fun scanLocalTree(
+        treeUri: Uri,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
         val root = DocumentFile.fromTreeUri(activity, treeUri) ?: error("Cannot open tree uri: $treeUri")
         val tracks = mutableListOf<top.iwesley.lyn.music.core.model.ImportedTrackCandidate>()
         val failures = mutableListOf<ImportScanFailure>()
-        val discoveredAudioFileCount = walkDocumentTree(root, "", tracks, failures)
+        val discoveredAudioFileCount = walkDocumentTree(root, "", sourceId, tracks, failures, progressSink)
         return ImportScanReport(
             tracks = tracks,
             discoveredAudioFileCount = discoveredAudioFileCount,
@@ -1558,13 +1625,14 @@ private class AndroidImportSourceGateway(
         treeUri: Uri,
         sourceId: String,
         branch: String,
+        progressSink: ImportScanProgressSink,
     ): ImportScanReport {
         val startedAt = System.currentTimeMillis()
         logger.info(LOCAL_IMPORT_LOG_TAG) {
             "local-scan-start source=$sourceId branch=$branch treeUri=$treeUri"
         }
         return runCatching {
-            scanLocalTree(treeUri)
+            scanLocalTree(treeUri, sourceId, progressSink)
         }.onSuccess { report ->
             logger.info(LOCAL_IMPORT_LOG_TAG) {
                 "local-scan-complete source=$sourceId branch=$branch treeUri=$treeUri " +
@@ -1579,10 +1647,14 @@ private class AndroidImportSourceGateway(
         }.getOrThrow()
     }
 
-    private fun scanLocalDirectory(root: File): ImportScanReport {
+    private fun scanLocalDirectory(
+        root: File,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
         val tracks = mutableListOf<top.iwesley.lyn.music.core.model.ImportedTrackCandidate>()
         val failures = mutableListOf<ImportScanFailure>()
-        val discoveredAudioFileCount = walkLocalDirectory(root, "", tracks, failures)
+        val discoveredAudioFileCount = walkLocalDirectory(root, "", sourceId, tracks, failures, progressSink)
         return ImportScanReport(
             tracks = tracks,
             discoveredAudioFileCount = discoveredAudioFileCount,
@@ -1594,13 +1666,14 @@ private class AndroidImportSourceGateway(
         root: File,
         sourceId: String,
         branch: String,
+        progressSink: ImportScanProgressSink,
     ): ImportScanReport {
         val startedAt = System.currentTimeMillis()
         logger.info(LOCAL_IMPORT_LOG_TAG) {
             "local-scan-start source=$sourceId branch=$branch root=${root.absolutePath}"
         }
         return runCatching {
-            scanLocalDirectory(root)
+            scanLocalDirectory(root, sourceId, progressSink)
         }.onSuccess { report ->
             logger.info(LOCAL_IMPORT_LOG_TAG) {
                 "local-scan-complete source=$sourceId branch=$branch root=${root.absolutePath} " +
@@ -1618,8 +1691,10 @@ private class AndroidImportSourceGateway(
     private fun walkDocumentTree(
         folder: DocumentFile,
         relativeDirectory: String,
+        sourceId: String,
         sink: MutableList<top.iwesley.lyn.music.core.model.ImportedTrackCandidate>,
         failures: MutableList<ImportScanFailure>,
+        progressSink: ImportScanProgressSink,
     ): Int {
         var discoveredAudioFileCount = 0
         folder.listFiles()
@@ -1628,7 +1703,14 @@ private class AndroidImportSourceGateway(
                 val fileName = file.name ?: return@forEach
                 val nextRelative = listOf(relativeDirectory, fileName).filter { it.isNotBlank() }.joinToString("/")
                 when {
-                    file.isDirectory -> discoveredAudioFileCount += walkDocumentTree(file, nextRelative, sink, failures)
+                    file.isDirectory -> discoveredAudioFileCount += walkDocumentTree(
+                        file,
+                        nextRelative,
+                        sourceId,
+                        sink,
+                        failures,
+                        progressSink,
+                    )
                     file.isFile -> {
                         when (classifyAndroidScannedAudioFile(fileName)) {
                             NonNavidromeAudioScanResult.NOT_AUDIO -> Unit
@@ -1643,6 +1725,13 @@ private class AndroidImportSourceGateway(
                                     readAndroidCandidate(file, nextRelative)
                                 }.onSuccess { candidate ->
                                     sink += candidate
+                                    progressSink.onProgress(
+                                        ImportScanProgress(
+                                            sourceId = sourceId,
+                                            phase = ImportScanPhase.Scanning,
+                                            importedTrackCount = sink.size,
+                                        ),
+                                    )
                                 }.onFailure { throwable ->
                                     failures += ImportScanFailure(
                                         relativePath = nextRelative,
@@ -1679,8 +1768,10 @@ private class AndroidImportSourceGateway(
     private fun walkLocalDirectory(
         folder: File,
         relativeDirectory: String,
+        sourceId: String,
         sink: MutableList<top.iwesley.lyn.music.core.model.ImportedTrackCandidate>,
         failures: MutableList<ImportScanFailure>,
+        progressSink: ImportScanProgressSink,
     ): Int {
         var discoveredAudioFileCount = 0
         folder.listFiles()
@@ -1689,7 +1780,14 @@ private class AndroidImportSourceGateway(
             .forEach { file ->
                 val nextRelative = listOf(relativeDirectory, file.name).filter { it.isNotBlank() }.joinToString("/")
                 when {
-                    file.isDirectory -> discoveredAudioFileCount += walkLocalDirectory(file, nextRelative, sink, failures)
+                    file.isDirectory -> discoveredAudioFileCount += walkLocalDirectory(
+                        file,
+                        nextRelative,
+                        sourceId,
+                        sink,
+                        failures,
+                        progressSink,
+                    )
                     file.isFile -> {
                         when (classifyAndroidScannedAudioFile(file.name)) {
                             NonNavidromeAudioScanResult.NOT_AUDIO -> Unit
@@ -1704,6 +1802,13 @@ private class AndroidImportSourceGateway(
                                     readAndroidCandidate(file, nextRelative)
                                 }.onSuccess { candidate ->
                                     sink += candidate
+                                    progressSink.onProgress(
+                                        ImportScanProgress(
+                                            sourceId = sourceId,
+                                            phase = ImportScanPhase.Scanning,
+                                            importedTrackCount = sink.size,
+                                        ),
+                                    )
                                 }.onFailure { throwable ->
                                     failures += ImportScanFailure(
                                         relativePath = nextRelative,
@@ -1759,6 +1864,7 @@ private class AndroidImportSourceGateway(
         sourceId: String,
         sink: MutableList<top.iwesley.lyn.music.core.model.ImportedTrackCandidate>,
         failures: MutableList<ImportScanFailure>,
+        progressSink: ImportScanProgressSink,
     ): Int {
         var discoveredAudioFileCount = 0
         val listPath = joinSegments(baseDirectory, relativeDirectory)
@@ -1776,6 +1882,7 @@ private class AndroidImportSourceGateway(
                     sourceId = sourceId,
                     sink = sink,
                     failures = failures,
+                    progressSink = progressSink,
                 )
             } else {
                 when (classifyAndroidScannedAudioFile(name)) {
@@ -1808,6 +1915,13 @@ private class AndroidImportSourceGateway(
                             )
                         }.onSuccess { candidate ->
                             sink += candidate
+                            progressSink.onProgress(
+                                ImportScanProgress(
+                                    sourceId = sourceId,
+                                    phase = ImportScanPhase.Scanning,
+                                    importedTrackCount = sink.size,
+                                ),
+                            )
                         }.onFailure { throwable ->
                             failures += ImportScanFailure(
                                 relativePath = childRelative,

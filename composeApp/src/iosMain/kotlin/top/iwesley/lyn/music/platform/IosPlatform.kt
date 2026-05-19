@@ -29,6 +29,7 @@ import top.iwesley.lyn.music.core.model.CompactPlayerLyricsPreferencesStore
 import top.iwesley.lyn.music.core.model.EmbyCredential
 import top.iwesley.lyn.music.core.model.EmbySourceDraft
 import top.iwesley.lyn.music.core.model.ImportScanReport
+import top.iwesley.lyn.music.core.model.ImportScanProgressSink
 import top.iwesley.lyn.music.core.model.ImportSourceGateway
 import top.iwesley.lyn.music.core.model.LocalFolderSelection
 import top.iwesley.lyn.music.core.model.LyricsHttpClient
@@ -615,11 +616,20 @@ private class IosImportSourceGateway(
     }
 
     override suspend fun scanNavidrome(draft: NavidromeSourceDraft, sourceId: String): ImportScanReport {
+        return scanNavidrome(draft, sourceId, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun scanNavidrome(
+        draft: NavidromeSourceDraft,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
         return scanNavidromeLibrary(
             draft = draft,
             sourceId = sourceId,
             httpClient = navidromeHttpClient,
             supportedImportExtensions = IOS_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
+            progressSink = progressSink,
         )
     }
 
@@ -628,11 +638,20 @@ private class IosImportSourceGateway(
     }
 
     override suspend fun scanSubsonic(draft: SubsonicSourceDraft, sourceId: String): ImportScanReport {
+        return scanSubsonic(draft, sourceId, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun scanSubsonic(
+        draft: SubsonicSourceDraft,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
         return scanSubsonicLibrary(
             draft = draft,
             sourceId = sourceId,
             httpClient = navidromeHttpClient,
             supportedImportExtensions = IOS_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
+            progressSink = progressSink,
         )
     }
 
@@ -654,6 +673,16 @@ private class IosImportSourceGateway(
         sourceId: String,
         deviceId: String,
     ): ImportScanReport {
+        return scanEmby(draft, credential, sourceId, deviceId, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun scanEmby(
+        draft: EmbySourceDraft,
+        credential: EmbyCredential,
+        sourceId: String,
+        deviceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
         return scanEmbyLibrary(
             draft = draft,
             credential = credential,
@@ -661,6 +690,7 @@ private class IosImportSourceGateway(
             sourceId = sourceId,
             httpClient = navidromeHttpClient,
             supportedImportExtensions = IOS_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
+            progressSink = progressSink,
         )
     }
 }

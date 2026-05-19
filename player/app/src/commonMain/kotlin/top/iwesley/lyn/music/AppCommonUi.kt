@@ -104,6 +104,8 @@ import top.iwesley.lyn.music.core.model.Album
 import top.iwesley.lyn.music.core.model.Artist
 import top.iwesley.lyn.music.core.model.ArtworkTintTheme
 import top.iwesley.lyn.music.core.model.ImportSourceType
+import top.iwesley.lyn.music.core.model.ImportScanPhase
+import top.iwesley.lyn.music.core.model.ImportScanProgress
 import top.iwesley.lyn.music.core.model.ImportScanSummary
 import top.iwesley.lyn.music.core.model.LyricsSourceConfig
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
@@ -1269,6 +1271,7 @@ internal fun SourceCard(
     isRescanning: Boolean,
     onDelete: () -> Unit,
     scanSummary: ImportScanSummary? = null,
+    scanProgress: ImportScanProgress? = null,
     onShowScanFailures: ((ImportScanSummary) -> Unit)? = null,
 ) {
     val shellColors = mainShellColors
@@ -1345,6 +1348,9 @@ internal fun SourceCard(
                     },
                     leadingIcon = { Icon(Icons.Rounded.CloudSync, null) })
             }
+            scanProgress?.let { progress ->
+                SourceScanProgressRow(progress)
+            }
             scanSummaryPresentation?.let { presentation ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1371,6 +1377,45 @@ internal fun SourceCard(
             }
         }
     }
+}
+
+@Composable
+private fun SourceScanProgressRow(progress: ImportScanProgress) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        val fraction = importScanProgressFraction(progress)
+        if (fraction == null) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        } else {
+            LinearProgressIndicator(
+                progress = { fraction },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        Text(
+            text = importScanProgressLabel(progress),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
+
+internal fun importScanProgressLabel(progress: ImportScanProgress): String {
+    if (progress.phase == ImportScanPhase.Persisting) return "正在更新曲库…"
+    val total = progress.totalTrackCount?.takeIf { it > 0 }
+    return if (total == null) {
+        "已导入第 ${progress.importedTrackCount.coerceAtLeast(0)} 首"
+    } else {
+        "正在导入第 ${progress.importedTrackCount.coerceAtLeast(0)}/$total 首"
+    }
+}
+
+internal fun importScanProgressFraction(progress: ImportScanProgress): Float? {
+    if (progress.phase == ImportScanPhase.Persisting) return null
+    val total = progress.totalTrackCount?.takeIf { it > 0 } ?: return null
+    return progress.importedTrackCount.toFloat().coerceIn(0f, total.toFloat()) / total.toFloat()
 }
 
 private fun remoteSourceAddressSummary(

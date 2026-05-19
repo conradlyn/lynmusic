@@ -3,6 +3,9 @@ package top.iwesley.lyn.music.feature.importing
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import top.iwesley.lyn.music.core.model.EmbySourceDraft
+import top.iwesley.lyn.music.core.model.ImportScanPhase
+import top.iwesley.lyn.music.core.model.ImportScanProgress
+import top.iwesley.lyn.music.core.model.ImportScanProgressSink
 import top.iwesley.lyn.music.core.model.ImportScanSummary
 import top.iwesley.lyn.music.core.model.ImportSourceType
 import top.iwesley.lyn.music.core.model.LocalFolderPickerMode
@@ -17,6 +20,7 @@ import top.iwesley.lyn.music.core.model.WebDavSourceDraft
 import top.iwesley.lyn.music.core.model.displayWebDavRootUrl
 import top.iwesley.lyn.music.core.mvi.BaseStore
 import top.iwesley.lyn.music.data.repository.ImportSourceRepository
+import kotlin.time.Clock
 
 data class RemoteSourceEditorState(
     val sourceId: String,
@@ -76,6 +80,7 @@ data class ImportState(
     val editingSource: RemoteSourceEditorState? = null,
     val isWorking: Boolean = false,
     val activeScanOperation: ImportScanOperation? = null,
+    val scanProgress: ImportScanProgress? = null,
     val latestScanSummariesBySourceId: Map<String, ImportScanSummary> = emptyMap(),
     val message: String? = null,
     val testMessage: String? = null,
@@ -182,8 +187,8 @@ class ImportStore(
                 importLocalFolder(intent.mode)
             }
 
-            is ImportIntent.ImportSelectedLocalFolder -> runImport(ImportScanOperation.CreateLocalFolder) {
-                repository.importSelectedLocalFolder(intent.selection)
+            is ImportIntent.ImportSelectedLocalFolder -> runScanningImport(ImportScanOperation.CreateLocalFolder) { progressSink ->
+                repository.importSelectedLocalFolder(intent.selection, progressSink)
                     .onSuccess { summary ->
                         recordScanSummary(summary)
                         setMessage(scanSuccessMessage("本地音乐源已导入。", summary))
@@ -203,8 +208,8 @@ class ImportStore(
             ImportIntent.AddSambaSource -> {
                 val currentState = state.value
                 val draft = sambaDraftOrNull(currentState) ?: return
-                runImport(ImportScanOperation.CreateRemote(ImportSourceType.SAMBA)) {
-                    repository.addSambaSource(draft)
+                runScanningImport(ImportScanOperation.CreateRemote(ImportSourceType.SAMBA)) { progressSink ->
+                    repository.addSambaSource(draft, progressSink)
                         .onSuccess { summary ->
                             updateState {
                                 it.copy(
@@ -236,8 +241,8 @@ class ImportStore(
 
             ImportIntent.AddWebDavSource -> {
                 val draft = webDavDraftOrNull(state.value, allowBlankPassword = true) ?: return
-                runImport(ImportScanOperation.CreateRemote(ImportSourceType.WEBDAV)) {
-                    repository.addWebDavSource(draft)
+                runScanningImport(ImportScanOperation.CreateRemote(ImportSourceType.WEBDAV)) { progressSink ->
+                    repository.addWebDavSource(draft, progressSink)
                         .onSuccess { summary ->
                             updateState {
                                 it.copy(
@@ -282,8 +287,8 @@ class ImportStore(
                     password = state.value.navidromePassword,
                     allowBlankPassword = false,
                 ) ?: return
-                runImport(ImportScanOperation.CreateRemote(ImportSourceType.NAVIDROME)) {
-                    repository.addNavidromeSource(draft)
+                runScanningImport(ImportScanOperation.CreateRemote(ImportSourceType.NAVIDROME)) { progressSink ->
+                    repository.addNavidromeSource(draft, progressSink)
                         .onSuccess { summary ->
                             updateState {
                                 it.copy(
@@ -330,8 +335,8 @@ class ImportStore(
                     authMode = state.value.subsonicAuthMode,
                     allowBlankCredential = false,
                 ) ?: return
-                runImport(ImportScanOperation.CreateRemote(ImportSourceType.SUBSONIC)) {
-                    repository.addSubsonicSource(draft)
+                runScanningImport(ImportScanOperation.CreateRemote(ImportSourceType.SUBSONIC)) { progressSink ->
+                    repository.addSubsonicSource(draft, progressSink)
                         .onSuccess { summary ->
                             updateState {
                                 it.copy(
@@ -377,8 +382,8 @@ class ImportStore(
                     password = state.value.embyPassword,
                     allowBlankPassword = false,
                 ) ?: return
-                runImport(ImportScanOperation.CreateRemote(ImportSourceType.EMBY)) {
-                    repository.addEmbySource(draft)
+                runScanningImport(ImportScanOperation.CreateRemote(ImportSourceType.EMBY)) { progressSink ->
+                    repository.addEmbySource(draft, progressSink)
                         .onSuccess { summary ->
                             updateState {
                                 it.copy(
@@ -536,11 +541,12 @@ class ImportStore(
                 when (editor.type) {
                     ImportSourceType.SAMBA -> {
                         val draft = editingSambaDraftOrNull(editor) ?: return
-                        runImport(ImportScanOperation.UpdateRemote(editor.sourceId)) {
+                        runScanningImport(ImportScanOperation.UpdateRemote(editor.sourceId)) { progressSink ->
                             repository.updateSambaSource(
                                 sourceId = editor.sourceId,
                                 draft = draft,
                                 keepExistingCredentialWhenBlankPassword = editor.keepExistingCredential,
+                                progressSink = progressSink,
                             ).onSuccess { summary ->
                                 updateState { it.copy(editingSource = null) }
                                 recordScanSummary(summary)
@@ -553,11 +559,12 @@ class ImportStore(
 
                     ImportSourceType.WEBDAV -> {
                         val draft = editingWebDavDraftOrNull(editor) ?: return
-                        runImport(ImportScanOperation.UpdateRemote(editor.sourceId)) {
+                        runScanningImport(ImportScanOperation.UpdateRemote(editor.sourceId)) { progressSink ->
                             repository.updateWebDavSource(
                                 sourceId = editor.sourceId,
                                 draft = draft,
                                 keepExistingCredentialWhenBlankPassword = editor.keepExistingCredential,
+                                progressSink = progressSink,
                             ).onSuccess { summary ->
                                 updateState { it.copy(editingSource = null) }
                                 recordScanSummary(summary)
@@ -570,11 +577,12 @@ class ImportStore(
 
                     ImportSourceType.NAVIDROME -> {
                         val draft = editingNavidromeDraftOrNull(editor) ?: return
-                        runImport(ImportScanOperation.UpdateRemote(editor.sourceId)) {
+                        runScanningImport(ImportScanOperation.UpdateRemote(editor.sourceId)) { progressSink ->
                             repository.updateNavidromeSource(
                                 sourceId = editor.sourceId,
                                 draft = draft,
                                 keepExistingCredentialWhenBlankPassword = editor.keepExistingCredential,
+                                progressSink = progressSink,
                             ).onSuccess { summary ->
                                 updateState { it.copy(editingSource = null) }
                                 recordScanSummary(summary)
@@ -587,11 +595,12 @@ class ImportStore(
 
                     ImportSourceType.SUBSONIC -> {
                         val draft = editingSubsonicDraftOrNull(editor) ?: return
-                        runImport(ImportScanOperation.UpdateRemote(editor.sourceId)) {
+                        runScanningImport(ImportScanOperation.UpdateRemote(editor.sourceId)) { progressSink ->
                             repository.updateSubsonicSource(
                                 sourceId = editor.sourceId,
                                 draft = draft,
                                 keepExistingCredentialWhenBlankCredential = editor.keepExistingCredential,
+                                progressSink = progressSink,
                             ).onSuccess { summary ->
                                 updateState { it.copy(editingSource = null) }
                                 recordScanSummary(summary)
@@ -604,11 +613,12 @@ class ImportStore(
 
                     ImportSourceType.EMBY -> {
                         val draft = editingEmbyDraftOrNull(editor) ?: return
-                        runImport(ImportScanOperation.UpdateRemote(editor.sourceId)) {
+                        runScanningImport(ImportScanOperation.UpdateRemote(editor.sourceId)) { progressSink ->
                             repository.updateEmbySource(
                                 sourceId = editor.sourceId,
                                 draft = draft,
                                 keepExistingCredentialWhenBlankPassword = editor.keepExistingCredential,
+                                progressSink = progressSink,
                             ).onSuccess { summary ->
                                 updateState { it.copy(editingSource = null) }
                                 recordScanSummary(summary)
@@ -623,8 +633,8 @@ class ImportStore(
                 }
             }
 
-            is ImportIntent.RescanSource -> runImport(ImportScanOperation.RescanSource(intent.sourceId)) {
-                repository.rescanSource(intent.sourceId)
+            is ImportIntent.RescanSource -> runScanningImport(ImportScanOperation.RescanSource(intent.sourceId)) { progressSink ->
+                repository.rescanSource(intent.sourceId, progressSink)
                     .onSuccess { summary ->
                         summary?.let(::recordScanSummary)
                         setMessage(scanSuccessMessage("音乐源已重新扫描。", summary))
@@ -730,8 +740,8 @@ class ImportStore(
     }
 
     private suspend fun importLocalFolder(mode: LocalFolderPickerMode) {
-        runImport(ImportScanOperation.CreateLocalFolder) {
-            repository.importLocalFolder(mode)
+        runScanningImport(ImportScanOperation.CreateLocalFolder) { progressSink ->
+            repository.importLocalFolder(mode, progressSink)
                 .onSuccess { summary ->
                     summary?.let {
                         recordScanSummary(it)
@@ -1041,6 +1051,24 @@ class ImportStore(
         updateState { it.copy(isWorking = false, activeScanOperation = null) }
     }
 
+    private suspend fun runScanningImport(
+        scanOperation: ImportScanOperation,
+        block: suspend (ImportScanProgressSink) -> Unit,
+    ) {
+        val progressSink = ThrottledImportScanProgressSink(emit = { progress ->
+            updateState { state -> state.copy(scanProgress = progress) }
+        })
+        updateState {
+            it.copy(
+                isWorking = true,
+                activeScanOperation = scanOperation,
+                scanProgress = null,
+            )
+        }
+        runCatching { block(progressSink) }
+        updateState { it.copy(isWorking = false, activeScanOperation = null, scanProgress = null) }
+    }
+
     private fun setMessage(message: String) {
         updateState { it.copy(message = message) }
     }
@@ -1054,6 +1082,21 @@ class ImportStore(
             setTestMessage(message)
         } else {
             setMessage(message)
+        }
+    }
+}
+
+private class ThrottledImportScanProgressSink(
+    private val emit: (ImportScanProgress) -> Unit,
+    private val now: () -> Long = { Clock.System.now().toEpochMilliseconds() },
+) : ImportScanProgressSink {
+    private var lastEmittedAt: Long = 0L
+
+    override fun onProgress(progress: ImportScanProgress) {
+        val currentTime = now()
+        if (progress.phase == ImportScanPhase.Persisting || lastEmittedAt == 0L || currentTime - lastEmittedAt >= 200L) {
+            emit(progress)
+            lastEmittedAt = currentTime
         }
     }
 }

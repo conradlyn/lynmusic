@@ -18,6 +18,9 @@ import top.iwesley.lyn.music.core.model.EmbyCredential
 import top.iwesley.lyn.music.core.model.EmbySourceDraft
 import top.iwesley.lyn.music.core.model.ImportScanFailure
 import top.iwesley.lyn.music.core.model.ImportScanReport
+import top.iwesley.lyn.music.core.model.ImportScanPhase
+import top.iwesley.lyn.music.core.model.ImportScanProgress
+import top.iwesley.lyn.music.core.model.ImportScanProgressSink
 import top.iwesley.lyn.music.core.model.ImportSourceType
 import top.iwesley.lyn.music.core.model.ImportedTrackCandidate
 import top.iwesley.lyn.music.core.model.LyricsDocument
@@ -205,6 +208,7 @@ suspend fun scanEmbyLibrary(
     httpClient: LyricsHttpClient,
     supportedImportExtensions: Set<String>,
     logger: DiagnosticLogger = NoopDiagnosticLogger,
+    progressSink: ImportScanProgressSink = ImportScanProgressSink.NoOp,
 ): ImportScanReport {
     val baseUrl = normalizeEmbyBaseUrl(draft.baseUrl)
     require(credential.userId.isNotBlank()) { "Emby 用户 ID 为空。" }
@@ -215,6 +219,7 @@ suspend fun scanEmbyLibrary(
     val seenItemIds = linkedSetOf<String>()
     var discoveredAudioFileCount = 0
     var startIndex = 0
+    var totalTrackCount: Int? = null
     while (true) {
         val page = requestEmbyItemsPage(
             baseUrl = baseUrl,
@@ -224,6 +229,15 @@ suspend fun scanEmbyLibrary(
             httpClient = httpClient,
             logger = logger,
         )
+        totalTrackCount = page.totalRecordCount
+        progressSink.onProgress(
+            ImportScanProgress(
+                sourceId = sourceId,
+                phase = ImportScanPhase.Scanning,
+                importedTrackCount = tracks.size,
+                totalTrackCount = totalTrackCount,
+            ),
+        )
         val items = page.items
         items.forEach { item ->
             val itemId = item.itemId
@@ -231,7 +245,17 @@ suspend fun scanEmbyLibrary(
             discoveredAudioFileCount += 1
             val suffix = item.suffix()
             when (classifyAudioExtensionForImport(suffix, supportedImportExtensions)) {
-                NonNavidromeAudioScanResult.IMPORT_SUPPORTED -> tracks += item.toImportedTrackCandidate(sourceId)
+                NonNavidromeAudioScanResult.IMPORT_SUPPORTED -> {
+                    tracks += item.toImportedTrackCandidate(sourceId)
+                    progressSink.onProgress(
+                        ImportScanProgress(
+                            sourceId = sourceId,
+                            phase = ImportScanPhase.Scanning,
+                            importedTrackCount = tracks.size,
+                            totalTrackCount = totalTrackCount,
+                        ),
+                    )
+                }
                 NonNavidromeAudioScanResult.IMPORT_UNSUPPORTED,
                 NonNavidromeAudioScanResult.NOT_AUDIO,
                 -> failures += unsupportedAudioImportFailure(item.relativePath())
@@ -251,6 +275,7 @@ suspend fun scanEmbyLibrary(
         warnings = if (discoveredAudioFileCount == 0) listOf("当前 Emby 账号下没有可同步的歌曲。") else emptyList(),
         discoveredAudioFileCount = discoveredAudioFileCount,
         failures = failures,
+        totalTrackCount = totalTrackCount,
     )
 }
 

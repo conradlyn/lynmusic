@@ -18,6 +18,9 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import top.iwesley.lyn.music.core.model.EmbySourceDraft
+import top.iwesley.lyn.music.core.model.ImportScanPhase
+import top.iwesley.lyn.music.core.model.ImportScanProgress
+import top.iwesley.lyn.music.core.model.ImportScanProgressSink
 import top.iwesley.lyn.music.core.model.ImportScanFailure
 import top.iwesley.lyn.music.core.model.ImportScanSummary
 import top.iwesley.lyn.music.core.model.ImportSource
@@ -88,6 +91,44 @@ class ImportStoreTest {
 
         assertEquals(mode, repository.lastLocalFolderMode)
         assertEquals("本地音乐源已导入。发现 1 个音频文件，成功导入 1 首，0 个失败。", store.state.value.message)
+        harness.close()
+    }
+
+    @Test
+    fun `scan progress updates while import is running and clears after completion`() = runTest {
+        val pendingResult = CompletableDeferred<Result<Unit>>()
+        val repository = FakeImportSourceRepository().also {
+            it.pendingResult = pendingResult
+            it.progressToEmit = ImportScanProgress(
+                sourceId = "nav-1",
+                phase = ImportScanPhase.Scanning,
+                importedTrackCount = 3,
+            )
+        }
+        val harness = createStore(repository)
+        val store = harness.store
+
+        store.dispatch(ImportIntent.NavidromeBaseUrlChanged("https://nav.example.com"))
+        store.dispatch(ImportIntent.NavidromeUsernameChanged("demo"))
+        store.dispatch(ImportIntent.NavidromePasswordChanged("secret"))
+        advanceUntilIdle()
+        store.dispatch(ImportIntent.AddNavidromeSource)
+        advanceUntilIdle()
+
+        assertEquals(
+            ImportScanProgress(
+                sourceId = "nav-1",
+                phase = ImportScanPhase.Scanning,
+                importedTrackCount = 3,
+            ),
+            store.state.value.scanProgress,
+        )
+
+        pendingResult.complete(Result.success(Unit))
+        advanceUntilIdle()
+
+        assertNull(store.state.value.scanProgress)
+        assertEquals("Navidrome 音乐源已导入。发现 1 个音频文件，成功导入 1 首，0 个失败。", store.state.value.message)
         harness.close()
     }
 
@@ -825,6 +866,7 @@ private class FakeImportSourceRepository(
     var lastUpdatedEmbyDraft: EmbySourceDraft? = null
     var lastUpdatedEmbyKeepExisting: Boolean = false
     var lastLocalFolderMode: LocalFolderPickerMode? = null
+    var progressToEmit: ImportScanProgress? = null
 
     override fun observeSources(): Flow<List<SourceWithStatus>> = mutableSources.asStateFlow()
 
@@ -836,6 +878,14 @@ private class FakeImportSourceRepository(
     override suspend fun importLocalFolder(mode: LocalFolderPickerMode): Result<ImportScanSummary?> {
         lastLocalFolderMode = mode
         return importLocalFolderResult()
+    }
+
+    override suspend fun importLocalFolder(
+        mode: LocalFolderPickerMode,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary?> {
+        progressToEmit?.let(progressSink::onProgress)
+        return importLocalFolder(mode)
     }
 
     private suspend fun importLocalFolderResult(): Result<ImportScanSummary?> {
@@ -904,6 +954,14 @@ private class FakeImportSourceRepository(
         return pendingResult?.await()?.map { testScanSummary("nav-1") } ?: navidromeResult
     }
 
+    override suspend fun addNavidromeSource(
+        draft: NavidromeSourceDraft,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary> {
+        progressToEmit?.let(progressSink::onProgress)
+        return addNavidromeSource(draft)
+    }
+
     override suspend fun updateNavidromeSource(
         sourceId: String,
         draft: NavidromeSourceDraft,
@@ -960,6 +1018,14 @@ private class FakeImportSourceRepository(
             "smb-1" -> sambaResult.map { it }
             else -> Result.success(testScanSummary(sourceId))
         }
+    }
+
+    override suspend fun rescanSource(
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary?> {
+        progressToEmit?.let(progressSink::onProgress)
+        return rescanSource(sourceId)
     }
 
     override suspend fun setSourceEnabled(sourceId: String, enabled: Boolean): Result<Unit> {

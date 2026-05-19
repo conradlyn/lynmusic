@@ -30,6 +30,9 @@ import okhttp3.Request
 import okhttp3.Response
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
 import top.iwesley.lyn.music.core.model.ImportScanFailure
+import top.iwesley.lyn.music.core.model.ImportScanPhase
+import top.iwesley.lyn.music.core.model.ImportScanProgress
+import top.iwesley.lyn.music.core.model.ImportScanProgressSink
 import top.iwesley.lyn.music.core.model.ImportScanReport
 import top.iwesley.lyn.music.core.model.ImportedTrackCandidate
 import top.iwesley.lyn.music.core.model.ImportSourceType
@@ -71,6 +74,7 @@ internal suspend fun scanAndroidWebDav(
     sourceId: String,
     artworkDirectory: File,
     logger: DiagnosticLogger,
+    progressSink: ImportScanProgressSink = ImportScanProgressSink.NoOp,
 ): ImportScanReport {
     val session = createAndroidWebDavSession(
         rootUrl = draft.rootUrl,
@@ -93,6 +97,7 @@ internal suspend fun scanAndroidWebDav(
             logger = logger,
             sink = tracks,
             failures = failures,
+            progressSink = progressSink,
         )
         ImportScanReport(
             tracks = tracks,
@@ -207,6 +212,7 @@ private fun collectAndroidWebDavTracks(
     logger: DiagnosticLogger,
     sink: MutableList<ImportedTrackCandidate>,
     failures: MutableList<ImportScanFailure>,
+    progressSink: ImportScanProgressSink,
 ): Int {
     var discoveredAudioFileCount = 0
     val directoryUrl = if (relativeDirectory.isBlank()) {
@@ -239,6 +245,7 @@ private fun collectAndroidWebDavTracks(
                 logger = logger,
                 sink = sink,
                 failures = failures,
+                progressSink = progressSink,
             )
         } else {
             when (classifyAndroidScannedAudioFile(resolved.fileName)) {
@@ -268,6 +275,13 @@ private fun collectAndroidWebDavTracks(
                         buildWebDavImportedTrackCandidate(sourceId, resolved)
                     }.onSuccess { candidate ->
                         sink += candidate
+                        progressSink.onProgress(
+                            ImportScanProgress(
+                                sourceId = sourceId,
+                                phase = ImportScanPhase.Scanning,
+                                importedTrackCount = sink.size,
+                            ),
+                        )
                     }.onFailure { throwable ->
                         failures += ImportScanFailure(
                             relativePath = resolved.relativePath,

@@ -11,6 +11,9 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import top.iwesley.lyn.music.core.model.EmbyCredential
 import top.iwesley.lyn.music.core.model.EmbySourceDraft
+import top.iwesley.lyn.music.core.model.ImportScanPhase
+import top.iwesley.lyn.music.core.model.ImportScanProgress
+import top.iwesley.lyn.music.core.model.ImportScanProgressSink
 import top.iwesley.lyn.music.core.model.ImportScanFailure
 import top.iwesley.lyn.music.core.model.ImportScanReport
 import top.iwesley.lyn.music.core.model.ImportSourceGateway
@@ -352,6 +355,42 @@ class ImportSourceRepositoryTest {
         assertEquals(96_000, domainTrack.samplingRate)
         assertEquals(2_810, domainTrack.bitRate)
         assertEquals(2, domainTrack.channelCount)
+    }
+
+    @Test
+    fun `adding navidrome source forwards scan progress and reports persisting phase`() = runTest {
+        val database = createImportTestDatabase()
+        val gateway = RecordingImportSourceGateway(
+            scanReport = ImportScanReport(
+                tracks = listOf(
+                    ImportedTrackCandidate(
+                        title = "Blue",
+                        mediaLocator = "lynmusic-navidrome://navidrome-1/song-1",
+                        relativePath = "Artist A/Album A/Blue.flac",
+                    ),
+                ),
+            ),
+        )
+        val repository = createRepository(database = database, gateway = gateway)
+        val progressEvents = mutableListOf<ImportScanProgress>()
+
+        repository.addNavidromeSource(
+            NavidromeSourceDraft(
+                label = "Navidrome",
+                baseUrl = "https://nav.example.com",
+                username = "demo",
+                password = "secret",
+            ),
+            ImportScanProgressSink { progressEvents += it },
+        ).getOrThrow()
+
+        assertEquals(
+            listOf(ImportScanPhase.Scanning, ImportScanPhase.Persisting),
+            progressEvents.map { it.phase },
+        )
+        assertEquals(1, progressEvents.first().importedTrackCount)
+        assertEquals(1, progressEvents.last().importedTrackCount)
+        assertEquals(1, gateway.navidromeProgressAwareScanCount)
     }
 
     @Test
@@ -741,6 +780,7 @@ private class RecordingImportSourceGateway(
     var webDavScanCount: Int = 0
     var navidromeTestCount: Int = 0
     var navidromeScanCount: Int = 0
+    var navidromeProgressAwareScanCount: Int = 0
     var lastNavidromeScanDraft: NavidromeSourceDraft? = null
     var subsonicTestCount: Int = 0
     var subsonicScanCount: Int = 0
@@ -790,6 +830,23 @@ private class RecordingImportSourceGateway(
         navidromeScanCount += 1
         lastNavidromeScanDraft = draft
         return scanReport
+    }
+
+    override suspend fun scanNavidrome(
+        draft: NavidromeSourceDraft,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
+        navidromeProgressAwareScanCount += 1
+        progressSink.onProgress(
+            ImportScanProgress(
+                sourceId = sourceId,
+                phase = ImportScanPhase.Scanning,
+                importedTrackCount = scanReport.tracks.size,
+                totalTrackCount = scanReport.totalTrackCount,
+            ),
+        )
+        return scanNavidrome(draft, sourceId)
     }
 
     override suspend fun testSubsonic(draft: SubsonicSourceDraft) {

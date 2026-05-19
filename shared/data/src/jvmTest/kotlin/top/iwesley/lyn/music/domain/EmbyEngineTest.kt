@@ -10,6 +10,9 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import top.iwesley.lyn.music.core.model.EmbyCredential
 import top.iwesley.lyn.music.core.model.EmbySourceDraft
+import top.iwesley.lyn.music.core.model.ImportScanPhase
+import top.iwesley.lyn.music.core.model.ImportScanProgress
+import top.iwesley.lyn.music.core.model.ImportScanProgressSink
 import top.iwesley.lyn.music.core.model.LyricsLine
 import top.iwesley.lyn.music.core.model.LyricsHttpClient
 import top.iwesley.lyn.music.core.model.LyricsHttpResponse
@@ -148,6 +151,7 @@ class EmbyEngineTest {
             )
         }
 
+        val progressEvents = mutableListOf<ImportScanProgress>()
         val report = scanEmbyLibrary(
             draft = EmbySourceDraft(
                 label = "Emby",
@@ -160,9 +164,11 @@ class EmbyEngineTest {
             sourceId = "emby-1",
             httpClient = httpClient,
             supportedImportExtensions = setOf("flac", "mp3"),
+            progressSink = ImportScanProgressSink { progressEvents += it },
         )
 
         assertEquals(2, report.discoveredAudioFileCount)
+        assertEquals(2, report.totalTrackCount)
         assertEquals(1, report.tracks.size)
         assertEquals(1, report.failures.size)
         assertEquals("Artist One/Album One/Track One.flac", report.tracks.single().relativePath)
@@ -180,6 +186,76 @@ class EmbyEngineTest {
         assertEquals(16, track.bitDepth)
         assertEquals(buildEmbySongLocator("emby-1", "song-1"), track.mediaLocator)
         assertEquals(buildEmbyCoverLocator("emby-1", "album-1"), track.artworkLocator)
+        assertEquals(
+            listOf(
+                ImportScanProgress(
+                    sourceId = "emby-1",
+                    phase = ImportScanPhase.Scanning,
+                    importedTrackCount = 0,
+                    totalTrackCount = 2,
+                ),
+                ImportScanProgress(
+                    sourceId = "emby-1",
+                    phase = ImportScanPhase.Scanning,
+                    importedTrackCount = 1,
+                    totalTrackCount = 2,
+                ),
+            ),
+            progressEvents,
+        )
+    }
+
+    @Test
+    fun `scan reports Emby total even when no item can be imported`() = runTest {
+        val httpClient = RecordingEmbyHttpClient {
+            LyricsHttpResponse(
+                statusCode = 200,
+                body = """
+                    {
+                      "Items": [
+                        {
+                          "Id": "song-1",
+                          "Name": "Unsupported",
+                          "Container": "wma"
+                        }
+                      ],
+                      "TotalRecordCount": 1
+                    }
+                """.trimIndent(),
+            )
+        }
+
+        val progressEvents = mutableListOf<ImportScanProgress>()
+        val report = scanEmbyLibrary(
+            draft = EmbySourceDraft(
+                label = "Emby",
+                baseUrl = "https://emby.example.com",
+                username = "demo",
+                password = "",
+            ),
+            credential = EmbyCredential(userId = "user-1", accessToken = "access-token"),
+            deviceId = "device-1",
+            sourceId = "emby-1",
+            httpClient = httpClient,
+            supportedImportExtensions = setOf("flac"),
+            progressSink = ImportScanProgressSink { progressEvents += it },
+        )
+
+        assertEquals(1, report.discoveredAudioFileCount)
+        assertEquals(1, report.totalTrackCount)
+        assertTrue(report.tracks.isEmpty())
+        assertEquals(1, report.failures.size)
+        assertEquals(
+            listOf(
+                ImportScanProgress(
+                    sourceId = "emby-1",
+                    phase = ImportScanPhase.Scanning,
+                    importedTrackCount = 0,
+                    totalTrackCount = 1,
+                ),
+            ),
+            progressEvents,
+        )
     }
 
     @Test

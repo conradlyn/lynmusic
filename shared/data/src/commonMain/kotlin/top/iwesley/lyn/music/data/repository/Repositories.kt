@@ -20,6 +20,9 @@ import top.iwesley.lyn.music.core.model.DesktopLyricsPreferencesStore
 import top.iwesley.lyn.music.core.model.DesktopVlcPreferencesStore
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
 import top.iwesley.lyn.music.core.model.ImportIndexState
+import top.iwesley.lyn.music.core.model.ImportScanPhase
+import top.iwesley.lyn.music.core.model.ImportScanProgress
+import top.iwesley.lyn.music.core.model.ImportScanProgressSink
 import top.iwesley.lyn.music.core.model.ImportScanReport
 import top.iwesley.lyn.music.core.model.ImportScanSummary
 import top.iwesley.lyn.music.core.model.ImportSource
@@ -169,11 +172,26 @@ interface TrackPlaybackStatsRepository {
 interface ImportSourceRepository {
     fun observeSources(): Flow<List<SourceWithStatus>>
     suspend fun importLocalFolder(): Result<ImportScanSummary?>
+    suspend fun importLocalFolder(progressSink: ImportScanProgressSink): Result<ImportScanSummary?> {
+        return importLocalFolder()
+    }
     suspend fun importLocalFolder(mode: LocalFolderPickerMode): Result<ImportScanSummary?> {
         return importLocalFolder()
     }
+    suspend fun importLocalFolder(
+        mode: LocalFolderPickerMode,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary?> {
+        return importLocalFolder(mode)
+    }
     suspend fun importSelectedLocalFolder(selection: LocalFolderSelection): Result<ImportScanSummary> {
         return Result.failure(UnsupportedOperationException("Importing a preselected local folder is not supported."))
+    }
+    suspend fun importSelectedLocalFolder(
+        selection: LocalFolderSelection,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary> {
+        return importSelectedLocalFolder(selection)
     }
     suspend fun testSambaSource(draft: SambaSourceDraft): Result<Unit>
     suspend fun testUpdatedSambaSource(
@@ -182,11 +200,25 @@ interface ImportSourceRepository {
         keepExistingCredentialWhenBlankPassword: Boolean = true,
     ): Result<Unit>
     suspend fun addSambaSource(draft: SambaSourceDraft): Result<ImportScanSummary>
+    suspend fun addSambaSource(
+        draft: SambaSourceDraft,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary> {
+        return addSambaSource(draft)
+    }
     suspend fun updateSambaSource(
         sourceId: String,
         draft: SambaSourceDraft,
         keepExistingCredentialWhenBlankPassword: Boolean = true,
     ): Result<ImportScanSummary>
+    suspend fun updateSambaSource(
+        sourceId: String,
+        draft: SambaSourceDraft,
+        keepExistingCredentialWhenBlankPassword: Boolean = true,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary> {
+        return updateSambaSource(sourceId, draft, keepExistingCredentialWhenBlankPassword)
+    }
     suspend fun testWebDavSource(draft: WebDavSourceDraft): Result<Unit>
     suspend fun testUpdatedWebDavSource(
         sourceId: String,
@@ -194,11 +226,25 @@ interface ImportSourceRepository {
         keepExistingCredentialWhenBlankPassword: Boolean = true,
     ): Result<Unit>
     suspend fun addWebDavSource(draft: WebDavSourceDraft): Result<ImportScanSummary>
+    suspend fun addWebDavSource(
+        draft: WebDavSourceDraft,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary> {
+        return addWebDavSource(draft)
+    }
     suspend fun updateWebDavSource(
         sourceId: String,
         draft: WebDavSourceDraft,
         keepExistingCredentialWhenBlankPassword: Boolean = true,
     ): Result<ImportScanSummary>
+    suspend fun updateWebDavSource(
+        sourceId: String,
+        draft: WebDavSourceDraft,
+        keepExistingCredentialWhenBlankPassword: Boolean = true,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary> {
+        return updateWebDavSource(sourceId, draft, keepExistingCredentialWhenBlankPassword)
+    }
     suspend fun testNavidromeSource(draft: NavidromeSourceDraft): Result<Unit>
     suspend fun testUpdatedNavidromeSource(
         sourceId: String,
@@ -206,11 +252,25 @@ interface ImportSourceRepository {
         keepExistingCredentialWhenBlankPassword: Boolean = true,
     ): Result<Unit>
     suspend fun addNavidromeSource(draft: NavidromeSourceDraft): Result<ImportScanSummary>
+    suspend fun addNavidromeSource(
+        draft: NavidromeSourceDraft,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary> {
+        return addNavidromeSource(draft)
+    }
     suspend fun updateNavidromeSource(
         sourceId: String,
         draft: NavidromeSourceDraft,
         keepExistingCredentialWhenBlankPassword: Boolean = true,
     ): Result<ImportScanSummary>
+    suspend fun updateNavidromeSource(
+        sourceId: String,
+        draft: NavidromeSourceDraft,
+        keepExistingCredentialWhenBlankPassword: Boolean = true,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary> {
+        return updateNavidromeSource(sourceId, draft, keepExistingCredentialWhenBlankPassword)
+    }
     suspend fun testSubsonicSource(draft: SubsonicSourceDraft): Result<Unit> {
         return Result.failure(UnsupportedOperationException("Subsonic import is not supported."))
     }
@@ -224,12 +284,26 @@ interface ImportSourceRepository {
     suspend fun addSubsonicSource(draft: SubsonicSourceDraft): Result<ImportScanSummary> {
         return Result.failure(UnsupportedOperationException("Subsonic import is not supported."))
     }
+    suspend fun addSubsonicSource(
+        draft: SubsonicSourceDraft,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary> {
+        return addSubsonicSource(draft)
+    }
     suspend fun updateSubsonicSource(
         sourceId: String,
         draft: SubsonicSourceDraft,
         keepExistingCredentialWhenBlankCredential: Boolean = true,
     ): Result<ImportScanSummary> {
         return Result.failure(UnsupportedOperationException("Subsonic import is not supported."))
+    }
+    suspend fun updateSubsonicSource(
+        sourceId: String,
+        draft: SubsonicSourceDraft,
+        keepExistingCredentialWhenBlankCredential: Boolean = true,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary> {
+        return updateSubsonicSource(sourceId, draft, keepExistingCredentialWhenBlankCredential)
     }
     suspend fun testEmbySource(draft: EmbySourceDraft): Result<Unit> {
         return Result.failure(UnsupportedOperationException("Emby import is not supported."))
@@ -244,6 +318,12 @@ interface ImportSourceRepository {
     suspend fun addEmbySource(draft: EmbySourceDraft): Result<ImportScanSummary> {
         return Result.failure(UnsupportedOperationException("Emby import is not supported."))
     }
+    suspend fun addEmbySource(
+        draft: EmbySourceDraft,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary> {
+        return addEmbySource(draft)
+    }
     suspend fun updateEmbySource(
         sourceId: String,
         draft: EmbySourceDraft,
@@ -251,7 +331,21 @@ interface ImportSourceRepository {
     ): Result<ImportScanSummary> {
         return Result.failure(UnsupportedOperationException("Emby import is not supported."))
     }
+    suspend fun updateEmbySource(
+        sourceId: String,
+        draft: EmbySourceDraft,
+        keepExistingCredentialWhenBlankPassword: Boolean = true,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary> {
+        return updateEmbySource(sourceId, draft, keepExistingCredentialWhenBlankPassword)
+    }
     suspend fun rescanSource(sourceId: String): Result<ImportScanSummary?>
+    suspend fun rescanSource(
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary?> {
+        return rescanSource(sourceId)
+    }
     suspend fun setSourceEnabled(sourceId: String, enabled: Boolean): Result<Unit>
     suspend fun deleteSource(sourceId: String): Result<Unit>
 }
@@ -407,17 +501,31 @@ class RoomImportSourceRepository(
     }
 
     override suspend fun importLocalFolder(): Result<ImportScanSummary?> {
-        return importLocalFolder(LocalFolderPickerMode.Automatic)
+        return importLocalFolder(LocalFolderPickerMode.Automatic, ImportScanProgressSink.NoOp)
     }
 
     override suspend fun importLocalFolder(mode: LocalFolderPickerMode): Result<ImportScanSummary?> {
+        return importLocalFolder(mode, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun importLocalFolder(
+        mode: LocalFolderPickerMode,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary?> {
         return runCatching {
             val selection = gateway.pickLocalFolder(mode) ?: return@runCatching null
-            importSelectedLocalFolder(selection).getOrThrow()
+            importSelectedLocalFolder(selection, progressSink).getOrThrow()
         }
     }
 
     override suspend fun importSelectedLocalFolder(selection: LocalFolderSelection): Result<ImportScanSummary> {
+        return importSelectedLocalFolder(selection, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun importSelectedLocalFolder(
+        selection: LocalFolderSelection,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary> {
         return runCatching {
             validateLocalFolderImportSourceCreation(rootReference = selection.persistentReference)
             val sourceId = newId("local")
@@ -429,8 +537,8 @@ class RoomImportSourceRepository(
                 createdAt = now(),
             )
             database.importSourceDao().upsert(source.toEntity())
-            runScan(source) {
-                gateway.scanLocalFolder(selection, sourceId)
+            runScan(source, progressSink) {
+                gateway.scanLocalFolder(selection, sourceId, progressSink)
             }
         }
     }
@@ -460,6 +568,13 @@ class RoomImportSourceRepository(
     }
 
     override suspend fun addSambaSource(draft: SambaSourceDraft): Result<ImportScanSummary> {
+        return addSambaSource(draft, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun addSambaSource(
+        draft: SambaSourceDraft,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary> {
         return runCatching {
             val sourceId = newId("smb")
             val preparedDraft = prepareSambaDraft(draft)
@@ -469,8 +584,8 @@ class RoomImportSourceRepository(
             validateImportSourceCreation(label = newSource.label)
             newSource.credentialKey?.let { secureCredentialStore.put(it, preparedDraft.password) }
             database.importSourceDao().upsert(newSource.toEntity())
-            runScan(newSource) {
-                gateway.scanSamba(preparedDraft, sourceId)
+            runScan(newSource, progressSink) {
+                gateway.scanSamba(preparedDraft, sourceId, progressSink)
             }
         }
     }
@@ -479,6 +594,20 @@ class RoomImportSourceRepository(
         sourceId: String,
         draft: SambaSourceDraft,
         keepExistingCredentialWhenBlankPassword: Boolean,
+    ): Result<ImportScanSummary> {
+        return updateSambaSource(
+            sourceId = sourceId,
+            draft = draft,
+            keepExistingCredentialWhenBlankPassword = keepExistingCredentialWhenBlankPassword,
+            progressSink = ImportScanProgressSink.NoOp,
+        )
+    }
+
+    override suspend fun updateSambaSource(
+        sourceId: String,
+        draft: SambaSourceDraft,
+        keepExistingCredentialWhenBlankPassword: Boolean,
+        progressSink: ImportScanProgressSink,
     ): Result<ImportScanSummary> {
         return runCatching {
             val existing = requireRemoteSource(sourceId, ImportSourceType.SAMBA)
@@ -495,7 +624,7 @@ class RoomImportSourceRepository(
                 password = preparedDraft.password,
                 keepExistingCredentialWhenBlankPassword = keepExistingCredentialWhenBlankPassword,
             )
-            val report = gateway.scanSamba(preparedDraft.copy(password = password), sourceId)
+            val report = gateway.scanSamba(preparedDraft.copy(password = password), sourceId, progressSink)
             val credentialKey = resolveUpdatedCredentialKey(
                 sourceId = sourceId,
                 existingCredentialKey = existing.credentialKey,
@@ -503,7 +632,7 @@ class RoomImportSourceRepository(
                 keepExistingCredentialWhenBlankPassword = keepExistingCredentialWhenBlankPassword,
             )
             persistUpdatedCredential(existing.credentialKey, credentialKey, password)
-            persistScan(updatedSource.copy(credentialKey = credentialKey), report)
+            persistScanWithProgress(updatedSource.copy(credentialKey = credentialKey), report, progressSink)
         }
     }
 
@@ -531,6 +660,13 @@ class RoomImportSourceRepository(
     }
 
     override suspend fun addWebDavSource(draft: WebDavSourceDraft): Result<ImportScanSummary> {
+        return addWebDavSource(draft, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun addWebDavSource(
+        draft: WebDavSourceDraft,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary> {
         return runCatching {
             val sourceId = newId("dav")
             val preparedDraft = prepareWebDavDraft(draft)
@@ -540,8 +676,8 @@ class RoomImportSourceRepository(
             validateImportSourceCreation(label = source.label)
             source.credentialKey?.let { secureCredentialStore.put(it, preparedDraft.password) }
             database.importSourceDao().upsert(source.toEntity())
-            runScan(source) {
-                gateway.scanWebDav(preparedDraft, sourceId)
+            runScan(source, progressSink) {
+                gateway.scanWebDav(preparedDraft, sourceId, progressSink)
             }
         }
     }
@@ -550,6 +686,20 @@ class RoomImportSourceRepository(
         sourceId: String,
         draft: WebDavSourceDraft,
         keepExistingCredentialWhenBlankPassword: Boolean,
+    ): Result<ImportScanSummary> {
+        return updateWebDavSource(
+            sourceId = sourceId,
+            draft = draft,
+            keepExistingCredentialWhenBlankPassword = keepExistingCredentialWhenBlankPassword,
+            progressSink = ImportScanProgressSink.NoOp,
+        )
+    }
+
+    override suspend fun updateWebDavSource(
+        sourceId: String,
+        draft: WebDavSourceDraft,
+        keepExistingCredentialWhenBlankPassword: Boolean,
+        progressSink: ImportScanProgressSink,
     ): Result<ImportScanSummary> {
         return runCatching {
             val existing = requireRemoteSource(sourceId, ImportSourceType.WEBDAV)
@@ -566,7 +716,7 @@ class RoomImportSourceRepository(
                 password = preparedDraft.password,
                 keepExistingCredentialWhenBlankPassword = keepExistingCredentialWhenBlankPassword,
             )
-            val report = gateway.scanWebDav(preparedDraft.copy(password = password), sourceId)
+            val report = gateway.scanWebDav(preparedDraft.copy(password = password), sourceId, progressSink)
             val credentialKey = resolveUpdatedCredentialKey(
                 sourceId = sourceId,
                 existingCredentialKey = existing.credentialKey,
@@ -574,7 +724,7 @@ class RoomImportSourceRepository(
                 keepExistingCredentialWhenBlankPassword = keepExistingCredentialWhenBlankPassword,
             )
             persistUpdatedCredential(existing.credentialKey, credentialKey, password)
-            persistScan(updatedSource.copy(credentialKey = credentialKey), report)
+            persistScanWithProgress(updatedSource.copy(credentialKey = credentialKey), report, progressSink)
         }
     }
 
@@ -624,6 +774,13 @@ class RoomImportSourceRepository(
     }
 
     override suspend fun addNavidromeSource(draft: NavidromeSourceDraft): Result<ImportScanSummary> {
+        return addNavidromeSource(draft, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun addNavidromeSource(
+        draft: NavidromeSourceDraft,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary> {
         return runCatching {
             val sourceId = newId("navidrome")
             val preparedDraft = prepareNavidromeDraft(draft)
@@ -631,7 +788,7 @@ class RoomImportSourceRepository(
             validateImportSourceCreation(label = source.label)
             source.credentialKey?.let { secureCredentialStore.put(it, preparedDraft.password) }
             database.importSourceDao().upsert(source.toEntity())
-            runScan(source) {
+            runScan(source, progressSink) {
                 addressSelector.withAddressFallback(
                     sourceId = sourceId,
                     sourceType = ImportSourceType.NAVIDROME,
@@ -639,7 +796,7 @@ class RoomImportSourceRepository(
                     wanBaseUrl = preparedDraft.wanBaseUrl,
                     normalizeBaseUrl = ::normalizeNavidromeBaseUrl,
                 ) { candidate ->
-                    gateway.scanNavidrome(preparedDraft.copy(baseUrl = candidate.value), sourceId)
+                    gateway.scanNavidrome(preparedDraft.copy(baseUrl = candidate.value), sourceId, progressSink)
                 }
             }
         }
@@ -649,6 +806,20 @@ class RoomImportSourceRepository(
         sourceId: String,
         draft: NavidromeSourceDraft,
         keepExistingCredentialWhenBlankPassword: Boolean,
+    ): Result<ImportScanSummary> {
+        return updateNavidromeSource(
+            sourceId = sourceId,
+            draft = draft,
+            keepExistingCredentialWhenBlankPassword = keepExistingCredentialWhenBlankPassword,
+            progressSink = ImportScanProgressSink.NoOp,
+        )
+    }
+
+    override suspend fun updateNavidromeSource(
+        sourceId: String,
+        draft: NavidromeSourceDraft,
+        keepExistingCredentialWhenBlankPassword: Boolean,
+        progressSink: ImportScanProgressSink,
     ): Result<ImportScanSummary> {
         return runCatching {
             val existing = requireRemoteSource(sourceId, ImportSourceType.NAVIDROME)
@@ -676,7 +847,11 @@ class RoomImportSourceRepository(
                 wanBaseUrl = preparedDraft.wanBaseUrl,
                 normalizeBaseUrl = ::normalizeNavidromeBaseUrl,
             ) { candidate ->
-                gateway.scanNavidrome(preparedDraft.copy(baseUrl = candidate.value, password = password), sourceId)
+                gateway.scanNavidrome(
+                    preparedDraft.copy(baseUrl = candidate.value, password = password),
+                    sourceId,
+                    progressSink,
+                )
             }
             val credentialKey = resolveUpdatedCredentialKey(
                 sourceId = sourceId,
@@ -685,7 +860,7 @@ class RoomImportSourceRepository(
                 keepExistingCredentialWhenBlankPassword = true,
             )
             persistUpdatedCredential(existing.credentialKey, credentialKey, password)
-            persistScan(updatedSource.copy(credentialKey = credentialKey), report)
+            persistScanWithProgress(updatedSource.copy(credentialKey = credentialKey), report, progressSink)
         }
     }
 
@@ -735,6 +910,13 @@ class RoomImportSourceRepository(
     }
 
     override suspend fun addSubsonicSource(draft: SubsonicSourceDraft): Result<ImportScanSummary> {
+        return addSubsonicSource(draft, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun addSubsonicSource(
+        draft: SubsonicSourceDraft,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary> {
         return runCatching {
             val sourceId = newId("subsonic")
             val preparedDraft = prepareSubsonicDraft(draft)
@@ -742,7 +924,7 @@ class RoomImportSourceRepository(
             validateImportSourceCreation(label = source.label)
             source.credentialKey?.let { secureCredentialStore.put(it, preparedDraft.credential) }
             database.importSourceDao().upsert(source.toEntity())
-            runScan(source) {
+            runScan(source, progressSink) {
                 addressSelector.withAddressFallback(
                     sourceId = sourceId,
                     sourceType = ImportSourceType.SUBSONIC,
@@ -750,7 +932,7 @@ class RoomImportSourceRepository(
                     wanBaseUrl = preparedDraft.wanBaseUrl,
                     normalizeBaseUrl = ::normalizeSubsonicBaseUrl,
                 ) { candidate ->
-                    gateway.scanSubsonic(preparedDraft.copy(baseUrl = candidate.value), sourceId)
+                    gateway.scanSubsonic(preparedDraft.copy(baseUrl = candidate.value), sourceId, progressSink)
                 }
             }
         }
@@ -760,6 +942,20 @@ class RoomImportSourceRepository(
         sourceId: String,
         draft: SubsonicSourceDraft,
         keepExistingCredentialWhenBlankCredential: Boolean,
+    ): Result<ImportScanSummary> {
+        return updateSubsonicSource(
+            sourceId = sourceId,
+            draft = draft,
+            keepExistingCredentialWhenBlankCredential = keepExistingCredentialWhenBlankCredential,
+            progressSink = ImportScanProgressSink.NoOp,
+        )
+    }
+
+    override suspend fun updateSubsonicSource(
+        sourceId: String,
+        draft: SubsonicSourceDraft,
+        keepExistingCredentialWhenBlankCredential: Boolean,
+        progressSink: ImportScanProgressSink,
     ): Result<ImportScanSummary> {
         return runCatching {
             val existing = requireRemoteSource(sourceId, ImportSourceType.SUBSONIC)
@@ -787,7 +983,11 @@ class RoomImportSourceRepository(
                 wanBaseUrl = preparedDraft.wanBaseUrl,
                 normalizeBaseUrl = ::normalizeSubsonicBaseUrl,
             ) { candidate ->
-                gateway.scanSubsonic(preparedDraft.copy(baseUrl = candidate.value, credential = credential), sourceId)
+                gateway.scanSubsonic(
+                    preparedDraft.copy(baseUrl = candidate.value, credential = credential),
+                    sourceId,
+                    progressSink,
+                )
             }
             val credentialKey = resolveUpdatedCredentialKey(
                 sourceId = sourceId,
@@ -796,7 +996,7 @@ class RoomImportSourceRepository(
                 keepExistingCredentialWhenBlankPassword = true,
             )
             persistUpdatedCredential(existing.credentialKey, credentialKey, credential)
-            persistScan(updatedSource.copy(credentialKey = credentialKey), report)
+            persistScanWithProgress(updatedSource.copy(credentialKey = credentialKey), report, progressSink)
         }
     }
 
@@ -859,6 +1059,13 @@ class RoomImportSourceRepository(
     }
 
     override suspend fun addEmbySource(draft: EmbySourceDraft): Result<ImportScanSummary> {
+        return addEmbySource(draft, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun addEmbySource(
+        draft: EmbySourceDraft,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary> {
         return runCatching {
             val sourceId = newId("emby")
             val preparedDraft = prepareEmbyDraft(draft)
@@ -876,7 +1083,7 @@ class RoomImportSourceRepository(
             validateImportSourceCreation(label = source.label)
             source.credentialKey?.let { secureCredentialStore.put(it, serializeEmbyCredential(credential)) }
             database.importSourceDao().upsert(source.toEntity())
-            runScan(source) {
+            runScan(source, progressSink) {
                 addressSelector.withAddressFallback(
                     sourceId = sourceId,
                     sourceType = ImportSourceType.EMBY,
@@ -884,7 +1091,13 @@ class RoomImportSourceRepository(
                     wanBaseUrl = preparedDraft.wanBaseUrl,
                     normalizeBaseUrl = ::normalizeEmbyBaseUrl,
                 ) { candidate ->
-                    gateway.scanEmby(preparedDraft.copy(baseUrl = candidate.value), credential, sourceId, deviceId)
+                    gateway.scanEmby(
+                        preparedDraft.copy(baseUrl = candidate.value),
+                        credential,
+                        sourceId,
+                        deviceId,
+                        progressSink,
+                    )
                 }
             }
         }
@@ -894,6 +1107,20 @@ class RoomImportSourceRepository(
         sourceId: String,
         draft: EmbySourceDraft,
         keepExistingCredentialWhenBlankPassword: Boolean,
+    ): Result<ImportScanSummary> {
+        return updateEmbySource(
+            sourceId = sourceId,
+            draft = draft,
+            keepExistingCredentialWhenBlankPassword = keepExistingCredentialWhenBlankPassword,
+            progressSink = ImportScanProgressSink.NoOp,
+        )
+    }
+
+    override suspend fun updateEmbySource(
+        sourceId: String,
+        draft: EmbySourceDraft,
+        keepExistingCredentialWhenBlankPassword: Boolean,
+        progressSink: ImportScanProgressSink,
     ): Result<ImportScanSummary> {
         return runCatching {
             val existing = requireRemoteSource(sourceId, ImportSourceType.EMBY)
@@ -940,7 +1167,13 @@ class RoomImportSourceRepository(
                 wanBaseUrl = preparedDraft.wanBaseUrl,
                 normalizeBaseUrl = ::normalizeEmbyBaseUrl,
             ) { candidate ->
-                gateway.scanEmby(preparedDraft.copy(baseUrl = candidate.value), credential, sourceId, deviceId)
+                gateway.scanEmby(
+                    preparedDraft.copy(baseUrl = candidate.value),
+                    credential,
+                    sourceId,
+                    deviceId,
+                    progressSink,
+                )
             }
             val credentialKey = existing.credentialKey ?: "credential-$sourceId"
             persistUpdatedCredential(
@@ -948,11 +1181,18 @@ class RoomImportSourceRepository(
                 nextCredentialKey = credentialKey,
                 password = serializeEmbyCredential(credential),
             )
-            persistScan(updatedSource.copy(credentialKey = credentialKey), report)
+            persistScanWithProgress(updatedSource.copy(credentialKey = credentialKey), report, progressSink)
         }
     }
 
     override suspend fun rescanSource(sourceId: String): Result<ImportScanSummary?> {
+        return rescanSource(sourceId, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun rescanSource(
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary?> {
         return runCatching {
             val entity = database.importSourceDao().getById(sourceId)
                 ?: error("Source $sourceId does not exist.")
@@ -960,7 +1200,7 @@ class RoomImportSourceRepository(
             if (!source.enabled) {
                 error("来源已禁用，请先启用。")
             }
-            val summary = runScan(source.copy(lastScannedAt = now())) {
+            val summary = runScan(source.copy(lastScannedAt = now()), progressSink) {
                 when (source.type) {
                     ImportSourceType.LOCAL_FOLDER -> gateway.scanLocalFolder(
                         selection = LocalFolderSelection(
@@ -968,6 +1208,7 @@ class RoomImportSourceRepository(
                             persistentReference = source.rootReference,
                         ),
                         sourceId = source.id,
+                        progressSink = progressSink,
                     )
 
                     ImportSourceType.SAMBA -> {
@@ -982,6 +1223,7 @@ class RoomImportSourceRepository(
                                 password = password,
                             ),
                             sourceId = source.id,
+                            progressSink = progressSink,
                         )
                     }
 
@@ -996,6 +1238,7 @@ class RoomImportSourceRepository(
                                 allowInsecureTls = source.allowInsecureTls,
                             ),
                             sourceId = source.id,
+                            progressSink = progressSink,
                         )
                     }
 
@@ -1016,7 +1259,7 @@ class RoomImportSourceRepository(
                             wanBaseUrl = prepared.wanBaseUrl,
                             normalizeBaseUrl = ::normalizeNavidromeBaseUrl,
                         ) { candidate ->
-                            gateway.scanNavidrome(prepared.copy(baseUrl = candidate.value), source.id)
+                            gateway.scanNavidrome(prepared.copy(baseUrl = candidate.value), source.id, progressSink)
                         }
                     }
 
@@ -1038,7 +1281,7 @@ class RoomImportSourceRepository(
                             wanBaseUrl = prepared.wanBaseUrl,
                             normalizeBaseUrl = ::normalizeSubsonicBaseUrl,
                         ) { candidate ->
-                            gateway.scanSubsonic(prepared.copy(baseUrl = candidate.value), source.id)
+                            gateway.scanSubsonic(prepared.copy(baseUrl = candidate.value), source.id, progressSink)
                         }
                     }
 
@@ -1065,6 +1308,7 @@ class RoomImportSourceRepository(
                                 credential = credential,
                                 sourceId = source.id,
                                 deviceId = resolveEmbyDeviceId(secureCredentialStore),
+                                progressSink = progressSink,
                             )
                         }
                     }
@@ -1461,12 +1705,29 @@ class RoomImportSourceRepository(
         )
     }
 
+    private suspend fun persistScanWithProgress(
+        source: ImportSource,
+        report: ImportScanReport,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanSummary {
+        progressSink.onProgress(
+            ImportScanProgress(
+                sourceId = source.id,
+                phase = ImportScanPhase.Persisting,
+                importedTrackCount = report.tracks.size,
+                totalTrackCount = report.totalTrackCount,
+            ),
+        )
+        return persistScan(source, report)
+    }
+
     private suspend fun runScan(
         source: ImportSource,
+        progressSink: ImportScanProgressSink,
         scan: suspend () -> ImportScanReport,
     ): ImportScanSummary {
         try {
-            return persistScan(source, scan())
+            return persistScanWithProgress(source, scan(), progressSink)
         } catch (throwable: Throwable) {
             persistScanFailure(source.id, throwable)
             throw throwable

@@ -26,6 +26,9 @@ import uk.co.caprica.vlcj.media.callback.seekable.SeekableCallbackMedia
 import top.iwesley.lyn.music.core.model.buildBasicAuthorizationHeader
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
 import top.iwesley.lyn.music.core.model.ImportScanFailure
+import top.iwesley.lyn.music.core.model.ImportScanPhase
+import top.iwesley.lyn.music.core.model.ImportScanProgress
+import top.iwesley.lyn.music.core.model.ImportScanProgressSink
 import top.iwesley.lyn.music.core.model.ImportScanReport
 import top.iwesley.lyn.music.core.model.ImportedTrackCandidate
 import top.iwesley.lyn.music.core.model.SAME_NAME_LRC_MAX_BYTES
@@ -58,6 +61,7 @@ internal suspend fun scanJvmWebDav(
     draft: WebDavSourceDraft,
     sourceId: String,
     logger: DiagnosticLogger,
+    progressSink: ImportScanProgressSink = ImportScanProgressSink.NoOp,
 ): ImportScanReport {
     val rootUrl = normalizeWebDavRootUrl(draft.rootUrl)
     val authEnabled = draft.username.isNotBlank()
@@ -87,6 +91,7 @@ internal suspend fun scanJvmWebDav(
                 logger = logger,
                 sink = tracks,
                 failures = failures,
+                progressSink = progressSink,
             )
             ImportScanReport(
                 tracks = tracks,
@@ -305,6 +310,7 @@ private fun collectJvmWebDavTracks(
     logger: DiagnosticLogger,
     sink: MutableList<ImportedTrackCandidate>,
     failures: MutableList<ImportScanFailure>,
+    progressSink: ImportScanProgressSink,
 ): Int {
     var discoveredAudioFileCount = 0
     val directoryUrl = if (relativeDirectory.isBlank()) {
@@ -346,6 +352,7 @@ private fun collectJvmWebDavTracks(
                 logger = logger,
                 sink = sink,
                 failures = failures,
+                progressSink = progressSink,
             )
         } else {
             when (classifyJvmScannedAudioFile(resolved.fileName)) {
@@ -375,9 +382,16 @@ private fun collectJvmWebDavTracks(
                         }
                     }.recoverCatching {
                         buildWebDavImportedTrackCandidate(sourceId, resolved)
-                    }.onSuccess { candidate ->
-                        sink += candidate
-                    }.onFailure { throwable ->
+                }.onSuccess { candidate ->
+                    sink += candidate
+                    progressSink.onProgress(
+                        ImportScanProgress(
+                            sourceId = sourceId,
+                            phase = ImportScanPhase.Scanning,
+                            importedTrackCount = sink.size,
+                        ),
+                    )
+                }.onFailure { throwable ->
                         failures += ImportScanFailure(
                             relativePath = resolved.relativePath,
                             reason = scanFailureReason(throwable),

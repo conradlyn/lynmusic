@@ -57,6 +57,9 @@ import top.iwesley.lyn.music.core.model.DiagnosticLogger
 import top.iwesley.lyn.music.core.model.EmbyCredential
 import top.iwesley.lyn.music.core.model.EmbySourceDraft
 import top.iwesley.lyn.music.core.model.ImportScanFailure
+import top.iwesley.lyn.music.core.model.ImportScanPhase
+import top.iwesley.lyn.music.core.model.ImportScanProgress
+import top.iwesley.lyn.music.core.model.ImportScanProgressSink
 import top.iwesley.lyn.music.core.model.ImportScanReport
 import top.iwesley.lyn.music.core.model.ImportSourceGateway
 import top.iwesley.lyn.music.core.model.LocalFolderSelection
@@ -942,6 +945,14 @@ private class JvmImportSourceGateway(
 
     @OptIn(ExperimentalPathApi::class)
     override suspend fun scanLocalFolder(selection: LocalFolderSelection, sourceId: String): ImportScanReport {
+        return scanLocalFolder(selection, sourceId, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun scanLocalFolder(
+        selection: LocalFolderSelection,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
         val root = Path.of(selection.persistentReference)
         if (!Files.exists(root)) {
             error("Folder does not exist: ${selection.persistentReference}")
@@ -966,6 +977,13 @@ private class JvmImportSourceGateway(
                                 ImportedCandidateFactory.fromPath(path, relativePath, logger)
                             }.onSuccess { candidate ->
                                 tracks += candidate
+                                progressSink.onProgress(
+                                    ImportScanProgress(
+                                        sourceId = sourceId,
+                                        phase = ImportScanPhase.Scanning,
+                                        importedTrackCount = tracks.size,
+                                    ),
+                                )
                             }.onFailure { throwable ->
                                 failures += ImportScanFailure(
                                     relativePath = relativePath,
@@ -1021,6 +1039,14 @@ private class JvmImportSourceGateway(
     }
 
     override suspend fun scanSamba(draft: SambaSourceDraft, sourceId: String): ImportScanReport {
+        return scanSamba(draft, sourceId, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun scanSamba(
+        draft: SambaSourceDraft,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
         val sambaPath = parseSambaPath(draft.path)
             ?: error("SMB 路径至少需要包含共享名，例如 Media 或 Media/Music。")
         val endpoint = formatSambaEndpoint(draft.server, draft.port, draft.path)
@@ -1042,7 +1068,15 @@ private class JvmImportSourceGateway(
                 val baseDirectory = sambaPath.directoryPath
                 val tracks = mutableListOf<top.iwesley.lyn.music.core.model.ImportedTrackCandidate>()
                 val failures = mutableListOf<ImportScanFailure>()
-                val discoveredAudioFileCount = collectSambaTracks(share, baseDirectory, "", sourceId, tracks, failures)
+                val discoveredAudioFileCount = collectSambaTracks(
+                    share,
+                    baseDirectory,
+                    "",
+                    sourceId,
+                    tracks,
+                    failures,
+                    progressSink,
+                )
                 ImportScanReport(
                     tracks = tracks,
                     discoveredAudioFileCount = discoveredAudioFileCount,
@@ -1065,7 +1099,15 @@ private class JvmImportSourceGateway(
     }
 
     override suspend fun scanWebDav(draft: WebDavSourceDraft, sourceId: String): ImportScanReport {
-        return scanJvmWebDav(draft, sourceId, logger)
+        return scanWebDav(draft, sourceId, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun scanWebDav(
+        draft: WebDavSourceDraft,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
+        return scanJvmWebDav(draft, sourceId, logger, progressSink)
     }
 
     override suspend fun testNavidrome(draft: NavidromeSourceDraft) {
@@ -1073,12 +1115,21 @@ private class JvmImportSourceGateway(
     }
 
     override suspend fun scanNavidrome(draft: NavidromeSourceDraft, sourceId: String): ImportScanReport {
+        return scanNavidrome(draft, sourceId, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun scanNavidrome(
+        draft: NavidromeSourceDraft,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
         return scanNavidromeLibrary(
             draft = draft,
             sourceId = sourceId,
             httpClient = navidromeHttpClient,
             supportedImportExtensions = JVM_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
             logger = logger,
+            progressSink = progressSink,
         )
     }
 
@@ -1087,12 +1138,21 @@ private class JvmImportSourceGateway(
     }
 
     override suspend fun scanSubsonic(draft: SubsonicSourceDraft, sourceId: String): ImportScanReport {
+        return scanSubsonic(draft, sourceId, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun scanSubsonic(
+        draft: SubsonicSourceDraft,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
         return scanSubsonicLibrary(
             draft = draft,
             sourceId = sourceId,
             httpClient = navidromeHttpClient,
             supportedImportExtensions = JVM_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
             logger = logger,
+            progressSink = progressSink,
         )
     }
 
@@ -1114,6 +1174,16 @@ private class JvmImportSourceGateway(
         sourceId: String,
         deviceId: String,
     ): ImportScanReport {
+        return scanEmby(draft, credential, sourceId, deviceId, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun scanEmby(
+        draft: EmbySourceDraft,
+        credential: EmbyCredential,
+        sourceId: String,
+        deviceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
         return scanEmbyLibrary(
             draft = draft,
             credential = credential,
@@ -1122,6 +1192,7 @@ private class JvmImportSourceGateway(
             httpClient = navidromeHttpClient,
             supportedImportExtensions = JVM_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
             logger = logger,
+            progressSink = progressSink,
         )
     }
 
@@ -1132,6 +1203,7 @@ private class JvmImportSourceGateway(
         sourceId: String,
         sink: MutableList<top.iwesley.lyn.music.core.model.ImportedTrackCandidate>,
         failures: MutableList<ImportScanFailure>,
+        progressSink: ImportScanProgressSink,
     ): Int {
         var discoveredAudioFileCount = 0
         val listPath = joinSegments(baseDirectory, relativeDirectory)
@@ -1149,6 +1221,7 @@ private class JvmImportSourceGateway(
                     sourceId = sourceId,
                     sink = sink,
                     failures = failures,
+                    progressSink = progressSink,
                 )
             } else {
                 when (classifyJvmScannedAudioFile(name)) {
@@ -1181,6 +1254,13 @@ private class JvmImportSourceGateway(
                             )
                         }.onSuccess { candidate ->
                             sink += candidate
+                            progressSink.onProgress(
+                                ImportScanProgress(
+                                    sourceId = sourceId,
+                                    phase = ImportScanPhase.Scanning,
+                                    importedTrackCount = sink.size,
+                                ),
+                            )
                         }.onFailure { throwable ->
                             failures += ImportScanFailure(
                                 relativePath = childRelative,

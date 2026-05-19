@@ -51,6 +51,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -93,6 +94,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import top.iwesley.lyn.music.core.model.Album
 import top.iwesley.lyn.music.core.model.Artist
+import top.iwesley.lyn.music.core.model.ImportScanPhase
+import top.iwesley.lyn.music.core.model.ImportScanProgress
 import top.iwesley.lyn.music.core.model.ImportScanSummary
 import top.iwesley.lyn.music.core.model.ImportSourceType
 import top.iwesley.lyn.music.core.model.LocalFolderPickerMode
@@ -1477,6 +1480,12 @@ internal fun SourcesTab(
     val isEmbyCreating = activeScanOperation == ImportScanOperation.CreateRemote(ImportSourceType.EMBY)
     val isSambaCreating = activeScanOperation == ImportScanOperation.CreateRemote(ImportSourceType.SAMBA)
     val isWebDavCreating = activeScanOperation == ImportScanOperation.CreateRemote(ImportSourceType.WEBDAV)
+    val activeScanProgress = state.scanProgress
+    val activeScanSourceLabel = remember(state.sources, activeScanProgress?.sourceId) {
+        activeScanProgress?.sourceId?.let { sourceId ->
+            state.sources.firstOrNull { it.source.id == sourceId }?.source?.label
+        }
+    }
     val localFolderClickAction = remember(platform.name, state.capabilities.supportsSystemLocalFolderPicker) {
         resolveLocalFolderImportClickAction(platform)
     }
@@ -1486,10 +1495,17 @@ internal fun SourcesTab(
         }
     }
     state.editingSource?.let { editingSource ->
+        val editingSourceStatus = state.sources.firstOrNull { it.source.id == editingSource.sourceId }
+        val editingScanProgress = state.scanProgress?.takeIf {
+            activeScanOperation == ImportScanOperation.UpdateRemote(editingSource.sourceId) &&
+                it.sourceId == editingSource.sourceId
+        }
         RemoteSourceEditorDialog(
             state = editingSource,
             isWorking = state.isWorking,
             isSavingScan = activeScanOperation == ImportScanOperation.UpdateRemote(editingSource.sourceId),
+            currentTrackCount = editingSourceStatus?.indexState?.trackCount,
+            scanProgress = editingScanProgress,
             constrainWidth = !isMobileSourcesPlatform(platform),
             testMessage = state.testMessage,
             fieldColors = importFieldColors,
@@ -1596,6 +1612,12 @@ internal fun SourcesTab(
             )
             state.message?.let { message ->
                 BannerCard(message = message, onDismiss = { onImportIntent(ImportIntent.ClearMessage) })
+            }
+            activeScanProgress?.let { progress ->
+                ImportScanProgressCard(
+                    progress = progress,
+                    sourceLabel = activeScanSourceLabel,
+                )
             }
             MainShellElevatedCard(shape = RoundedCornerShape(28.dp)) {
                 Column(
@@ -2091,6 +2113,10 @@ internal fun SourcesTab(
                         isRescanning = activeScanOperation == ImportScanOperation.RescanSource(source.source.id),
                         onDelete = { pendingDeleteSourceId = source.source.id },
                         scanSummary = state.latestScanSummariesBySourceId[source.source.id],
+                        scanProgress = state.scanProgress?.takeIf {
+                            activeScanOperation == ImportScanOperation.RescanSource(source.source.id) &&
+                                it.sourceId == source.source.id
+                        },
                         onShowScanFailures = { failureDetailSummary = it },
                     )
                 }
@@ -2230,6 +2256,45 @@ private fun LocalFolderPickerModeDialog(
     }
 }
 
+@Composable
+private fun ImportScanProgressCard(
+    progress: ImportScanProgress,
+    sourceLabel: String?,
+) {
+    MainShellElevatedCard(shape = RoundedCornerShape(22.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = if (progress.phase == ImportScanPhase.Persisting) {
+                    sourceLabel?.let { "正在更新 $it" } ?: "正在更新曲库"
+                } else {
+                    sourceLabel?.let { "正在扫描 $it" } ?: "正在扫描来源"
+                },
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            val fraction = importScanProgressFraction(progress)
+            if (fraction == null) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            } else {
+                LinearProgressIndicator(
+                    progress = { fraction },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            Text(
+                text = importScanProgressLabel(progress),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
 internal fun localFolderPickerDialogSystemMode(): LocalFolderPickerMode {
     return LocalFolderPickerMode.Automatic
 }
@@ -2260,6 +2325,8 @@ private fun RemoteSourceEditorDialog(
     state: top.iwesley.lyn.music.feature.importing.RemoteSourceEditorState,
     isWorking: Boolean,
     isSavingScan: Boolean,
+    currentTrackCount: Int?,
+    scanProgress: ImportScanProgress?,
     constrainWidth: Boolean,
     testMessage: String?,
     fieldColors: androidx.compose.material3.TextFieldColors,
@@ -2303,18 +2370,25 @@ private fun RemoteSourceEditorDialog(
                             .padding(24.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
-                        Text(
-                            when (state.type) {
-                                ImportSourceType.SAMBA -> "编辑 Samba 来源"
-                                ImportSourceType.WEBDAV -> "编辑 WebDAV 来源"
-                                ImportSourceType.NAVIDROME -> "编辑 Navidrome 来源"
-                                ImportSourceType.SUBSONIC -> "编辑 Subsonic 来源"
-                                ImportSourceType.EMBY -> "编辑 Emby 来源"
-                                ImportSourceType.LOCAL_FOLDER -> "编辑来源"
-                            },
-                            color = MaterialTheme.colorScheme.onSurface,
-                            fontWeight = FontWeight.Bold,
-                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                when (state.type) {
+                                    ImportSourceType.SAMBA -> "编辑 Samba 来源"
+                                    ImportSourceType.WEBDAV -> "编辑 WebDAV 来源"
+                                    ImportSourceType.NAVIDROME -> "编辑 Navidrome 来源"
+                                    ImportSourceType.SUBSONIC -> "编辑 Subsonic 来源"
+                                    ImportSourceType.EMBY -> "编辑 Emby 来源"
+                                    ImportSourceType.LOCAL_FOLDER -> "编辑来源"
+                                },
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                text = remoteSourceEditorTrackCountLabel(currentTrackCount),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2500,6 +2574,9 @@ private fun RemoteSourceEditorDialog(
                                 )
                             }
                         }
+                        scanProgress?.let { progress ->
+                            RemoteSourceEditorScanProgress(progress)
+                        }
                     }
                 }
                 testMessage?.let { message ->
@@ -2513,6 +2590,33 @@ private fun RemoteSourceEditorDialog(
             }
         }
     }
+}
+
+@Composable
+private fun RemoteSourceEditorScanProgress(progress: ImportScanProgress) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        val fraction = importScanProgressFraction(progress)
+        if (fraction == null) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        } else {
+            LinearProgressIndicator(
+                progress = { fraction },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        Text(
+            text = importScanProgressLabel(progress),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
+
+internal fun remoteSourceEditorTrackCountLabel(currentTrackCount: Int?): String {
+    return currentTrackCount?.let { "当前已导入 ${it.coerceAtLeast(0)} 首歌曲" } ?: "当前还没有导入歌曲"
 }
 
 private fun isMobileSourcesPlatform(platform: PlatformDescriptor): Boolean {

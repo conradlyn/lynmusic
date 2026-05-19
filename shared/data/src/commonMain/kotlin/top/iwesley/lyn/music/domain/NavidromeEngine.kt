@@ -16,6 +16,9 @@ import kotlinx.serialization.json.contentOrNull
 import top.iwesley.lyn.music.core.model.DiagnosticLogLevel
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
 import top.iwesley.lyn.music.core.model.ImportScanReport
+import top.iwesley.lyn.music.core.model.ImportScanPhase
+import top.iwesley.lyn.music.core.model.ImportScanProgress
+import top.iwesley.lyn.music.core.model.ImportScanProgressSink
 import top.iwesley.lyn.music.core.model.ImportSource
 import top.iwesley.lyn.music.core.model.ImportSourceType
 import top.iwesley.lyn.music.core.model.ImportedTrackCandidate
@@ -279,6 +282,7 @@ suspend fun scanNavidromeLibrary(
     httpClient: LyricsHttpClient,
     supportedImportExtensions: Set<String>,
     logger: DiagnosticLogger = NoopDiagnosticLogger,
+    progressSink: ImportScanProgressSink = ImportScanProgressSink.NoOp,
 ): ImportScanReport {
     val baseUrl = normalizeNavidromeBaseUrl(draft.baseUrl)
     require(draft.username.isNotBlank()) { "请填写 Navidrome 用户名。" }
@@ -295,6 +299,7 @@ suspend fun scanNavidromeLibrary(
         httpClient = httpClient,
         supportedImportExtensions = supportedImportExtensions,
         logger = logger,
+        progressSink = progressSink,
     )
 }
 
@@ -304,6 +309,7 @@ suspend fun scanSubsonicLibrary(
     httpClient: LyricsHttpClient,
     supportedImportExtensions: Set<String>,
     logger: DiagnosticLogger = NoopDiagnosticLogger,
+    progressSink: ImportScanProgressSink = ImportScanProgressSink.NoOp,
 ): ImportScanReport {
     val baseUrl = normalizeSubsonicBaseUrl(draft.baseUrl)
     val resolved = prepareSubsonicResolvedSource(
@@ -320,6 +326,7 @@ suspend fun scanSubsonicLibrary(
         httpClient = httpClient,
         supportedImportExtensions = supportedImportExtensions,
         logger = logger,
+        progressSink = progressSink,
     )
 }
 
@@ -329,6 +336,7 @@ private suspend fun scanSubsonicCompatibleLibrary(
     httpClient: LyricsHttpClient,
     supportedImportExtensions: Set<String>,
     logger: DiagnosticLogger,
+    progressSink: ImportScanProgressSink,
 ): ImportScanReport {
     val artistIds = requestNavidromeArtistIds(httpClient, source)
     val tracks = mutableListOf<ImportedTrackCandidate>()
@@ -347,6 +355,13 @@ private suspend fun scanSubsonicCompatibleLibrary(
                 when (classifyAudioExtensionForImport(candidate.suffix, supportedImportExtensions)) {
                     NonNavidromeAudioScanResult.IMPORT_SUPPORTED -> {
                         tracks += candidate.toImportedTrackCandidate(sourceId, source.sourceType)
+                        progressSink.onProgress(
+                            ImportScanProgress(
+                                sourceId = sourceId,
+                                phase = ImportScanPhase.Scanning,
+                                importedTrackCount = tracks.size,
+                            ),
+                        )
                     }
 
                     NonNavidromeAudioScanResult.IMPORT_UNSUPPORTED,

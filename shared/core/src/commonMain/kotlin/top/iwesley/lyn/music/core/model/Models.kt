@@ -239,7 +239,28 @@ data class ImportScanReport(
     val warnings: List<String> = emptyList(),
     val discoveredAudioFileCount: Int = tracks.size,
     val failures: List<ImportScanFailure> = emptyList(),
+    val totalTrackCount: Int? = null,
 )
+
+enum class ImportScanPhase {
+    Scanning,
+    Persisting,
+}
+
+data class ImportScanProgress(
+    val sourceId: String,
+    val phase: ImportScanPhase,
+    val importedTrackCount: Int,
+    val totalTrackCount: Int? = null,
+)
+
+fun interface ImportScanProgressSink {
+    fun onProgress(progress: ImportScanProgress)
+
+    companion object {
+        val NoOp: ImportScanProgressSink = ImportScanProgressSink {}
+    }
+}
 
 data class ImportScanSummary(
     val sourceId: String,
@@ -469,17 +490,52 @@ interface ImportSourceGateway {
         return pickLocalFolder()
     }
     suspend fun scanLocalFolder(selection: LocalFolderSelection, sourceId: String): ImportScanReport
+    suspend fun scanLocalFolder(
+        selection: LocalFolderSelection,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
+        return scanLocalFolder(selection, sourceId)
+    }
     suspend fun testSamba(draft: SambaSourceDraft)
     suspend fun scanSamba(draft: SambaSourceDraft, sourceId: String): ImportScanReport
+    suspend fun scanSamba(
+        draft: SambaSourceDraft,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
+        return scanSamba(draft, sourceId)
+    }
     suspend fun testWebDav(draft: WebDavSourceDraft)
     suspend fun scanWebDav(draft: WebDavSourceDraft, sourceId: String): ImportScanReport
+    suspend fun scanWebDav(
+        draft: WebDavSourceDraft,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
+        return scanWebDav(draft, sourceId)
+    }
     suspend fun testNavidrome(draft: NavidromeSourceDraft)
     suspend fun scanNavidrome(draft: NavidromeSourceDraft, sourceId: String): ImportScanReport
+    suspend fun scanNavidrome(
+        draft: NavidromeSourceDraft,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
+        return scanNavidrome(draft, sourceId)
+    }
     suspend fun testSubsonic(draft: SubsonicSourceDraft) {
         throw UnsupportedOperationException("Subsonic import is not supported on this platform.")
     }
     suspend fun scanSubsonic(draft: SubsonicSourceDraft, sourceId: String): ImportScanReport {
         throw UnsupportedOperationException("Subsonic import is not supported on this platform.")
+    }
+    suspend fun scanSubsonic(
+        draft: SubsonicSourceDraft,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
+        return scanSubsonic(draft, sourceId)
     }
     suspend fun testEmby(draft: EmbySourceDraft, deviceId: String): EmbyCredential {
         throw UnsupportedOperationException("Emby import is not supported on this platform.")
@@ -494,6 +550,15 @@ interface ImportSourceGateway {
         deviceId: String,
     ): ImportScanReport {
         throw UnsupportedOperationException("Emby import is not supported on this platform.")
+    }
+    suspend fun scanEmby(
+        draft: EmbySourceDraft,
+        credential: EmbyCredential,
+        sourceId: String,
+        deviceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
+        return scanEmby(draft, credential, sourceId, deviceId)
     }
 }
 
