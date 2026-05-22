@@ -107,6 +107,9 @@ class EmbyEngineTest {
             assertEquals("true", request.queryParam("Recursive"))
             assertEquals("Audio", request.queryParam("MediaTypes"))
             assertEquals("Audio", request.queryParam("IncludeItemTypes"))
+            assertEquals("MediaSources,Path", request.queryParam("Fields"))
+            assertEquals("false", request.queryParam("EnableImages"))
+            assertEquals(null, request.queryParam("EnableImageTypes"))
             assertEquals("0", request.queryParam("StartIndex"))
             assertEquals("100", request.queryParam("Limit"))
             assertEquals("access-token", request.headers["X-Emby-Token"])
@@ -210,6 +213,83 @@ class EmbyEngineTest {
             ),
             progressEvents,
         )
+    }
+
+    @Test
+    fun `scan retries timed out Emby items page with smaller page sizes`() = runTest {
+        val httpClient = RecordingEmbyHttpClient { request ->
+            val startIndex = request.queryParam("StartIndex")?.toIntOrNull() ?: error("Missing StartIndex")
+            val limit = request.queryParam("Limit")?.toIntOrNull() ?: error("Missing Limit")
+            if (startIndex == 100 && limit == 100) {
+                error("Socket timeout has expired")
+            }
+            when (startIndex) {
+                0 -> {
+                    assertEquals(100, limit)
+                    embyItemsResponse(startIndex = 0, count = 100, totalRecordCount = 126)
+                }
+
+                100 -> {
+                    assertEquals(50, limit)
+                    embyItemsResponse(startIndex = 100, count = 25, totalRecordCount = 126)
+                }
+
+                125 -> {
+                    assertEquals(50, limit)
+                    embyItemsResponse(startIndex = 125, count = 1, totalRecordCount = 126)
+                }
+
+                else -> error("Unexpected StartIndex $startIndex")
+            }
+        }
+
+        val report = scanEmbyLibrary(
+            draft = EmbySourceDraft(
+                label = "Emby",
+                baseUrl = "https://emby.example.com",
+                username = "demo",
+                password = "",
+            ),
+            credential = EmbyCredential(userId = "user-1", accessToken = "access-token"),
+            deviceId = "device-1",
+            sourceId = "emby-1",
+            httpClient = httpClient,
+            supportedImportExtensions = setOf("flac"),
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
+        )
+
+        assertEquals(126, report.discoveredAudioFileCount)
+        assertEquals(126, report.totalTrackCount)
+        assertEquals(126, report.tracks.size)
+        assertEquals(listOf("0", "100", "100", "125"), httpClient.requests.map { it.queryParam("StartIndex") })
+        assertEquals(listOf("100", "100", "50", "50"), httpClient.requests.map { it.queryParam("Limit") })
+    }
+
+    @Test
+    fun `scan does not retry non timeout Emby items failures`() = runTest {
+        val httpClient = RecordingEmbyHttpClient {
+            error("Emby server unavailable")
+        }
+
+        val failure = assertFailsWith<IllegalStateException> {
+            scanEmbyLibrary(
+                draft = EmbySourceDraft(
+                    label = "Emby",
+                    baseUrl = "https://emby.example.com",
+                    username = "demo",
+                    password = "",
+                ),
+                credential = EmbyCredential(userId = "user-1", accessToken = "access-token"),
+                deviceId = "device-1",
+                sourceId = "emby-1",
+                httpClient = httpClient,
+                supportedImportExtensions = setOf("flac"),
+            )
+        }
+
+        assertTrue(failure.message.orEmpty().contains("Emby Items 请求失败"))
+        assertEquals(1, httpClient.requests.size)
+        assertEquals("100", httpClient.requests.single().queryParam("Limit"))
     }
 
     @Test
@@ -451,8 +531,32 @@ private class RecordingEmbyHttpClient(
 
     override suspend fun request(request: LyricsRequest): Result<LyricsHttpResponse> {
         requests += request
-        return Result.success(responder(request))
+        return runCatching { responder(request) }
     }
+}
+
+private fun embyItemsResponse(
+    startIndex: Int,
+    count: Int,
+    totalRecordCount: Int,
+): LyricsHttpResponse {
+    val items = (startIndex until startIndex + count).joinToString(",") { index ->
+        """
+            {
+              "Id": "song-$index",
+              "Name": "Track $index",
+              "Album": "Album",
+              "Artists": ["Artist"],
+              "RunTimeTicks": 10000000,
+              "Container": "flac",
+              "AlbumId": "album-1"
+            }
+        """.trimIndent()
+    }
+    return LyricsHttpResponse(
+        statusCode = 200,
+        body = """{"Items":[$items],"TotalRecordCount":$totalRecordCount}""",
+    )
 }
 
 private fun LyricsRequest.queryParam(name: String): String? {

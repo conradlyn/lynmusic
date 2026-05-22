@@ -46,6 +46,7 @@ private const val EMBY_DEVICE_NAME = "LynMusic"
 private const val EMBY_VERSION = "1.0.0"
 private const val EMBY_PAGE_SIZE = 200
 private const val EMBY_IMPORT_PAGE_SIZE = 100
+private val EMBY_IMPORT_RETRY_PAGE_SIZES = listOf(EMBY_IMPORT_PAGE_SIZE, 50, 25)
 private val embyJson = Json { ignoreUnknownKeys = true }
 
 const val EMBY_LYRICS_SOURCE_ID = "emby-lyrics"
@@ -226,17 +227,20 @@ suspend fun scanEmbyLibrary(
     val seenItemIds = linkedSetOf<String>()
     var discoveredAudioFileCount = 0
     var startIndex = 0
+    var pageSize = EMBY_IMPORT_PAGE_SIZE
     var totalTrackCount: Int? = null
     while (true) {
-        val page = requestEmbyItemsPage(
+        val page = requestEmbyItemsPageWithRetry(
             baseUrl = baseUrl,
             credential = credential,
             deviceId = deviceId,
             startIndex = startIndex,
+            pageSize = pageSize,
             httpClient = httpClient,
             logger = logger,
             timeoutMillis = timeoutMillis,
         )
+        pageSize = page.pageSize
         totalTrackCount = page.totalRecordCount
         progressSink.onProgress(
             ImportScanProgress(
@@ -781,20 +785,21 @@ private suspend fun requestEmbyItemsPage(
     credential: EmbyCredential,
     deviceId: String,
     startIndex: Int,
+    pageSize: Int,
     httpClient: LyricsHttpClient,
     logger: DiagnosticLogger,
     timeoutMillis: Long? = null,
 ): EmbyItemsPage {
+    val limit = pageSize.coerceAtLeast(1)
     val url = URLBuilder(baseUrl).apply {
         appendPathSegments("Users", credential.userId, "Items")
         parameters.append("Recursive", "true")
         parameters.append("MediaTypes", "Audio")
         parameters.append("IncludeItemTypes", "Audio")
-        parameters.append("Fields", "MediaSources,Path,PrimaryImageAspectRatio,Genres,SortName")
-        parameters.append("EnableImages", "true")
-        parameters.append("EnableImageTypes", "Primary")
+        parameters.append("Fields", "MediaSources,Path")
+        parameters.append("EnableImages", "false")
         parameters.append("StartIndex", startIndex.toString())
-        parameters.append("Limit", EMBY_IMPORT_PAGE_SIZE.toString())
+        parameters.append("Limit", limit.toString())
     }.buildString()
     val response = requestEmbyJson(
         httpClient = httpClient,
@@ -811,6 +816,48 @@ private suspend fun requestEmbyItemsPage(
     return EmbyItemsPage(
         items = items,
         totalRecordCount = response.int("TotalRecordCount") ?: items.size,
+        pageSize = limit,
+    )
+}
+
+private suspend fun requestEmbyItemsPageWithRetry(
+    baseUrl: String,
+    credential: EmbyCredential,
+    deviceId: String,
+    startIndex: Int,
+    pageSize: Int,
+    httpClient: LyricsHttpClient,
+    logger: DiagnosticLogger,
+    timeoutMillis: Long? = null,
+): EmbyItemsPage {
+    val retryPageSizes = EMBY_IMPORT_RETRY_PAGE_SIZES.filter { it <= pageSize.coerceAtLeast(1) }
+        .ifEmpty { listOf(pageSize.coerceAtLeast(1)) }
+    var lastTimeout: Throwable? = null
+    retryPageSizes.forEach { candidatePageSize ->
+        try {
+            return requestEmbyItemsPage(
+                baseUrl = baseUrl,
+                credential = credential,
+                deviceId = deviceId,
+                startIndex = startIndex,
+                pageSize = candidatePageSize,
+                httpClient = httpClient,
+                logger = logger,
+                timeoutMillis = timeoutMillis,
+            )
+        } catch (throwable: Throwable) {
+            if (!throwable.isEmbyTimeoutFailure()) throw throwable
+            lastTimeout = throwable
+            logger.log(
+                level = DiagnosticLogLevel.WARN,
+                tag = "Emby",
+                message = "items-page-timeout startIndex=$startIndex limit=$candidatePageSize",
+            )
+        }
+    }
+    throw IllegalStateException(
+        "Emby Items 请求超时: StartIndex=$startIndex, Limit=${retryPageSizes.last()}，已尝试降低分页大小后仍失败。",
+        lastTimeout,
     )
 }
 
@@ -1140,6 +1187,7 @@ private fun redactEmbyUrlForLog(url: String): String {
 private data class EmbyItemsPage(
     val items: List<EmbyAudioItem>,
     val totalRecordCount: Int,
+    val pageSize: Int,
 )
 
 private data class EmbyAudioItem(
@@ -1211,7 +1259,7 @@ private fun resolveEmbyCoverItemId(item: JsonObject, itemId: String): String? {
         return itemId
     }
     val albumId = item.string("AlbumId")
-    if (!albumId.isNullOrBlank() && !item.string("AlbumPrimaryImageTag").isNullOrBlank()) {
+    if (!albumId.isNullOrBlank()) {
         return albumId
     }
     return null
@@ -1261,6 +1309,18 @@ private fun normalizeEmbyPathSegment(value: String): String {
 private fun parseEmbyObject(payload: String, context: String): JsonObject {
     return embyJson.parseToJsonElement(payload) as? JsonObject
         ?: error("Emby $context 返回不是 JSON 对象。")
+}
+
+private fun Throwable.isEmbyTimeoutFailure(): Boolean {
+    var current: Throwable? = this
+    while (current != null) {
+        val message = current.message.orEmpty()
+        if (message.contains("timeout", ignoreCase = true) || message.contains("timed out", ignoreCase = true)) {
+            return true
+        }
+        current = current.cause
+    }
+    return false
 }
 
 private fun parseEmbyLyricsObject(
