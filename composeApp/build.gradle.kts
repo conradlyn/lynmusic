@@ -1,4 +1,5 @@
 import com.android.build.gradle.internal.api.BaseVariantOutputImpl
+import org.gradle.api.tasks.Copy
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -12,6 +13,11 @@ val desktopConsoleEnabled: Boolean? = providers.gradleProperty("desktopConsole")
     .map(String::toBoolean)
     .orElse(false)
     .get()
+val isMacOsHost = System.getProperty("os.name").contains("mac", ignoreCase = true)
+val jvmMacOsNowPlayingBridgeOutput = layout.buildDirectory.dir("generated/jvmMacOsNowPlayingBridge")
+val jvmMacOsNowPlayingBridgeModuleCache = layout.buildDirectory.dir("tmp/jvmMacOsNowPlayingBridgeModuleCache")
+
+fun String.shellQuote(): String = "'${replace("'", "'\"'\"'")}'"
 
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
@@ -163,6 +169,56 @@ android {
 
 dependencies {
     debugImplementation(libs.compose.uiTooling)
+}
+
+val compileJvmMacOsNowPlayingBridge by tasks.registering(Exec::class) {
+    val swiftSource = layout.projectDirectory.file("src/jvmMacosMain/swift/LynMusicNowPlayingBridge.swift")
+    val outputFile = jvmMacOsNowPlayingBridgeOutput.map { it.file("libLynMusicNowPlayingBridge.dylib") }
+    val outputDirectoryPath = jvmMacOsNowPlayingBridgeOutput.get().asFile.absolutePath
+    val moduleCachePath = jvmMacOsNowPlayingBridgeModuleCache.get().asFile.absolutePath
+    val outputFilePath = outputFile.get().asFile.absolutePath
+    val swiftSourcePath = swiftSource.asFile.absolutePath
+
+    inputs.file(swiftSource)
+    outputs.file(outputFile)
+    if (isMacOsHost) {
+        executable = "/bin/zsh"
+        environment("CLANG_MODULE_CACHE_PATH", moduleCachePath)
+        args(
+            "-lc",
+            listOf(
+                "mkdir -p ${outputDirectoryPath.shellQuote()} ${moduleCachePath.shellQuote()}",
+                "&&",
+                "/usr/bin/xcrun",
+                "swiftc",
+                "-emit-library",
+                "-module-name",
+                "LynMusicNowPlayingBridge",
+                "-module-cache-path",
+                moduleCachePath.shellQuote(),
+                "-framework",
+                "Foundation",
+                "-framework",
+                "AppKit",
+                "-framework",
+                "MediaPlayer",
+                "-o",
+                outputFilePath.shellQuote(),
+                swiftSourcePath.shellQuote(),
+            ).joinToString(" "),
+        )
+    } else {
+        executable = "true"
+    }
+}
+
+tasks.named<Copy>("jvmProcessResources") {
+    if (isMacOsHost) {
+        dependsOn(compileJvmMacOsNowPlayingBridge)
+        from(jvmMacOsNowPlayingBridgeOutput) {
+            into("native/macos")
+        }
+    }
 }
 
 androidComponents {

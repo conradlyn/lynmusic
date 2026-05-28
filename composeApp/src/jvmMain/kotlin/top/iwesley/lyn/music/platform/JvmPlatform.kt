@@ -182,6 +182,11 @@ fun createJvmAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
     val secureStore = createJvmSecureCredentialStore(logger).withSecureInMemoryCache()
     val appPreferencesStore = JvmAppPreferencesStore()
     val lyricsShareFontLibraryPlatformService = JvmLyricsShareFontLibraryPlatformService()
+    val artworkCacheStore = createJvmArtworkCacheStore()
+    val systemPlaybackControls = createJvmSystemPlaybackControlsPlatformService(
+        logger = logger,
+        artworkCacheStore = artworkCacheStore,
+    )
     val remoteSourceAddressSelector = RemoteSourceAddressSelector(WifiNetworkConnectionTypeProvider)
     val playbackGateway = JvmPlaybackGateway(
         database = database,
@@ -199,7 +204,7 @@ fun createJvmAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
             supportsSambaImport = true,
             supportsWebDavImport = true,
             supportsNavidromeImport = true,
-            supportsSystemMediaControls = false,
+            supportsSystemMediaControls = systemPlaybackControls.isSupported,
             supportsDesktopLyrics = true,
         ),
     )
@@ -222,7 +227,7 @@ fun createJvmAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
             lyricsShareFontLibraryPlatformService = lyricsShareFontLibraryPlatformService,
             lyricsShareFontPreferencesStore = appPreferencesStore,
             lyricsHttpClient = navidromeHttpClient,
-            artworkCacheStore = createJvmArtworkCacheStore(),
+            artworkCacheStore = artworkCacheStore,
             appStorageGateway = createJvmAppStorageGateway(database = database),
             offlineDownloadGateway = createJvmOfflineDownloadGateway(
                 database = database,
@@ -259,6 +264,7 @@ fun createJvmAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
             lyricsSharePlatformService = JvmLyricsSharePlatformService(lyricsShareFontLibraryPlatformService),
             lyricsShareFontLibraryPlatformService = lyricsShareFontLibraryPlatformService,
             lyricsShareFontPreferencesStore = appPreferencesStore,
+            systemPlaybackControlsPlatformService = systemPlaybackControls.service,
         ),
     )
 }
