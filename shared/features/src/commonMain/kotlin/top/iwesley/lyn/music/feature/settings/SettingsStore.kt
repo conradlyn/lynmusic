@@ -61,6 +61,7 @@ data class SettingsState(
     val useSambaCache: Boolean = false,
     val showCompactPlayerLyrics: Boolean = false,
     val showDesktopLyrics: Boolean = false,
+    val showMenuBarLyricsControls: Boolean = false,
     val autoPlayOnStartup: Boolean = false,
     val appDisplayScalePreset: AppDisplayScalePreset = AppDisplayScalePreset.Default,
     val navidromeWifiAudioQuality: NavidromeAudioQuality = NavidromeAudioQuality.Original,
@@ -108,6 +109,7 @@ sealed interface SettingsIntent {
     data class UseSambaCacheChanged(val value: Boolean) : SettingsIntent
     data class ShowCompactPlayerLyricsChanged(val value: Boolean) : SettingsIntent
     data class ShowDesktopLyricsChanged(val value: Boolean) : SettingsIntent
+    data class ShowMenuBarLyricsControlsChanged(val value: Boolean) : SettingsIntent
     data object RecheckDesktopLyricsPermission : SettingsIntent
     data class AutoPlayOnStartupChanged(val value: Boolean) : SettingsIntent
     data class AppDisplayScalePresetChanged(val value: AppDisplayScalePreset) : SettingsIntent
@@ -245,6 +247,11 @@ class SettingsStore(
             }
         }
         scope.launch {
+            repository.showMenuBarLyricsControls.collect { enabled ->
+                updateState { state -> state.copy(showMenuBarLyricsControls = enabled) }
+            }
+        }
+        scope.launch {
             repository.autoPlayOnStartup.collect { enabled ->
                 updateState { state -> state.copy(autoPlayOnStartup = enabled) }
             }
@@ -319,6 +326,10 @@ class SettingsStore(
 
             is SettingsIntent.ShowDesktopLyricsChanged -> {
                 setShowDesktopLyrics(intent.value)
+            }
+
+            is SettingsIntent.ShowMenuBarLyricsControlsChanged -> {
+                setShowMenuBarLyricsControls(intent.value)
             }
 
             SettingsIntent.RecheckDesktopLyricsPermission -> {
@@ -774,6 +785,16 @@ class SettingsStore(
         updateState {
             it.copy(
                 showDesktopLyrics = true,
+                message = null,
+            )
+        }
+    }
+
+    private suspend fun setShowMenuBarLyricsControls(enabled: Boolean) {
+        repository.setShowMenuBarLyricsControls(enabled)
+        updateState {
+            it.copy(
+                showMenuBarLyricsControls = enabled,
                 message = null,
             )
         }

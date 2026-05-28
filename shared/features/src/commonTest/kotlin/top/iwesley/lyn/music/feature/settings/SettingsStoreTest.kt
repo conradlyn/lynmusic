@@ -233,6 +233,24 @@ class SettingsStoreTest {
     }
 
     @Test
+    fun `menu bar lyrics controls toggle writes repository when supported`() = runTest {
+        val repository = FakeSettingsRepository()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(
+            repository,
+            scope,
+        )
+
+        advanceUntilIdle()
+        store.dispatch(SettingsIntent.ShowMenuBarLyricsControlsChanged(true))
+        advanceUntilIdle()
+
+        assertTrue(repository.currentShowMenuBarLyricsControls())
+        assertTrue(store.state.value.showMenuBarLyricsControls)
+        scope.cancel()
+    }
+
+    @Test
     fun `importing lyrics share font emits change effect even when list refresh fails`() = runTest {
         val repository = FakeSettingsRepository()
         val importedFont = LyricsShareFontOption(
@@ -1335,6 +1353,7 @@ private class FakeSettingsRepository(
     sources: List<LyricsSourceDefinition> = emptyList(),
     showCompactPlayerLyrics: Boolean = false,
     showDesktopLyrics: Boolean = false,
+    showMenuBarLyricsControls: Boolean = false,
     autoPlayOnStartup: Boolean = false,
     useAndroidExtensionDecoder: Boolean = false,
     appDisplayScalePreset: AppDisplayScalePreset = AppDisplayScalePreset.Default,
@@ -1350,6 +1369,7 @@ private class FakeSettingsRepository(
     private val mutableUseSambaCache = MutableStateFlow(false)
     private val mutableShowCompactPlayerLyrics = MutableStateFlow(showCompactPlayerLyrics)
     private val mutableShowDesktopLyrics = MutableStateFlow(showDesktopLyrics)
+    private val mutableShowMenuBarLyricsControls = MutableStateFlow(showMenuBarLyricsControls)
     private val mutableAutoPlayOnStartup = MutableStateFlow(autoPlayOnStartup)
     private val mutableUseAndroidExtensionDecoder = MutableStateFlow(useAndroidExtensionDecoder)
     private val mutableAppDisplayScalePreset = MutableStateFlow(appDisplayScalePreset)
@@ -1368,6 +1388,8 @@ private class FakeSettingsRepository(
     override val useSambaCache: StateFlow<Boolean> = mutableUseSambaCache.asStateFlow()
     override val showCompactPlayerLyrics: StateFlow<Boolean> = mutableShowCompactPlayerLyrics.asStateFlow()
     override val showDesktopLyrics: StateFlow<Boolean> = mutableShowDesktopLyrics.asStateFlow()
+    override val showMenuBarLyricsControls: StateFlow<Boolean> =
+        mutableShowMenuBarLyricsControls.asStateFlow()
     override val autoPlayOnStartup: StateFlow<Boolean> = mutableAutoPlayOnStartup.asStateFlow()
     override val useAndroidExtensionDecoder: StateFlow<Boolean> =
         mutableUseAndroidExtensionDecoder.asStateFlow()
@@ -1389,6 +1411,7 @@ private class FakeSettingsRepository(
     fun currentSources(): List<LyricsSourceDefinition> = mutableSources.value
     fun currentShowCompactPlayerLyrics(): Boolean = mutableShowCompactPlayerLyrics.value
     fun currentShowDesktopLyrics(): Boolean = mutableShowDesktopLyrics.value
+    fun currentShowMenuBarLyricsControls(): Boolean = mutableShowMenuBarLyricsControls.value
     fun currentAutoPlayOnStartup(): Boolean = mutableAutoPlayOnStartup.value
     fun currentUseAndroidExtensionDecoder(): Boolean = mutableUseAndroidExtensionDecoder.value
     fun currentAppDisplayScalePreset(): AppDisplayScalePreset = mutableAppDisplayScalePreset.value
@@ -1411,6 +1434,10 @@ private class FakeSettingsRepository(
 
     override suspend fun setShowDesktopLyrics(enabled: Boolean) {
         mutableShowDesktopLyrics.value = enabled
+    }
+
+    override suspend fun setShowMenuBarLyricsControls(enabled: Boolean) {
+        mutableShowMenuBarLyricsControls.value = enabled
     }
 
     override suspend fun setAutoPlayOnStartup(enabled: Boolean) {

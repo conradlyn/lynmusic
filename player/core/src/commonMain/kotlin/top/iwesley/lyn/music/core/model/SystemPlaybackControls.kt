@@ -15,6 +15,22 @@ interface SystemPlaybackControlsPlatformService {
     suspend fun close()
 }
 
+class CompositeSystemPlaybackControlsPlatformService(
+    private val services: List<SystemPlaybackControlsPlatformService>,
+) : SystemPlaybackControlsPlatformService {
+    override fun bind(callbacks: SystemPlaybackControlCallbacks) {
+        services.forEach { service -> service.bind(callbacks) }
+    }
+
+    override suspend fun updateSnapshot(snapshot: PlaybackSnapshot) {
+        services.forEach { service -> service.updateSnapshot(snapshot) }
+    }
+
+    override suspend fun close() {
+        services.forEach { service -> service.close() }
+    }
+}
+
 object UnsupportedSystemPlaybackControlsPlatformService : SystemPlaybackControlsPlatformService {
     override fun bind(callbacks: SystemPlaybackControlCallbacks) = Unit
 

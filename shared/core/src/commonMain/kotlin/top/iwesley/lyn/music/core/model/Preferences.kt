@@ -71,6 +71,12 @@ interface DesktopLyricsPreferencesStore {
     suspend fun setShowDesktopLyrics(enabled: Boolean)
 }
 
+interface MenuBarLyricsControlsPreferencesStore {
+    val showMenuBarLyricsControls: StateFlow<Boolean>
+
+    suspend fun setShowMenuBarLyricsControls(enabled: Boolean)
+}
+
 interface AutoPlayOnStartupPreferencesStore {
     val autoPlayOnStartup: StateFlow<Boolean>
 
@@ -120,6 +126,16 @@ object UnsupportedDesktopLyricsPreferencesStore : DesktopLyricsPreferencesStore 
 
     override suspend fun setShowDesktopLyrics(enabled: Boolean) {
         mutableShowDesktopLyrics.value = enabled
+    }
+}
+
+object UnsupportedMenuBarLyricsControlsPreferencesStore : MenuBarLyricsControlsPreferencesStore {
+    private val mutableShowMenuBarLyricsControls = MutableStateFlow(false)
+
+    override val showMenuBarLyricsControls: StateFlow<Boolean> = mutableShowMenuBarLyricsControls
+
+    override suspend fun setShowMenuBarLyricsControls(enabled: Boolean) {
+        mutableShowMenuBarLyricsControls.value = enabled
     }
 }
 

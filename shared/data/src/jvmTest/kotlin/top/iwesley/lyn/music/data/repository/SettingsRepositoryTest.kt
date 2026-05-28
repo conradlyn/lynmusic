@@ -20,6 +20,7 @@ import top.iwesley.lyn.music.core.model.DesktopLyricsPreferencesStore
 import top.iwesley.lyn.music.core.model.DesktopVlcPreferencesStore
 import top.iwesley.lyn.music.core.model.LyricsResponseFormat
 import top.iwesley.lyn.music.core.model.LyricsSourceConfig
+import top.iwesley.lyn.music.core.model.MenuBarLyricsControlsPreferencesStore
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.NavidromeAudioQualityPreferencesStore
 import top.iwesley.lyn.music.core.model.PlaybackDecoderPreferencesStore
@@ -143,6 +144,39 @@ class SettingsRepositoryTest {
 
         assertEquals(true, preferences.showDesktopLyrics.value)
         assertEquals(true, repository.showDesktopLyrics.value)
+    }
+
+    @Test
+    fun `menu bar lyrics controls preference defaults to false`() = runTest {
+        val database = createSettingsTestDatabase()
+        val preferences = FakePreferencesStore()
+        val repository = DefaultSettingsRepository(
+            database = database,
+            sambaCachePreferencesStore = preferences,
+            themePreferencesStore = preferences,
+            desktopVlcPreferencesStore = preferences,
+            menuBarLyricsControlsPreferencesStore = preferences,
+        )
+
+        assertEquals(false, repository.showMenuBarLyricsControls.value)
+    }
+
+    @Test
+    fun `setting menu bar lyrics controls preference writes through to preference store`() = runTest {
+        val database = createSettingsTestDatabase()
+        val preferences = FakePreferencesStore()
+        val repository = DefaultSettingsRepository(
+            database = database,
+            sambaCachePreferencesStore = preferences,
+            themePreferencesStore = preferences,
+            desktopVlcPreferencesStore = preferences,
+            menuBarLyricsControlsPreferencesStore = preferences,
+        )
+
+        repository.setShowMenuBarLyricsControls(true)
+
+        assertEquals(true, preferences.showMenuBarLyricsControls.value)
+        assertEquals(true, repository.showMenuBarLyricsControls.value)
     }
 
     @Test
@@ -572,11 +606,12 @@ private fun createSettingsTestDatabase(): LynMusicDatabase {
 
 private class FakePreferencesStore : SambaCachePreferencesStore, ThemePreferencesStore, DesktopVlcPreferencesStore,
     AutoPlayOnStartupPreferencesStore,
-    CompactPlayerLyricsPreferencesStore, DesktopLyricsPreferencesStore, NavidromeAudioQualityPreferencesStore,
-    PlaybackDecoderPreferencesStore {
+    CompactPlayerLyricsPreferencesStore, DesktopLyricsPreferencesStore, MenuBarLyricsControlsPreferencesStore,
+    NavidromeAudioQualityPreferencesStore, PlaybackDecoderPreferencesStore {
     override val useSambaCache = MutableStateFlow(true)
     override val showCompactPlayerLyrics = MutableStateFlow(false)
     override val showDesktopLyrics = MutableStateFlow(false)
+    override val showMenuBarLyricsControls = MutableStateFlow(false)
     override val autoPlayOnStartup = MutableStateFlow(false)
     override val useAndroidExtensionDecoder = MutableStateFlow(false)
     override val navidromeWifiAudioQuality = MutableStateFlow(NavidromeAudioQuality.Original)
@@ -598,6 +633,10 @@ private class FakePreferencesStore : SambaCachePreferencesStore, ThemePreference
 
     override suspend fun setShowDesktopLyrics(enabled: Boolean) {
         showDesktopLyrics.value = enabled
+    }
+
+    override suspend fun setShowMenuBarLyricsControls(enabled: Boolean) {
+        showMenuBarLyricsControls.value = enabled
     }
 
     override suspend fun setAutoPlayOnStartup(enabled: Boolean) {

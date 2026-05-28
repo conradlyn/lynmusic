@@ -39,9 +39,11 @@ import top.iwesley.lyn.music.cast.CastNotificationPermissionRequester
 import top.iwesley.lyn.music.core.model.AppDisplayScalePreset
 import top.iwesley.lyn.music.core.model.AppTab
 import top.iwesley.lyn.music.core.model.ArtworkCacheStore
+import top.iwesley.lyn.music.core.model.CompositeSystemPlaybackControlsPlatformService
 import top.iwesley.lyn.music.core.model.DesktopLyricsPlatformService
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
 import top.iwesley.lyn.music.core.model.EqualizerPlatformService
+import top.iwesley.lyn.music.core.model.MenuBarLyricsControlsPlatformService
 import top.iwesley.lyn.music.core.model.PlatformDescriptor
 import top.iwesley.lyn.music.core.model.PlaylistKind
 import top.iwesley.lyn.music.core.model.Track
@@ -58,7 +60,9 @@ import top.iwesley.lyn.music.feature.my.MyStore
 import top.iwesley.lyn.music.feature.offline.OfflineDownloadIntent
 import top.iwesley.lyn.music.feature.offline.OfflineDownloadStore
 import top.iwesley.lyn.music.feature.player.PlayerIntent
+import top.iwesley.lyn.music.feature.player.PlayerState
 import top.iwesley.lyn.music.feature.player.PlayerStore
+import top.iwesley.lyn.music.feature.player.DESKTOP_LYRICS_LOADING_TEXT
 import top.iwesley.lyn.music.feature.player.resolveDesktopLyricsOverlayText
 import top.iwesley.lyn.music.feature.playlists.PlaylistsIntent
 import top.iwesley.lyn.music.feature.playlists.PlaylistsStore
@@ -109,6 +113,12 @@ fun buildPlayerAppComponent(
     sharedGraph: SharedGraph,
     playerRuntimeServices: PlayerRuntimeServices,
 ): LynMusicAppComponent {
+    val systemPlaybackControlsPlatformService = CompositeSystemPlaybackControlsPlatformService(
+        listOf(
+            playerRuntimeServices.systemPlaybackControlsPlatformService,
+            playerRuntimeServices.menuBarLyricsControlsPlatformService,
+        ),
+    )
     val playbackRepository = playerRuntimeServices.playbackRepository ?: DefaultPlaybackRepository(
         database = sharedGraph.database,
         gateway = requireNotNull(playerRuntimeServices.playbackGateway) {
@@ -116,7 +126,7 @@ fun buildPlayerAppComponent(
         },
         playbackPreferencesStore = playerRuntimeServices.playbackPreferencesStore,
         scope = sharedGraph.scope,
-        systemPlaybackControlsPlatformService = playerRuntimeServices.systemPlaybackControlsPlatformService,
+        systemPlaybackControlsPlatformService = systemPlaybackControlsPlatformService,
         logger = sharedGraph.logger,
         playbackStatsReporter = sharedGraph.playbackStatsReporter,
         hydrateImmediately = false,
@@ -138,6 +148,11 @@ fun buildPlayerAppComponent(
         settingsStore = sharedGraph.settingsStore,
         playerStore = playerStore,
         desktopLyricsPlatformService = sharedGraph.desktopLyricsPlatformService,
+    )
+    sharedGraph.scope.launchMenuBarLyricsControlsSync(
+        settingsStore = sharedGraph.settingsStore,
+        playerStore = playerStore,
+        menuBarLyricsControlsPlatformService = playerRuntimeServices.menuBarLyricsControlsPlatformService,
     )
     return LynMusicAppComponent(
         platform = sharedGraph.platform,
@@ -164,6 +179,7 @@ fun buildPlayerAppComponent(
             playerRuntimeServices.castGateway.release()
             playerRuntimeServices.castMediaUrlResolver.release()
             sharedGraph.desktopLyricsPlatformService.release()
+            playerRuntimeServices.menuBarLyricsControlsPlatformService.close()
             playbackRepository.close()
         },
     )
@@ -215,6 +231,62 @@ private fun CoroutineScope.launchDesktopLyricsSync(
                     lastText = text
                 }
             }
+    }
+}
+
+private fun CoroutineScope.launchMenuBarLyricsControlsSync(
+    settingsStore: SettingsStore,
+    playerStore: PlayerStore,
+    menuBarLyricsControlsPlatformService: MenuBarLyricsControlsPlatformService,
+) {
+    if (!menuBarLyricsControlsPlatformService.isSupported) return
+    launch {
+        var lastEnabled = false
+        var lastText: String? = null
+        var lastTrackId: String? = null
+        combine(settingsStore.state, playerStore.state) { settings, player -> settings to player }
+            .collect { (settings, player) ->
+                val enabled = settings.showMenuBarLyricsControls
+                if (!enabled) {
+                    if (lastEnabled || lastText != null) {
+                        menuBarLyricsControlsPlatformService.updateLyrics(null)
+                        menuBarLyricsControlsPlatformService.setEnabled(false)
+                    }
+                    lastEnabled = false
+                    lastText = null
+                    lastTrackId = null
+                    return@collect
+                }
+                if (!lastEnabled) {
+                    menuBarLyricsControlsPlatformService.setEnabled(true)
+                    lastEnabled = true
+                }
+                val trackId = player.snapshot.currentTrack?.id
+                val fallbackText = resolveMenuBarLyricsFallbackText(player)
+                if (trackId != lastTrackId) {
+                    menuBarLyricsControlsPlatformService.updateLyrics(fallbackText)
+                    lastText = fallbackText
+                    lastTrackId = trackId
+                }
+                val resolvedLyricsText = resolveDesktopLyricsOverlayText(
+                    lyrics = player.lyrics,
+                    highlightedLineIndex = player.highlightedLineIndex,
+                    isLyricsLoading = player.isLyricsLoading,
+                )
+                val text = resolvedLyricsText
+                    ?.takeUnless { it == DESKTOP_LYRICS_LOADING_TEXT }
+                    ?: fallbackText
+                if (text != lastText) {
+                    menuBarLyricsControlsPlatformService.updateLyrics(text)
+                    lastText = text
+                }
+            }
+    }
+}
+
+private fun resolveMenuBarLyricsFallbackText(player: PlayerState): String? {
+    return player.snapshot.currentTrack?.let {
+        player.snapshot.currentDisplayTitle.trim().ifBlank { it.title.trim() }.ifBlank { "LynMusic" }
     }
 }
 

@@ -29,6 +29,7 @@ import top.iwesley.lyn.music.core.model.EqualizerPlatformService
 import top.iwesley.lyn.music.core.model.LyricsShareFontLibraryPlatformService
 import top.iwesley.lyn.music.core.model.LyricsSharePlatformService
 import top.iwesley.lyn.music.core.model.LyricsShareFontPreferencesStore
+import top.iwesley.lyn.music.core.model.MenuBarLyricsControlsPlatformService
 import top.iwesley.lyn.music.core.model.NoopDiagnosticLogger
 import top.iwesley.lyn.music.core.model.NoopPlaybackStatsReporter
 import top.iwesley.lyn.music.core.model.PlaybackGateway
@@ -45,6 +46,7 @@ import top.iwesley.lyn.music.core.model.UnsupportedEqualizerPlatformService
 import top.iwesley.lyn.music.core.model.UnsupportedLyricsShareFontLibraryPlatformService
 import top.iwesley.lyn.music.core.model.UnsupportedLyricsShareFontPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedLyricsSharePlatformService
+import top.iwesley.lyn.music.core.model.UnsupportedMenuBarLyricsControlsPlatformService
 import top.iwesley.lyn.music.core.model.UnsupportedSystemPlaybackControlsPlatformService
 import top.iwesley.lyn.music.core.model.debug
 import top.iwesley.lyn.music.core.model.error
@@ -932,6 +934,8 @@ data class PlayerRuntimeServices(
         UnsupportedLyricsShareFontLibraryPlatformService,
     val lyricsShareFontPreferencesStore: LyricsShareFontPreferencesStore = UnsupportedLyricsShareFontPreferencesStore,
     val systemPlaybackControlsPlatformService: SystemPlaybackControlsPlatformService = UnsupportedSystemPlaybackControlsPlatformService,
+    val menuBarLyricsControlsPlatformService: MenuBarLyricsControlsPlatformService =
+        UnsupportedMenuBarLyricsControlsPlatformService,
 )
 
 private fun now(): Long = Clock.System.now().toEpochMilliseconds()

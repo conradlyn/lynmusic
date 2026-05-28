@@ -22,6 +22,7 @@ import top.iwesley.lyn.music.core.model.ImportSourceGateway
 import top.iwesley.lyn.music.core.model.LyricsShareFontLibraryPlatformService
 import top.iwesley.lyn.music.core.model.LyricsShareFontPreferencesStore
 import top.iwesley.lyn.music.core.model.LyricsHttpClient
+import top.iwesley.lyn.music.core.model.MenuBarLyricsControlsPreferencesStore
 import top.iwesley.lyn.music.core.model.MobileNetworkConnectionTypeProvider
 import top.iwesley.lyn.music.core.model.NavidromeAudioQualityPreferencesStore
 import top.iwesley.lyn.music.core.model.NoopDiagnosticLogger
@@ -47,6 +48,7 @@ import top.iwesley.lyn.music.core.model.UnsupportedDesktopVlcPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedDeviceInfoGateway
 import top.iwesley.lyn.music.core.model.UnsupportedLyricsShareFontLibraryPlatformService
 import top.iwesley.lyn.music.core.model.UnsupportedLyricsShareFontPreferencesStore
+import top.iwesley.lyn.music.core.model.UnsupportedMenuBarLyricsControlsPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedNavidromeAudioQualityPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedOfflineDownloadGateway
 import top.iwesley.lyn.music.core.model.UnsupportedPlaybackDecoderPreferencesStore
@@ -104,6 +106,8 @@ data class SharedRuntimeServices(
         UnsupportedCompactPlayerLyricsPreferencesStore,
     val desktopLyricsPreferencesStore: DesktopLyricsPreferencesStore =
         UnsupportedDesktopLyricsPreferencesStore,
+    val menuBarLyricsControlsPreferencesStore: MenuBarLyricsControlsPreferencesStore =
+        UnsupportedMenuBarLyricsControlsPreferencesStore,
     val autoPlayOnStartupPreferencesStore: AutoPlayOnStartupPreferencesStore =
         UnsupportedAutoPlayOnStartupPreferencesStore,
     val navidromeAudioQualityPreferencesStore: NavidromeAudioQualityPreferencesStore =
@@ -196,6 +200,7 @@ fun buildSharedGraph(
         appDisplayPreferencesStore = runtimeServices.appDisplayPreferencesStore,
         compactPlayerLyricsPreferencesStore = runtimeServices.compactPlayerLyricsPreferencesStore,
         desktopLyricsPreferencesStore = runtimeServices.desktopLyricsPreferencesStore,
+        menuBarLyricsControlsPreferencesStore = runtimeServices.menuBarLyricsControlsPreferencesStore,
         autoPlayOnStartupPreferencesStore = runtimeServices.autoPlayOnStartupPreferencesStore,
         navidromeAudioQualityPreferencesStore = runtimeServices.navidromeAudioQualityPreferencesStore,
         playbackDecoderPreferencesStore = runtimeServices.playbackDecoderPreferencesStore,

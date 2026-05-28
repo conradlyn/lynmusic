@@ -68,6 +68,7 @@ import top.iwesley.lyn.music.core.model.LocalFolderSelection
 import top.iwesley.lyn.music.core.model.LyricsHttpClient
 import top.iwesley.lyn.music.core.model.LyricsHttpResponse
 import top.iwesley.lyn.music.core.model.LyricsRequest
+import top.iwesley.lyn.music.core.model.MenuBarLyricsControlsPreferencesStore
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.NavidromeSourceDraft
 import top.iwesley.lyn.music.core.model.NavidromeLocatorRuntime
@@ -187,6 +188,9 @@ fun createJvmAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
         logger = logger,
         artworkCacheStore = artworkCacheStore,
     )
+    val menuBarLyricsControls = createJvmMenuBarLyricsControlsPlatformService(
+        logger = logger,
+    )
     val remoteSourceAddressSelector = RemoteSourceAddressSelector(WifiNetworkConnectionTypeProvider)
     val playbackGateway = JvmPlaybackGateway(
         database = database,
@@ -206,6 +210,7 @@ fun createJvmAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
             supportsNavidromeImport = true,
             supportsSystemMediaControls = systemPlaybackControls.isSupported,
             supportsDesktopLyrics = true,
+            supportsMenuBarLyricsControls = menuBarLyricsControls.isSupported,
         ),
     )
     val desktopLyricsPlatformService = JvmDesktopLyricsPlatformService()
@@ -219,6 +224,7 @@ fun createJvmAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
             themePreferencesStore = appPreferencesStore,
             compactPlayerLyricsPreferencesStore = appPreferencesStore,
             desktopLyricsPreferencesStore = appPreferencesStore,
+            menuBarLyricsControlsPreferencesStore = appPreferencesStore,
             autoPlayOnStartupPreferencesStore = appPreferencesStore,
             desktopVlcPreferencesStore = appPreferencesStore,
             networkConnectionTypeProvider = WifiNetworkConnectionTypeProvider,
@@ -265,6 +271,7 @@ fun createJvmAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
             lyricsShareFontLibraryPlatformService = lyricsShareFontLibraryPlatformService,
             lyricsShareFontPreferencesStore = appPreferencesStore,
             systemPlaybackControlsPlatformService = systemPlaybackControls.service,
+            menuBarLyricsControlsPlatformService = menuBarLyricsControls.service,
         ),
     )
 }
@@ -348,8 +355,8 @@ private class JvmLyricsHttpClient : LyricsHttpClient {
 }
 
 private class JvmAppPreferencesStore : PlaybackPreferencesStore, SambaCachePreferencesStore, ThemePreferencesStore,
-    CompactPlayerLyricsPreferencesStore, DesktopLyricsPreferencesStore, DesktopVlcPreferencesStore, LyricsShareFontPreferencesStore,
-    LibrarySourceFilterPreferencesStore {
+    CompactPlayerLyricsPreferencesStore, DesktopLyricsPreferencesStore, MenuBarLyricsControlsPreferencesStore,
+    DesktopVlcPreferencesStore, LyricsShareFontPreferencesStore, LibrarySourceFilterPreferencesStore {
     private val settingsFile = File(File(System.getProperty("user.home")), ".lynmusic/settings.properties").apply {
         parentFile?.mkdirs()
     }
@@ -357,6 +364,7 @@ private class JvmAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
     private val mutablePlaybackVolume = MutableStateFlow(readPlaybackVolume())
     private val mutableShowCompactPlayerLyrics = MutableStateFlow(readShowCompactPlayerLyrics())
     private val mutableShowDesktopLyrics = MutableStateFlow(readShowDesktopLyrics())
+    private val mutableShowMenuBarLyricsControls = MutableStateFlow(readShowMenuBarLyricsControls())
     private val mutableAutoPlayOnStartup = MutableStateFlow(readAutoPlayOnStartup())
     private val mutableLibrarySourceFilter = MutableStateFlow(readLibrarySourceFilter(KEY_LIBRARY_SOURCE_FILTER))
     private val mutableFavoritesSourceFilter = MutableStateFlow(readLibrarySourceFilter(KEY_FAVORITES_SOURCE_FILTER))
@@ -383,6 +391,7 @@ private class JvmAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
     override val playbackVolume: StateFlow<Float> = mutablePlaybackVolume.asStateFlow()
     override val showCompactPlayerLyrics: StateFlow<Boolean> = mutableShowCompactPlayerLyrics.asStateFlow()
     override val showDesktopLyrics: StateFlow<Boolean> = mutableShowDesktopLyrics.asStateFlow()
+    override val showMenuBarLyricsControls: StateFlow<Boolean> = mutableShowMenuBarLyricsControls.asStateFlow()
     override val autoPlayOnStartup: StateFlow<Boolean> = mutableAutoPlayOnStartup.asStateFlow()
     override val selectedTheme: StateFlow<AppThemeId> = mutableSelectedTheme.asStateFlow()
     override val customThemeTokens: StateFlow<AppThemeTokens> = mutableCustomThemeTokens.asStateFlow()
@@ -423,6 +432,13 @@ private class JvmAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
         properties.setProperty(KEY_SHOW_DESKTOP_LYRICS, enabled.toString())
         persistProperties(properties)
         mutableShowDesktopLyrics.value = enabled
+    }
+
+    override suspend fun setShowMenuBarLyricsControls(enabled: Boolean) {
+        val properties = loadProperties()
+        properties.setProperty(KEY_SHOW_MENU_BAR_LYRICS_CONTROLS, enabled.toString())
+        persistProperties(properties)
+        mutableShowMenuBarLyricsControls.value = enabled
     }
 
     override suspend fun setAutoPlayOnStartup(enabled: Boolean) {
@@ -533,6 +549,10 @@ private class JvmAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
 
     private fun readShowDesktopLyrics(): Boolean {
         return loadProperties().getProperty(KEY_SHOW_DESKTOP_LYRICS)?.toBooleanStrictOrNull() ?: false
+    }
+
+    private fun readShowMenuBarLyricsControls(): Boolean {
+        return loadProperties().getProperty(KEY_SHOW_MENU_BAR_LYRICS_CONTROLS)?.toBooleanStrictOrNull() ?: false
     }
 
     private fun readAutoPlayOnStartup(): Boolean {
@@ -2836,6 +2856,7 @@ private const val KEY_USE_SAMBA_CACHE = "use_samba_cache"
 private const val KEY_PLAYBACK_VOLUME = "playback_volume"
 private const val KEY_SHOW_COMPACT_PLAYER_LYRICS = "show_compact_player_lyrics"
 private const val KEY_SHOW_DESKTOP_LYRICS = "show_desktop_lyrics"
+private const val KEY_SHOW_MENU_BAR_LYRICS_CONTROLS = "show_menu_bar_lyrics_controls"
 private const val KEY_AUTO_PLAY_ON_STARTUP = "auto_play_on_startup"
 private const val KEY_LIBRARY_SOURCE_FILTER = "library_source_filter"
 private const val KEY_FAVORITES_SOURCE_FILTER = "favorites_source_filter"

@@ -477,6 +477,7 @@ data class PlatformCapabilities(
     val supportsAppDisplayScaleAdjustment: Boolean = false,
     val supportsAndroidExtensionDecoder: Boolean = false,
     val supportsDesktopLyrics: Boolean = false,
+    val supportsMenuBarLyricsControls: Boolean = false,
     val supportsEqualizer: Boolean = false,
     val supportsPlaybackBackgroundArtworkBlur: Boolean = true,
     val supportsSystemLocalFolderPicker: Boolean = false,

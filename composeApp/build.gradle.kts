@@ -172,14 +172,18 @@ dependencies {
 }
 
 val compileJvmMacOsNowPlayingBridge by tasks.registering(Exec::class) {
-    val swiftSource = layout.projectDirectory.file("src/jvmMacosMain/swift/LynMusicNowPlayingBridge.swift")
+    val swiftSources = fileTree(layout.projectDirectory.dir("src/jvmMacosMain/swift")) {
+        include("*.swift")
+    }
     val outputFile = jvmMacOsNowPlayingBridgeOutput.map { it.file("libLynMusicNowPlayingBridge.dylib") }
     val outputDirectoryPath = jvmMacOsNowPlayingBridgeOutput.get().asFile.absolutePath
     val moduleCachePath = jvmMacOsNowPlayingBridgeModuleCache.get().asFile.absolutePath
     val outputFilePath = outputFile.get().asFile.absolutePath
-    val swiftSourcePath = swiftSource.asFile.absolutePath
+    val swiftSourcePaths = swiftSources.files
+        .sortedBy { it.name }
+        .joinToString(" ") { file -> file.absolutePath.shellQuote() }
 
-    inputs.file(swiftSource)
+    inputs.files(swiftSources)
     outputs.file(outputFile)
     if (isMacOsHost) {
         executable = "/bin/zsh"
@@ -204,7 +208,7 @@ val compileJvmMacOsNowPlayingBridge by tasks.registering(Exec::class) {
                 "MediaPlayer",
                 "-o",
                 outputFilePath.shellQuote(),
-                swiftSourcePath.shellQuote(),
+                swiftSourcePaths,
             ).joinToString(" "),
         )
     } else {

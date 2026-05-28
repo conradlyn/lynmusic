@@ -39,6 +39,7 @@ import top.iwesley.lyn.music.core.model.LyricsResponseFormat
 import top.iwesley.lyn.music.core.model.LyricsSearchCandidate
 import top.iwesley.lyn.music.core.model.LyricsSourceDefinition
 import top.iwesley.lyn.music.core.model.LyricsSourceConfig
+import top.iwesley.lyn.music.core.model.MenuBarLyricsControlsPreferencesStore
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.NavidromeAudioQualityPreferencesStore
 import top.iwesley.lyn.music.core.model.NavidromeLocatorRuntime
@@ -68,6 +69,7 @@ import top.iwesley.lyn.music.core.model.UnsupportedAppDisplayPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedAutoPlayOnStartupPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedCompactPlayerLyricsPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedDesktopLyricsPreferencesStore
+import top.iwesley.lyn.music.core.model.UnsupportedMenuBarLyricsControlsPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedNavidromeAudioQualityPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedSameNameLyricsFileGateway
 import top.iwesley.lyn.music.core.model.UnsupportedPlaybackDecoderPreferencesStore
@@ -395,6 +397,7 @@ interface SettingsRepository {
     val useSambaCache: StateFlow<Boolean>
     val showCompactPlayerLyrics: StateFlow<Boolean>
     val showDesktopLyrics: StateFlow<Boolean>
+    val showMenuBarLyricsControls: StateFlow<Boolean>
     val autoPlayOnStartup: StateFlow<Boolean>
     val appDisplayScalePreset: StateFlow<AppDisplayScalePreset>
     val navidromeWifiAudioQuality: StateFlow<NavidromeAudioQuality>
@@ -411,6 +414,7 @@ interface SettingsRepository {
     suspend fun setUseSambaCache(enabled: Boolean)
     suspend fun setShowCompactPlayerLyrics(enabled: Boolean)
     suspend fun setShowDesktopLyrics(enabled: Boolean)
+    suspend fun setShowMenuBarLyricsControls(enabled: Boolean)
     suspend fun setAutoPlayOnStartup(enabled: Boolean)
     suspend fun setAppDisplayScalePreset(preset: AppDisplayScalePreset)
     suspend fun setNavidromeWifiAudioQuality(quality: NavidromeAudioQuality)
@@ -1827,6 +1831,8 @@ class DefaultSettingsRepository(
         UnsupportedCompactPlayerLyricsPreferencesStore,
     private val desktopLyricsPreferencesStore: DesktopLyricsPreferencesStore =
         UnsupportedDesktopLyricsPreferencesStore,
+    private val menuBarLyricsControlsPreferencesStore: MenuBarLyricsControlsPreferencesStore =
+        UnsupportedMenuBarLyricsControlsPreferencesStore,
     private val autoPlayOnStartupPreferencesStore: AutoPlayOnStartupPreferencesStore =
         UnsupportedAutoPlayOnStartupPreferencesStore,
     private val navidromeAudioQualityPreferencesStore: NavidromeAudioQualityPreferencesStore =
@@ -1846,6 +1852,8 @@ class DefaultSettingsRepository(
         compactPlayerLyricsPreferencesStore.showCompactPlayerLyrics
     override val showDesktopLyrics: StateFlow<Boolean> =
         desktopLyricsPreferencesStore.showDesktopLyrics
+    override val showMenuBarLyricsControls: StateFlow<Boolean> =
+        menuBarLyricsControlsPreferencesStore.showMenuBarLyricsControls
     override val autoPlayOnStartup: StateFlow<Boolean> =
         autoPlayOnStartupPreferencesStore.autoPlayOnStartup
     override val appDisplayScalePreset: StateFlow<AppDisplayScalePreset> =
@@ -1898,6 +1906,10 @@ class DefaultSettingsRepository(
 
     override suspend fun setShowDesktopLyrics(enabled: Boolean) {
         desktopLyricsPreferencesStore.setShowDesktopLyrics(enabled)
+    }
+
+    override suspend fun setShowMenuBarLyricsControls(enabled: Boolean) {
+        menuBarLyricsControlsPreferencesStore.setShowMenuBarLyricsControls(enabled)
     }
 
     override suspend fun setAutoPlayOnStartup(enabled: Boolean) {

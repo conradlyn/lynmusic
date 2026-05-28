@@ -647,6 +647,8 @@ private fun GeneralSettingsPane(
         currentPlatformDescriptor.capabilities.supportsAppDisplayScaleAdjustment
     val showCompactPlayerLyricsSetting = isMobilePlatform
     val showDesktopLyricsSetting = currentPlatformDescriptor.capabilities.supportsDesktopLyrics
+    val showMenuBarLyricsControlsSetting =
+        currentPlatformDescriptor.capabilities.supportsMenuBarLyricsControls
     val showNavidromeAudioQualitySetting = isMobilePlatform || currentPlatformDescriptor.isAndroidPlatform()
     val showAndroidExtensionDecoderSetting =
         currentPlatformDescriptor.capabilities.supportsAndroidExtensionDecoder
@@ -729,6 +731,40 @@ private fun GeneralSettingsPane(
                         checked = state.showDesktopLyrics,
                         onCheckedChange = { enabled ->
                             onSettingsIntent(SettingsIntent.ShowDesktopLyricsChanged(enabled))
+                        },
+                        colors = SwitchDefaults.colors(),
+                    )
+                }
+            }
+        }
+        if (showMenuBarLyricsControlsSetting) {
+            MainShellElevatedCard(shape = RoundedCornerShape(28.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = "菜单栏歌词与控制",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = "在 macOS 顶部菜单栏显示当前歌词，并提供上一首、播放暂停和下一首。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = shellColors.secondaryText,
+                        )
+                    }
+                    Switch(
+                        checked = state.showMenuBarLyricsControls,
+                        onCheckedChange = { enabled ->
+                            onSettingsIntent(SettingsIntent.ShowMenuBarLyricsControlsChanged(enabled))
                         },
                         colors = SwitchDefaults.colors(),
                     )
