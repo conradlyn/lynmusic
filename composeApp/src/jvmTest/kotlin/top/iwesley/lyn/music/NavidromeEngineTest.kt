@@ -76,13 +76,14 @@ class NavidromeEngineTest {
                 "getArtist" to GET_ARTIST_JSON,
                 "getAlbum" to GET_ALBUM_JSON,
             ),
+            nativeSongCountHeader = "x-total-count" to "430",
         )
 
         val progressEvents = mutableListOf<ImportScanProgress>()
         val report = scanNavidromeLibrary(
             draft = NavidromeSourceDraft(
                 label = "Navidrome",
-                baseUrl = "https://demo.example.com/navidrome",
+                baseUrl = "https://demo.example.com/navidrome/rest",
                 username = "demo",
                 password = "plain-pass",
             ),
@@ -95,7 +96,7 @@ class NavidromeEngineTest {
 
         val candidate = report.tracks.single()
         assertEquals(1, report.discoveredAudioFileCount)
-        assertEquals(null, report.totalTrackCount)
+        assertEquals(430, report.totalTrackCount)
         assertTrue(report.failures.isEmpty())
         assertTrue(report.warnings.isEmpty())
         assertEquals(
@@ -104,6 +105,7 @@ class NavidromeEngineTest {
                     sourceId = "nav-source",
                     phase = ImportScanPhase.Scanning,
                     importedTrackCount = 1,
+                    totalTrackCount = 430,
                 ),
             ),
             progressEvents,
@@ -127,9 +129,89 @@ class NavidromeEngineTest {
                 IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
                 IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
                 IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
+                IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
+                IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
             ),
             client.requests.map { it.timeoutMillis },
         )
+        assertEquals(
+            listOf(
+                "/navidrome/auth/login",
+                "/navidrome/api/song",
+                "/navidrome/rest/getArtists",
+                "/navidrome/rest/getArtist",
+                "/navidrome/rest/getAlbum",
+            ),
+            client.requests.map { requireNotNull(parseUrl(it.url)).encodedPath },
+        )
+        assertEquals("0", requireNotNull(parseUrl(client.requests[1].url)).parameters["_start"])
+        assertEquals("1", requireNotNull(parseUrl(client.requests[1].url)).parameters["_end"])
+    }
+
+    @Test
+    fun `scan library continues when native song count request fails`() = runTest {
+        val client = RoutingNavidromeHttpClient(
+            responses = mapOf(
+                "getArtists" to GET_ARTISTS_JSON,
+                "getArtist" to GET_ARTIST_JSON,
+                "getAlbum" to GET_ALBUM_JSON,
+            ),
+            nativeSongStatusCode = 500,
+        )
+
+        val progressEvents = mutableListOf<ImportScanProgress>()
+        val report = scanNavidromeLibrary(
+            draft = NavidromeSourceDraft(
+                label = "Navidrome",
+                baseUrl = "https://demo.example.com/navidrome",
+                username = "demo",
+                password = "plain-pass",
+            ),
+            sourceId = "nav-source",
+            httpClient = client,
+            supportedImportExtensions = setOf("flac"),
+            progressSink = ImportScanProgressSink { progressEvents += it },
+        )
+
+        assertEquals(1, report.tracks.size)
+        assertEquals(null, report.totalTrackCount)
+        assertEquals(
+            listOf(
+                ImportScanProgress(
+                    sourceId = "nav-source",
+                    phase = ImportScanPhase.Scanning,
+                    importedTrackCount = 1,
+                ),
+            ),
+            progressEvents,
+        )
+    }
+
+    @Test
+    fun `scan library ignores invalid native total count header`() = runTest {
+        val client = RoutingNavidromeHttpClient(
+            responses = mapOf(
+                "getArtists" to GET_ARTISTS_JSON,
+                "getArtist" to GET_ARTIST_JSON,
+                "getAlbum" to GET_ALBUM_JSON,
+            ),
+            nativeSongCountHeader = "X-Total-Count" to "not-a-number",
+        )
+
+        val report = scanNavidromeLibrary(
+            draft = NavidromeSourceDraft(
+                label = "Navidrome",
+                baseUrl = "https://demo.example.com/navidrome",
+                username = "demo",
+                password = "plain-pass",
+            ),
+            sourceId = "nav-source",
+            httpClient = client,
+            supportedImportExtensions = setOf("flac"),
+        )
+
+        assertEquals(1, report.tracks.size)
+        assertEquals(null, report.totalTrackCount)
     }
 
     @Test
@@ -307,12 +389,33 @@ class NavidromeEngineTest {
 
 private class RoutingNavidromeHttpClient(
     private val responses: Map<String, String>,
+    private val nativeSongCountHeader: Pair<String, String>? = null,
+    private val nativeLoginStatusCode: Int = 200,
+    private val nativeSongStatusCode: Int = 200,
 ) : LyricsHttpClient {
     val requests = mutableListOf<LyricsRequest>()
 
     override suspend fun request(request: LyricsRequest): Result<LyricsHttpResponse> {
         requests += request
-        val endpoint = requireNotNull(parseUrl(request.url)).encodedPath.substringAfterLast('/')
+        val path = requireNotNull(parseUrl(request.url)).encodedPath
+        if (path.endsWith("/auth/login")) {
+            return Result.success(
+                LyricsHttpResponse(
+                    statusCode = nativeLoginStatusCode,
+                    body = """{"token":"native-token"}""",
+                ),
+            )
+        }
+        if (path.endsWith("/api/song")) {
+            return Result.success(
+                LyricsHttpResponse(
+                    statusCode = nativeSongStatusCode,
+                    body = "[]",
+                    headers = nativeSongCountHeader?.let { (key, value) -> mapOf(key to value) }.orEmpty(),
+                ),
+            )
+        }
+        val endpoint = path.substringAfterLast('/')
         val body = responses[endpoint]
             ?: return Result.failure(IllegalArgumentException("Unexpected Navidrome endpoint: $endpoint"))
         return Result.success(LyricsHttpResponse(statusCode = 200, body = body))

@@ -279,6 +279,9 @@ private class IosLyricsHttpClient : LyricsHttpClient {
             LyricsHttpResponse(
                 statusCode = response.status.value,
                 body = response.bodyAsText(),
+                headers = response.headers.entries().associate { entry ->
+                    entry.key to entry.value.joinToString(",")
+                },
             )
         }
     }

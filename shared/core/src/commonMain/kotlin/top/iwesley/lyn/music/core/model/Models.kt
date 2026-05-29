@@ -464,6 +464,7 @@ const val IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS = 60_000L
 data class LyricsHttpResponse(
     val statusCode: Int,
     val body: String,
+    val headers: Map<String, String> = emptyMap(),
 )
 
 data class PlatformCapabilities(
