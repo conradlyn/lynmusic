@@ -32,7 +32,9 @@ import top.iwesley.lyn.music.core.model.EmbySourceDraft
 import top.iwesley.lyn.music.core.model.IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS
 import top.iwesley.lyn.music.core.model.ImportScanReport
 import top.iwesley.lyn.music.core.model.ImportScanProgressSink
+import top.iwesley.lyn.music.core.model.ImportStreamingScanReport
 import top.iwesley.lyn.music.core.model.ImportSourceGateway
+import top.iwesley.lyn.music.core.model.ImportTrackBatchSink
 import top.iwesley.lyn.music.core.model.LocalFolderSelection
 import top.iwesley.lyn.music.core.model.LyricsHttpClient
 import top.iwesley.lyn.music.core.model.LyricsHttpResponse
@@ -75,6 +77,7 @@ import top.iwesley.lyn.music.data.repository.PlayerRuntimeServices
 import top.iwesley.lyn.music.domain.RemoteSourceAddressSelector
 import top.iwesley.lyn.music.domain.scanEmbyLibrary
 import top.iwesley.lyn.music.domain.scanNavidromeLibrary
+import top.iwesley.lyn.music.domain.scanNavidromeLibraryStreaming
 import top.iwesley.lyn.music.domain.scanSubsonicLibrary
 import top.iwesley.lyn.music.domain.testEmbyConnection
 import top.iwesley.lyn.music.domain.testNavidromeConnection
@@ -646,6 +649,23 @@ private class IosImportSourceGateway(
             httpClient = navidromeHttpClient,
             supportedImportExtensions = IOS_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
             progressSink = progressSink,
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
+        )
+    }
+
+    override suspend fun scanNavidromeStreaming(
+        draft: NavidromeSourceDraft,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+        trackBatchSink: ImportTrackBatchSink,
+    ): ImportStreamingScanReport {
+        return scanNavidromeLibraryStreaming(
+            draft = draft,
+            sourceId = sourceId,
+            httpClient = navidromeHttpClient,
+            supportedImportExtensions = IOS_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
+            progressSink = progressSink,
+            trackBatchSink = trackBatchSink,
             timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
         )
     }

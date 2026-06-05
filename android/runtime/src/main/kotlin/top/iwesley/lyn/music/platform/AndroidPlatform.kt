@@ -83,8 +83,10 @@ import top.iwesley.lyn.music.core.model.ImportScanPhase
 import top.iwesley.lyn.music.core.model.ImportScanProgress
 import top.iwesley.lyn.music.core.model.ImportScanProgressSink
 import top.iwesley.lyn.music.core.model.ImportScanReport
+import top.iwesley.lyn.music.core.model.ImportStreamingScanReport
 import top.iwesley.lyn.music.core.model.ImportSourceGateway
 import top.iwesley.lyn.music.core.model.ImportSourceType
+import top.iwesley.lyn.music.core.model.ImportTrackBatchSink
 import top.iwesley.lyn.music.core.model.LocalFolderPickerMode
 import top.iwesley.lyn.music.core.model.LocalFolderSelection
 import top.iwesley.lyn.music.core.model.LyricsHttpClient
@@ -159,6 +161,7 @@ import top.iwesley.lyn.music.domain.resolveEmbyStreamUrlCandidates
 import top.iwesley.lyn.music.domain.resolveNavidromeStreamUrlCandidates
 import top.iwesley.lyn.music.domain.scanEmbyLibrary
 import top.iwesley.lyn.music.domain.scanNavidromeLibrary
+import top.iwesley.lyn.music.domain.scanNavidromeLibraryStreaming
 import top.iwesley.lyn.music.domain.scanSubsonicLibrary
 import top.iwesley.lyn.music.domain.testEmbyConnection
 import top.iwesley.lyn.music.domain.testNavidromeConnection
@@ -1556,6 +1559,24 @@ private class AndroidImportSourceGateway(
             supportedImportExtensions = ANDROID_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
             logger = logger,
             progressSink = progressSink,
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
+        )
+    }
+
+    override suspend fun scanNavidromeStreaming(
+        draft: NavidromeSourceDraft,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+        trackBatchSink: ImportTrackBatchSink,
+    ): ImportStreamingScanReport {
+        return scanNavidromeLibraryStreaming(
+            draft = draft,
+            sourceId = sourceId,
+            httpClient = navidromeHttpClient,
+            supportedImportExtensions = ANDROID_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
+            logger = logger,
+            progressSink = progressSink,
+            trackBatchSink = trackBatchSink,
             timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
         )
     }

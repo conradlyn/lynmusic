@@ -5,9 +5,14 @@ import java.nio.file.Files
 import kotlin.io.path.absolutePathString
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.test.runTest
 import top.iwesley.lyn.music.core.model.EmbyCredential
 import top.iwesley.lyn.music.core.model.EmbySourceDraft
@@ -16,8 +21,10 @@ import top.iwesley.lyn.music.core.model.ImportScanProgress
 import top.iwesley.lyn.music.core.model.ImportScanProgressSink
 import top.iwesley.lyn.music.core.model.ImportScanFailure
 import top.iwesley.lyn.music.core.model.ImportScanReport
+import top.iwesley.lyn.music.core.model.ImportStreamingScanReport
 import top.iwesley.lyn.music.core.model.ImportSourceGateway
 import top.iwesley.lyn.music.core.model.ImportSourceType
+import top.iwesley.lyn.music.core.model.ImportTrackBatchSink
 import top.iwesley.lyn.music.core.model.ImportedTrackCandidate
 import top.iwesley.lyn.music.core.model.LocalFolderSelection
 import top.iwesley.lyn.music.core.model.NavidromeSourceDraft
@@ -342,7 +349,7 @@ class ImportSourceRepositoryTest {
         assertEquals(2, summary.discoveredAudioFileCount)
         assertEquals(1, summary.importedTrackCount)
         assertEquals(listOf("Artist A/Album A/Bad.ogg"), summary.failures.map { it.relativePath })
-        assertEquals(1, gateway.navidromeScanCount)
+        assertEquals(1, gateway.navidromeStreamingScanCount)
         assertNotNull(database.importSourceDao().getById(summary.sourceId))
         assertEquals(1, database.trackDao().count())
         val storedTrack = database.trackDao().getAll().single()
@@ -390,7 +397,7 @@ class ImportSourceRepositoryTest {
         )
         assertEquals(1, progressEvents.first().importedTrackCount)
         assertEquals(1, progressEvents.last().importedTrackCount)
-        assertEquals(1, gateway.navidromeProgressAwareScanCount)
+        assertEquals(1, gateway.navidromeStreamingScanCount)
     }
 
     @Test
@@ -453,7 +460,7 @@ class ImportSourceRepositoryTest {
         assertEquals(2, summary.discoveredAudioFileCount)
         assertEquals(1, summary.importedTrackCount)
         assertEquals(listOf("Artist A/Album A/Bad.ogg"), summary.failures.map { it.relativePath })
-        assertEquals(1, gateway.navidromeScanCount)
+        assertEquals(1, gateway.navidromeStreamingScanCount)
         assertEquals("old-password", gateway.lastNavidromeScanDraft?.password)
         val updated = assertNotNull(database.importSourceDao().getById("nav-1"))
         assertEquals("https://nav2.example.com", updated.rootReference)
@@ -693,8 +700,357 @@ class ImportSourceRepositoryTest {
         assertEquals(2, summary.discoveredAudioFileCount)
         assertEquals(1, summary.importedTrackCount)
         assertEquals(listOf("Artist A/Album A/Bad.ogg"), summary.failures.map { it.relativePath })
-        assertEquals(1, gateway.navidromeScanCount)
+        assertEquals(1, gateway.navidromeStreamingScanCount)
         assertEquals("secret", gateway.lastNavidromeScanDraft?.password)
+    }
+
+    @Test
+    fun `rescanning navidrome source stages batches and replaces stale tracks`() = runTest {
+        val database = createImportTestDatabase()
+        database.importSourceDao().upsert(
+            navidromeSourceEntity(
+                id = "nav-1",
+                rootReference = "https://nav.example.com",
+                username = "demo",
+                credentialKey = "credential-nav-1",
+            ),
+        )
+        database.trackDao().upsertAll(
+            listOf(
+                trackEntity(
+                    id = navidromeTrackIdFor("nav-1", "song-1"),
+                    sourceId = "nav-1",
+                    title = "Old Blue",
+                    mediaLocator = "lynmusic-navidrome://nav-1/song-1",
+                    relativePath = "Old Blue.flac",
+                    addedAt = 10L,
+                ),
+                trackEntity(
+                    id = navidromeTrackIdFor("nav-1", "stale"),
+                    sourceId = "nav-1",
+                    title = "Stale",
+                    mediaLocator = "lynmusic-navidrome://nav-1/stale",
+                    relativePath = "Stale.flac",
+                    addedAt = 11L,
+                ),
+            ),
+        )
+        val credentials = ImportTestSecureCredentialStore(mutableMapOf("credential-nav-1" to "secret"))
+        val gateway = RecordingImportSourceGateway(
+            scanReport = ImportScanReport(
+                tracks = emptyList(),
+                discoveredAudioFileCount = 2,
+                totalTrackCount = 2,
+            ),
+            navidromeStreamingBatches = listOf(
+                listOf(
+                    ImportedTrackCandidate(
+                        title = "Blue",
+                        mediaLocator = "lynmusic-navidrome://nav-1/song-1",
+                        relativePath = "Artist A/Album A/Blue.flac",
+                    ),
+                ),
+                listOf(
+                    ImportedTrackCandidate(
+                        title = "Green",
+                        mediaLocator = "lynmusic-navidrome://nav-1/song-2",
+                        relativePath = "Artist A/Album A/Green.flac",
+                    ),
+                ),
+            ),
+        )
+        val repository = createRepository(database = database, gateway = gateway, secureCredentialStore = credentials)
+        val progressEvents = mutableListOf<ImportScanProgress>()
+
+        val summary = repository.rescanSource(
+            "nav-1",
+            ImportScanProgressSink { progressEvents += it },
+        ).getOrThrow()
+
+        assertEquals(2, summary?.importedTrackCount)
+        val tracks = database.trackDao().getBySourceId("nav-1").sortedBy { it.title }
+        assertEquals(listOf("Blue", "Green"), tracks.map { it.title })
+        assertEquals(10L, tracks.first { it.title == "Blue" }.addedAt)
+        assertTrue(tracks.none { it.title == "Stale" })
+        assertEquals(0, database.importTrackStageDao().countBySourceId("nav-1"))
+        assertEquals(
+            listOf(1, 2, 2),
+            progressEvents.map { it.importedTrackCount },
+        )
+        assertEquals(
+            listOf(ImportScanPhase.Scanning, ImportScanPhase.Scanning, ImportScanPhase.Persisting),
+            progressEvents.map { it.phase },
+        )
+    }
+
+    @Test
+    fun `rescanning navidrome source aggregates albums by normalized album id`() = runTest {
+        val database = createImportTestDatabase()
+        database.importSourceDao().upsert(
+            navidromeSourceEntity(
+                id = "nav-1",
+                rootReference = "https://nav.example.com",
+                username = "demo",
+                credentialKey = "credential-nav-1",
+            ),
+        )
+        val credentials = ImportTestSecureCredentialStore(mutableMapOf("credential-nav-1" to "secret"))
+        val gateway = RecordingImportSourceGateway(
+            scanReport = ImportScanReport(
+                tracks = emptyList(),
+                discoveredAudioFileCount = 2,
+            ),
+            navidromeStreamingBatches = listOf(
+                listOf(
+                    ImportedTrackCandidate(
+                        title = "Alpha",
+                        artistName = "Artist",
+                        albumTitle = "Best",
+                        mediaLocator = "lynmusic-navidrome://nav-1/song-1",
+                        relativePath = "Artist/Best/Alpha.flac",
+                    ),
+                    ImportedTrackCandidate(
+                        title = "Beta",
+                        artistName = " artist ",
+                        albumTitle = " best ",
+                        mediaLocator = "lynmusic-navidrome://nav-1/song-2",
+                        relativePath = "artist/best/Beta.flac",
+                    ),
+                ),
+            ),
+        )
+        val repository = createRepository(database = database, gateway = gateway, secureCredentialStore = credentials)
+
+        repository.rescanSource("nav-1").getOrThrow()
+
+        val albums = database.albumDao().observeAll().first()
+        assertEquals(1, albums.size)
+        assertEquals("album:artist:best", albums.single().id)
+        assertEquals(2, albums.single().trackCount)
+    }
+
+    @Test
+    fun `library summaries ignore whitespace only artist and album titles`() = runTest {
+        val database = createImportTestDatabase()
+        database.importSourceDao().upsert(
+            importSourceEntity(
+                id = "local-1",
+                type = ImportSourceType.LOCAL_FOLDER,
+                label = "Local",
+                rootReference = "folder://music",
+            ),
+        )
+        database.trackDao().upsertAll(
+            listOf(
+                trackEntity(
+                    id = "track-blank-metadata",
+                    sourceId = "local-1",
+                    title = "Blank Metadata",
+                    artistName = "   ",
+                    albumId = "album::blank",
+                    albumTitle = "   ",
+                ),
+            ),
+        )
+        val repository = createRepository(database = database)
+
+        val result = repository.setSourceEnabled("local-1", enabled = true)
+
+        assertTrue(result.isSuccess)
+        assertEquals(0, database.artistDao().observeAll().first().size)
+        assertEquals(0, database.albumDao().observeAll().first().size)
+    }
+
+    @Test
+    fun `rescanning navidrome source keeps old tracks and clears stage when streaming fails`() = runTest {
+        val database = createImportTestDatabase()
+        database.importSourceDao().upsert(
+            navidromeSourceEntity(
+                id = "nav-1",
+                rootReference = "https://nav.example.com",
+                username = "demo",
+                credentialKey = "credential-nav-1",
+            ),
+        )
+        database.trackDao().upsertAll(
+            listOf(
+                trackEntity(
+                    id = navidromeTrackIdFor("nav-1", "old"),
+                    sourceId = "nav-1",
+                    title = "Old",
+                    mediaLocator = "lynmusic-navidrome://nav-1/old",
+                    relativePath = "Old.flac",
+                    addedAt = 10L,
+                ),
+            ),
+        )
+        val credentials = ImportTestSecureCredentialStore(mutableMapOf("credential-nav-1" to "secret"))
+        val gateway = RecordingImportSourceGateway(
+            navidromeStreamingBatches = listOf(
+                listOf(
+                    ImportedTrackCandidate(
+                        title = "New",
+                        mediaLocator = "lynmusic-navidrome://nav-1/new",
+                        relativePath = "New.flac",
+                    ),
+                ),
+            ),
+            navidromeStreamingError = IllegalStateException("native page failed"),
+        )
+        val repository = createRepository(database = database, gateway = gateway, secureCredentialStore = credentials)
+
+        assertFailsWith<IllegalStateException> {
+            repository.rescanSource("nav-1").getOrThrow()
+        }
+
+        assertEquals(listOf("Old"), database.trackDao().getBySourceId("nav-1").map { it.title })
+        assertEquals(0, database.importTrackStageDao().countBySourceId("nav-1"))
+        assertEquals("native page failed", database.importIndexStateDao().getBySourceId("nav-1")?.lastError)
+    }
+
+    @Test
+    fun `rescanning navidrome source clears partial stage before address fallback retry`() = runTest {
+        val database = createImportTestDatabase()
+        database.importSourceDao().upsert(
+            navidromeSourceEntity(
+                id = "nav-1",
+                rootReference = "https://lan.nav.example.com",
+                wanRootReference = "https://wan.nav.example.com",
+                username = "demo",
+                credentialKey = "credential-nav-1",
+            ),
+        )
+        val credentials = ImportTestSecureCredentialStore(mutableMapOf("credential-nav-1" to "secret"))
+        val gateway = RecordingImportSourceGateway(
+            navidromeStreamingHandler = { draft, _, _, trackBatchSink ->
+                if (draft.baseUrl.contains("lan.nav.example.com")) {
+                    trackBatchSink.onBatch(
+                        listOf(
+                            ImportedTrackCandidate(
+                                title = "Partial",
+                                mediaLocator = "lynmusic-navidrome://nav-1/partial",
+                                relativePath = "Partial.flac",
+                            ),
+                        ),
+                    )
+                    throw IllegalStateException("Navidrome native 歌曲分页失败，HTTP 500")
+                }
+                trackBatchSink.onBatch(
+                    listOf(
+                        ImportedTrackCandidate(
+                            title = "Final",
+                            mediaLocator = "lynmusic-navidrome://nav-1/final",
+                            relativePath = "Final.flac",
+                        ),
+                    ),
+                )
+                ImportStreamingScanReport(
+                    discoveredAudioFileCount = 1,
+                    importedTrackCount = 1,
+                )
+            },
+        )
+        val repository = createRepository(database = database, gateway = gateway, secureCredentialStore = credentials)
+
+        val summary = repository.rescanSource("nav-1").getOrThrow()
+
+        assertEquals(1, summary?.importedTrackCount)
+        assertEquals(2, gateway.navidromeStreamingScanCount)
+        assertEquals(listOf("Final"), database.trackDao().getBySourceId("nav-1").map { it.title })
+        assertEquals(0, database.importTrackStageDao().countBySourceId("nav-1"))
+    }
+
+    @Test
+    fun `concurrent navidrome rescans for same source are serialized`() = runTest {
+        val database = createImportTestDatabase()
+        database.importSourceDao().upsert(
+            navidromeSourceEntity(
+                id = "nav-1",
+                rootReference = "https://nav.example.com",
+                username = "demo",
+                credentialKey = "credential-nav-1",
+            ),
+        )
+        val credentials = ImportTestSecureCredentialStore(mutableMapOf("credential-nav-1" to "secret"))
+        val firstBatchWritten = CompletableDeferred<Unit>()
+        val allowFirstFailure = CompletableDeferred<Unit>()
+        val secondScanStarted = CompletableDeferred<Unit>()
+        val allowSecondReturn = CompletableDeferred<Unit>()
+        var scanCallCount = 0
+        var activeScanCount = 0
+        var maxActiveScanCount = 0
+        val gateway = RecordingImportSourceGateway(
+            navidromeStreamingHandler = { _, _, _, trackBatchSink ->
+                scanCallCount += 1
+                activeScanCount += 1
+                maxActiveScanCount = maxOf(maxActiveScanCount, activeScanCount)
+                try {
+                    when (scanCallCount) {
+                        1 -> {
+                            trackBatchSink.onBatch(
+                                listOf(
+                                    ImportedTrackCandidate(
+                                        title = "Partial",
+                                        mediaLocator = "lynmusic-navidrome://nav-1/partial",
+                                        relativePath = "Partial.flac",
+                                    ),
+                                ),
+                            )
+                            firstBatchWritten.complete(Unit)
+                            allowFirstFailure.await()
+                            throw IllegalStateException("first scan failed")
+                        }
+
+                        2 -> {
+                            secondScanStarted.complete(Unit)
+                            trackBatchSink.onBatch(
+                                listOf(
+                                    ImportedTrackCandidate(
+                                        title = "Final",
+                                        mediaLocator = "lynmusic-navidrome://nav-1/final",
+                                        relativePath = "Final.flac",
+                                    ),
+                                ),
+                            )
+                            allowSecondReturn.await()
+                            ImportStreamingScanReport(
+                                discoveredAudioFileCount = 1,
+                                importedTrackCount = 1,
+                            )
+                        }
+
+                        else -> error("Unexpected Navidrome scan call: $scanCallCount")
+                    }
+                } finally {
+                    activeScanCount -= 1
+                }
+            },
+        )
+        val repository = createRepository(database = database, gateway = gateway, secureCredentialStore = credentials)
+
+        val firstRescan = async {
+            runCatching { repository.rescanSource("nav-1").getOrThrow() }
+        }
+        firstBatchWritten.await()
+        val secondRescan = async {
+            repository.rescanSource("nav-1").getOrThrow()
+        }
+        yield()
+
+        assertEquals(false, secondScanStarted.isCompleted)
+        assertEquals(1, gateway.navidromeStreamingScanCount)
+
+        allowFirstFailure.complete(Unit)
+        assertTrue(firstRescan.await().isFailure)
+        secondScanStarted.await()
+        allowSecondReturn.complete(Unit)
+        val secondSummary = secondRescan.await()
+
+        assertEquals(1, secondSummary?.importedTrackCount)
+        assertEquals(2, gateway.navidromeStreamingScanCount)
+        assertEquals(1, maxActiveScanCount)
+        assertEquals(listOf("Final"), database.trackDao().getBySourceId("nav-1").map { it.title })
+        assertEquals(0, database.importTrackStageDao().countBySourceId("nav-1"))
     }
 
     @Test
@@ -768,9 +1124,42 @@ private fun importSourceEntity(
     )
 }
 
+private fun navidromeSourceEntity(
+    id: String,
+    rootReference: String,
+    wanRootReference: String? = null,
+    username: String,
+    credentialKey: String,
+): ImportSourceEntity {
+    return ImportSourceEntity(
+        id = id,
+        type = ImportSourceType.NAVIDROME.name,
+        label = "Navidrome",
+        rootReference = rootReference,
+        server = null,
+        shareName = null,
+        directoryPath = null,
+        username = username,
+        credentialKey = credentialKey,
+        allowInsecureTls = false,
+        enabled = true,
+        lastScannedAt = null,
+        createdAt = 1L,
+        wanRootReference = wanRootReference,
+    )
+}
+
 private class RecordingImportSourceGateway(
     var nextLocalFolderSelection: LocalFolderSelection? = null,
     private val scanReport: ImportScanReport = ImportScanReport(tracks = emptyList()),
+    private val navidromeStreamingBatches: List<List<ImportedTrackCandidate>>? = null,
+    private val navidromeStreamingError: Throwable? = null,
+    private val navidromeStreamingHandler: (suspend (
+        NavidromeSourceDraft,
+        String,
+        ImportScanProgressSink,
+        ImportTrackBatchSink,
+    ) -> ImportStreamingScanReport)? = null,
     private val embyScanReportFactory: ((String) -> ImportScanReport)? = null,
 ) : ImportSourceGateway {
     var localFolderScanCount: Int = 0
@@ -781,6 +1170,7 @@ private class RecordingImportSourceGateway(
     var navidromeTestCount: Int = 0
     var navidromeScanCount: Int = 0
     var navidromeProgressAwareScanCount: Int = 0
+    var navidromeStreamingScanCount: Int = 0
     var lastNavidromeScanDraft: NavidromeSourceDraft? = null
     var subsonicTestCount: Int = 0
     var subsonicScanCount: Int = 0
@@ -849,6 +1239,41 @@ private class RecordingImportSourceGateway(
         return scanNavidrome(draft, sourceId)
     }
 
+    override suspend fun scanNavidromeStreaming(
+        draft: NavidromeSourceDraft,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+        trackBatchSink: ImportTrackBatchSink,
+    ): ImportStreamingScanReport {
+        navidromeStreamingScanCount += 1
+        lastNavidromeScanDraft = draft
+        navidromeStreamingHandler?.let { handler ->
+            return handler(draft, sourceId, progressSink, trackBatchSink)
+        }
+        var importedTrackCount = 0
+        val batches = navidromeStreamingBatches ?: listOf(scanReport.tracks)
+        batches.forEach { batch ->
+            trackBatchSink.onBatch(batch)
+            importedTrackCount += batch.size
+            progressSink.onProgress(
+                ImportScanProgress(
+                    sourceId = sourceId,
+                    phase = ImportScanPhase.Scanning,
+                    importedTrackCount = importedTrackCount,
+                    totalTrackCount = scanReport.totalTrackCount,
+                ),
+            )
+        }
+        navidromeStreamingError?.let { throw it }
+        return ImportStreamingScanReport(
+            discoveredAudioFileCount = scanReport.discoveredAudioFileCount,
+            importedTrackCount = importedTrackCount,
+            warnings = scanReport.warnings,
+            failures = scanReport.failures,
+            totalTrackCount = scanReport.totalTrackCount,
+        )
+    }
+
     override suspend fun testSubsonic(draft: SubsonicSourceDraft) {
         subsonicTestCount += 1
     }
@@ -909,22 +1334,29 @@ private fun trackEntity(
     id: String,
     sourceId: String,
     title: String,
+    artistName: String? = null,
+    albumId: String? = null,
+    albumTitle: String? = null,
+    mediaLocator: String = "file:///tmp/$title.mp3",
+    relativePath: String = "$title.mp3",
+    addedAt: Long = 0L,
 ): top.iwesley.lyn.music.data.db.TrackEntity {
     return top.iwesley.lyn.music.data.db.TrackEntity(
         id = id,
         sourceId = sourceId,
         title = title,
         artistId = null,
-        artistName = null,
-        albumId = null,
-        albumTitle = null,
+        artistName = artistName,
+        albumId = albumId,
+        albumTitle = albumTitle,
         durationMs = 0L,
         trackNumber = null,
         discNumber = null,
-        mediaLocator = "file:///tmp/$title.mp3",
-        relativePath = "$title.mp3",
+        mediaLocator = mediaLocator,
+        relativePath = relativePath,
         artworkLocator = null,
         sizeBytes = 0L,
         modifiedAt = 0L,
+        addedAt = addedAt,
     )
 }

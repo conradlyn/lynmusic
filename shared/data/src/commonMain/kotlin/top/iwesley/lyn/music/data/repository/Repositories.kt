@@ -1,10 +1,16 @@
 package top.iwesley.lyn.music.data.repository
 
+import androidx.room.PooledConnection
+import androidx.room.immediateTransaction
+import androidx.room.useWriterConnection
+import androidx.sqlite.SQLiteStatement
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.random.Random
 import kotlin.time.Clock
 import top.iwesley.lyn.music.core.model.Album
@@ -25,9 +31,12 @@ import top.iwesley.lyn.music.core.model.ImportScanProgress
 import top.iwesley.lyn.music.core.model.ImportScanProgressSink
 import top.iwesley.lyn.music.core.model.ImportScanReport
 import top.iwesley.lyn.music.core.model.ImportScanSummary
+import top.iwesley.lyn.music.core.model.ImportStreamingScanReport
 import top.iwesley.lyn.music.core.model.ImportSource
 import top.iwesley.lyn.music.core.model.ImportSourceGateway
 import top.iwesley.lyn.music.core.model.ImportSourceType
+import top.iwesley.lyn.music.core.model.ImportTrackBatchSink
+import top.iwesley.lyn.music.core.model.ImportedTrackCandidate
 import top.iwesley.lyn.music.core.model.LocalFolderPickerMode
 import top.iwesley.lyn.music.core.model.LocalFolderSelection
 import top.iwesley.lyn.music.core.model.EmbySourceDraft
@@ -94,6 +103,7 @@ import top.iwesley.lyn.music.data.db.AlbumEntity
 import top.iwesley.lyn.music.data.db.ArtistEntity
 import top.iwesley.lyn.music.data.db.ImportIndexStateEntity
 import top.iwesley.lyn.music.data.db.ImportSourceEntity
+import top.iwesley.lyn.music.data.db.ImportTrackStageEntity
 import top.iwesley.lyn.music.data.db.LyricsCacheEntity
 import top.iwesley.lyn.music.data.db.LyricsSourceConfigEntity
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
@@ -489,6 +499,9 @@ class RoomImportSourceRepository(
     private val offlineDownloadGateway: OfflineDownloadGateway = UnsupportedOfflineDownloadGateway,
     private val addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
 ) : ImportSourceRepository {
+    private val navidromeScanLocks = mutableMapOf<String, Mutex>()
+    private val navidromeScanLocksMutex = Mutex()
+
     override fun observeSources(): Flow<List<SourceWithStatus>> {
         return combine(
             database.importSourceDao().observeAll(),
@@ -792,7 +805,7 @@ class RoomImportSourceRepository(
             validateImportSourceCreation(label = source.label)
             source.credentialKey?.let { secureCredentialStore.put(it, preparedDraft.password) }
             database.importSourceDao().upsert(source.toEntity())
-            runScan(source, progressSink) {
+            runNavidromeStreamingScan(source, progressSink) { trackBatchSink, resetStage ->
                 addressSelector.withAddressFallback(
                     sourceId = sourceId,
                     sourceType = ImportSourceType.NAVIDROME,
@@ -800,7 +813,13 @@ class RoomImportSourceRepository(
                     wanBaseUrl = preparedDraft.wanBaseUrl,
                     normalizeBaseUrl = ::normalizeNavidromeBaseUrl,
                 ) { candidate ->
-                    gateway.scanNavidrome(preparedDraft.copy(baseUrl = candidate.value), sourceId, progressSink)
+                    resetStage()
+                    gateway.scanNavidromeStreaming(
+                        preparedDraft.copy(baseUrl = candidate.value),
+                        sourceId,
+                        progressSink,
+                        trackBatchSink,
+                    )
                 }
             }
         }
@@ -844,27 +863,31 @@ class RoomImportSourceRepository(
             if (password.isBlank()) {
                 error("Navidrome 来源缺少有效密码。")
             }
-            val report = addressSelector.withAddressFallback(
-                sourceId = sourceId,
-                sourceType = ImportSourceType.NAVIDROME,
-                lanBaseUrl = preparedDraft.baseUrl,
-                wanBaseUrl = preparedDraft.wanBaseUrl,
-                normalizeBaseUrl = ::normalizeNavidromeBaseUrl,
-            ) { candidate ->
-                gateway.scanNavidrome(
-                    preparedDraft.copy(baseUrl = candidate.value, password = password),
-                    sourceId,
-                    progressSink,
-                )
-            }
             val credentialKey = resolveUpdatedCredentialKey(
                 sourceId = sourceId,
                 existingCredentialKey = existing.credentialKey,
                 password = password,
                 keepExistingCredentialWhenBlankPassword = true,
             )
-            persistUpdatedCredential(existing.credentialKey, credentialKey, password)
-            persistScanWithProgress(updatedSource.copy(credentialKey = credentialKey), report, progressSink)
+            runNavidromeStreamingScan(updatedSource.copy(credentialKey = credentialKey), progressSink) { trackBatchSink, resetStage ->
+                val report = addressSelector.withAddressFallback(
+                    sourceId = sourceId,
+                    sourceType = ImportSourceType.NAVIDROME,
+                    lanBaseUrl = preparedDraft.baseUrl,
+                    wanBaseUrl = preparedDraft.wanBaseUrl,
+                    normalizeBaseUrl = ::normalizeNavidromeBaseUrl,
+                ) { candidate ->
+                    resetStage()
+                    gateway.scanNavidromeStreaming(
+                        preparedDraft.copy(baseUrl = candidate.value, password = password),
+                        sourceId,
+                        progressSink,
+                        trackBatchSink,
+                    )
+                }
+                persistUpdatedCredential(existing.credentialKey, credentialKey, password)
+                report
+            }
         }
     }
 
@@ -1204,6 +1227,9 @@ class RoomImportSourceRepository(
             if (!source.enabled) {
                 error("来源已禁用，请先启用。")
             }
+            if (source.type == ImportSourceType.NAVIDROME) {
+                return@runCatching rescanNavidromeSource(source, progressSink)
+            }
             val summary = runScan(source.copy(lastScannedAt = now()), progressSink) {
                 when (source.type) {
                     ImportSourceType.LOCAL_FOLDER -> gateway.scanLocalFolder(
@@ -1247,24 +1273,7 @@ class RoomImportSourceRepository(
                     }
 
                     ImportSourceType.NAVIDROME -> {
-                        val password = source.credentialKey?.let { secureCredentialStore.get(it) }.orEmpty()
-                        val draft = NavidromeSourceDraft(
-                            label = source.label,
-                            baseUrl = source.rootReference,
-                            wanBaseUrl = source.wanRootReference.orEmpty(),
-                            username = source.username.orEmpty(),
-                            password = password,
-                        )
-                        val prepared = prepareNavidromeDraft(draft)
-                        addressSelector.withAddressFallback(
-                            sourceId = source.id,
-                            sourceType = ImportSourceType.NAVIDROME,
-                            lanBaseUrl = prepared.baseUrl,
-                            wanBaseUrl = prepared.wanBaseUrl,
-                            normalizeBaseUrl = ::normalizeNavidromeBaseUrl,
-                        ) { candidate ->
-                            gateway.scanNavidrome(prepared.copy(baseUrl = candidate.value), source.id, progressSink)
-                        }
+                        error("Navidrome streaming scan should have been handled before generic rescan.")
                     }
 
                     ImportSourceType.SUBSONIC -> {
@@ -1634,39 +1643,12 @@ class RoomImportSourceRepository(
     private suspend fun persistScan(source: ImportSource, report: ImportScanReport): ImportScanSummary {
         val scannedAt = now()
         val existingAddedAtByTrackId = database.trackDao()
-            .getBySourceId(source.id)
+            .getAddedAtBySourceId(source.id)
             .associate { it.id to it.addedAt }
         database.trackDao().deleteBySourceId(source.id)
         database.lyricsCacheDao().deleteByTrackIdPrefixAndSourceId(trackIdPrefix(source.id), EMBEDDED_LYRICS_SOURCE_ID)
         val trackEntities = report.tracks.map { candidate ->
-            val artistId = candidate.artistName?.takeIf { it.isNotBlank() }?.let(::artistIdFor)
-            val albumId = candidate.albumTitle?.takeIf { it.isNotBlank() }?.let {
-                albumIdFor(candidate.artistName, it)
-            }
-            val trackId = trackIdFor(source.id, candidate.relativePath, candidate.mediaLocator)
-
-            TrackEntity(
-                id = trackId,
-                sourceId = source.id,
-                title = candidate.title,
-                artistId = artistId,
-                artistName = candidate.artistName,
-                albumId = albumId,
-                albumTitle = candidate.albumTitle,
-                durationMs = candidate.durationMs,
-                trackNumber = candidate.trackNumber,
-                discNumber = candidate.discNumber,
-                mediaLocator = candidate.mediaLocator,
-                relativePath = candidate.relativePath,
-                artworkLocator = candidate.artworkLocator,
-                sizeBytes = candidate.sizeBytes,
-                modifiedAt = candidate.modifiedAt,
-                addedAt = existingAddedAtByTrackId[trackId] ?: scannedAt,
-                bitDepth = candidate.bitDepth,
-                samplingRate = candidate.samplingRate,
-                bitRate = candidate.bitRate,
-                channelCount = candidate.channelCount,
-            )
+            candidate.toTrackEntity(source.id, scannedAt, existingAddedAtByTrackId)
         }
 
         if (trackEntities.isNotEmpty()) {
@@ -1725,6 +1707,192 @@ class RoomImportSourceRepository(
         return persistScan(source, report)
     }
 
+    private suspend fun rescanNavidromeSource(
+        source: ImportSource,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanSummary {
+        val password = source.credentialKey?.let { secureCredentialStore.get(it) }.orEmpty()
+        val draft = NavidromeSourceDraft(
+            label = source.label,
+            baseUrl = source.rootReference,
+            wanBaseUrl = source.wanRootReference.orEmpty(),
+            username = source.username.orEmpty(),
+            password = password,
+        )
+        val prepared = prepareNavidromeDraft(draft)
+        return runNavidromeStreamingScan(source.copy(lastScannedAt = now()), progressSink) { trackBatchSink, resetStage ->
+            addressSelector.withAddressFallback(
+                sourceId = source.id,
+                sourceType = ImportSourceType.NAVIDROME,
+                lanBaseUrl = prepared.baseUrl,
+                wanBaseUrl = prepared.wanBaseUrl,
+                normalizeBaseUrl = ::normalizeNavidromeBaseUrl,
+            ) { candidate ->
+                resetStage()
+                gateway.scanNavidromeStreaming(
+                    prepared.copy(baseUrl = candidate.value),
+                    source.id,
+                    progressSink,
+                    trackBatchSink,
+                )
+            }
+        }
+    }
+
+    private suspend fun runNavidromeStreamingScan(
+        source: ImportSource,
+        progressSink: ImportScanProgressSink,
+        scan: suspend (ImportTrackBatchSink, suspend () -> Unit) -> ImportStreamingScanReport,
+    ): ImportScanSummary {
+        return withNavidromeSourceScanLock(source.id) {
+            runNavidromeStreamingScanLocked(
+                source = source,
+                progressSink = progressSink,
+                scan = scan,
+            )
+        }
+    }
+
+    private suspend fun runNavidromeStreamingScanLocked(
+        source: ImportSource,
+        progressSink: ImportScanProgressSink,
+        scan: suspend (ImportTrackBatchSink, suspend () -> Unit) -> ImportStreamingScanReport,
+    ): ImportScanSummary {
+        val scannedAt = now()
+        val scanId = newId("scan")
+        val existingAddedAtByTrackId = database.trackDao()
+            .getAddedAtBySourceId(source.id)
+            .associate { it.id to it.addedAt }
+        database.importTrackStageDao().deleteBySourceId(source.id)
+        val batchSink = ImportTrackBatchSink { tracks ->
+            if (tracks.isEmpty()) return@ImportTrackBatchSink
+            database.importTrackStageDao().upsertAll(
+                tracks.map { candidate ->
+                    candidate.toTrackEntity(source.id, scannedAt, existingAddedAtByTrackId)
+                        .toImportTrackStageEntity(scanId)
+                },
+            )
+        }
+        try {
+            val report = scan(batchSink) {
+                database.importTrackStageDao().deleteByScanId(scanId)
+            }
+            return persistStagedScanWithProgress(
+                source = source.copy(lastScannedAt = scannedAt),
+                report = report,
+                scanId = scanId,
+                progressSink = progressSink,
+            )
+        } catch (throwable: Throwable) {
+            database.importTrackStageDao().deleteBySourceId(source.id)
+            persistScanFailure(source.id, throwable)
+            throw throwable
+        }
+    }
+
+    private suspend fun <T> withNavidromeSourceScanLock(
+        sourceId: String,
+        block: suspend () -> T,
+    ): T {
+        val sourceLock = navidromeScanLocksMutex.withLock {
+            navidromeScanLocks.getOrPut(sourceId) { Mutex() }
+        }
+        return sourceLock.withLock { block() }
+    }
+
+    private suspend fun persistStagedScanWithProgress(
+        source: ImportSource,
+        report: ImportStreamingScanReport,
+        scanId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanSummary {
+        progressSink.onProgress(
+            ImportScanProgress(
+                sourceId = source.id,
+                phase = ImportScanPhase.Persisting,
+                importedTrackCount = report.importedTrackCount,
+                totalTrackCount = report.totalTrackCount,
+            ),
+        )
+        replaceSourceTracksFromStage(source.id, scanId)
+        rebuildLibrarySummaries()
+        database.importSourceDao().upsert(source.toEntity())
+        database.importIndexStateDao().upsert(
+            ImportIndexStateEntity(
+                sourceId = source.id,
+                trackCount = report.importedTrackCount,
+                lastScannedAt = source.lastScannedAt,
+                lastError = report.warnings.joinToString("\n").ifBlank { null },
+            ),
+        )
+        return ImportScanSummary(
+            sourceId = source.id,
+            discoveredAudioFileCount = report.discoveredAudioFileCount,
+            importedTrackCount = report.importedTrackCount,
+            failures = report.failures,
+        )
+    }
+
+    private suspend fun replaceSourceTracksFromStage(sourceId: String, scanId: String) {
+        database.useWriterConnection { transactor ->
+            transactor.immediateTransaction {
+                execSql("DELETE FROM track WHERE sourceId = ?", sourceId)
+                execSql(
+                    """
+                    INSERT OR REPLACE INTO track (
+                        id,
+                        sourceId,
+                        title,
+                        artistId,
+                        artistName,
+                        albumId,
+                        albumTitle,
+                        durationMs,
+                        trackNumber,
+                        discNumber,
+                        mediaLocator,
+                        relativePath,
+                        artworkLocator,
+                        sizeBytes,
+                        modifiedAt,
+                        addedAt,
+                        bitDepth,
+                        samplingRate,
+                        bitRate,
+                        channelCount
+                    )
+                    SELECT
+                        id,
+                        sourceId,
+                        title,
+                        artistId,
+                        artistName,
+                        albumId,
+                        albumTitle,
+                        durationMs,
+                        trackNumber,
+                        discNumber,
+                        mediaLocator,
+                        relativePath,
+                        artworkLocator,
+                        sizeBytes,
+                        modifiedAt,
+                        addedAt,
+                        bitDepth,
+                        samplingRate,
+                        bitRate,
+                        channelCount
+                    FROM import_track_stage
+                    WHERE scanId = ? AND sourceId = ?
+                    """.trimIndent(),
+                    scanId,
+                    sourceId,
+                )
+                execSql("DELETE FROM import_track_stage WHERE scanId = ?", scanId)
+            }
+        }
+    }
+
     private suspend fun runScan(
         source: ImportSource,
         progressSink: ImportScanProgressSink,
@@ -1771,44 +1939,29 @@ class RoomImportSourceRepository(
             .asSequence()
             .filter { it.enabled }
             .map { it.id }
-            .toSet()
-        val tracks = database.trackDao().getAll()
-            .filter { it.sourceId in enabledSourceIds }
+            .toList()
         database.artistDao().deleteAll()
         database.albumDao().deleteAll()
+        if (enabledSourceIds.isEmpty()) return
 
-        val artistEntities = tracks
-            .mapNotNull { track ->
-                track.artistName?.takeIf { it.isNotBlank() }
-            }
-            .groupingBy { it }
-            .eachCount()
-            .map { (artistName, trackCount) ->
+        val artistEntities = database.trackDao()
+            .getArtistSummariesBySourceIds(enabledSourceIds)
+            .map { row ->
                 ArtistEntity(
-                    id = artistIdFor(artistName),
-                    name = artistName,
-                    trackCount = trackCount,
+                    id = artistIdFor(row.name),
+                    name = row.name,
+                    trackCount = row.trackCount,
                 )
             }
 
-        val albumEntities = tracks
-            .mapNotNull { track ->
-                track.albumTitle?.takeIf { it.isNotBlank() }?.let { albumTitle ->
-                    Triple(
-                        albumIdFor(track.artistName, albumTitle),
-                        albumTitle,
-                        track.artistName,
-                    )
-                }
-            }
-            .groupBy { it.first }
-            .map { (albumId, items) ->
-                val first = items.first()
+        val albumEntities = database.trackDao()
+            .getAlbumSummariesBySourceIds(enabledSourceIds)
+            .map { row ->
                 AlbumEntity(
-                    id = albumId,
-                    title = first.second,
-                    artistName = first.third,
-                    trackCount = items.size,
+                    id = row.id,
+                    title = row.title,
+                    artistName = row.artistName,
+                    trackCount = row.trackCount,
                 )
             }
 
@@ -3519,6 +3672,86 @@ private fun artistIdFor(name: String): String = "artist:${name.trim().lowercase(
 
 private fun albumIdFor(artistName: String?, albumTitle: String): String {
     return "album:${artistName.orEmpty().trim().lowercase()}:${albumTitle.trim().lowercase()}"
+}
+
+private fun ImportedTrackCandidate.toTrackEntity(
+    sourceId: String,
+    scannedAt: Long,
+    existingAddedAtByTrackId: Map<String, Long>,
+): TrackEntity {
+    val artistId = artistName?.takeIf { it.isNotBlank() }?.let(::artistIdFor)
+    val albumId = albumTitle?.takeIf { it.isNotBlank() }?.let {
+        albumIdFor(artistName, it)
+    }
+    val trackId = trackIdFor(sourceId, relativePath, mediaLocator)
+    return TrackEntity(
+        id = trackId,
+        sourceId = sourceId,
+        title = title,
+        artistId = artistId,
+        artistName = artistName,
+        albumId = albumId,
+        albumTitle = albumTitle,
+        durationMs = durationMs,
+        trackNumber = trackNumber,
+        discNumber = discNumber,
+        mediaLocator = mediaLocator,
+        relativePath = relativePath,
+        artworkLocator = artworkLocator,
+        sizeBytes = sizeBytes,
+        modifiedAt = modifiedAt,
+        addedAt = existingAddedAtByTrackId[trackId] ?: scannedAt,
+        bitDepth = bitDepth,
+        samplingRate = samplingRate,
+        bitRate = bitRate,
+        channelCount = channelCount,
+    )
+}
+
+private fun TrackEntity.toImportTrackStageEntity(scanId: String): ImportTrackStageEntity {
+    return ImportTrackStageEntity(
+        scanId = scanId,
+        id = id,
+        sourceId = sourceId,
+        title = title,
+        artistId = artistId,
+        artistName = artistName,
+        albumId = albumId,
+        albumTitle = albumTitle,
+        durationMs = durationMs,
+        trackNumber = trackNumber,
+        discNumber = discNumber,
+        mediaLocator = mediaLocator,
+        relativePath = relativePath,
+        artworkLocator = artworkLocator,
+        sizeBytes = sizeBytes,
+        modifiedAt = modifiedAt,
+        addedAt = addedAt,
+        bitDepth = bitDepth,
+        samplingRate = samplingRate,
+        bitRate = bitRate,
+        channelCount = channelCount,
+    )
+}
+
+private suspend fun PooledConnection.execSql(sql: String, vararg args: Any?) {
+    usePrepared(sql) { statement ->
+        args.forEachIndexed { index, value ->
+            statement.bindValue(index + 1, value)
+        }
+        statement.step()
+    }
+}
+
+private fun SQLiteStatement.bindValue(index: Int, value: Any?) {
+    when (value) {
+        null -> bindNull(index)
+        is String -> bindText(index, value)
+        is Int -> bindLong(index, value.toLong())
+        is Long -> bindLong(index, value)
+        is Boolean -> bindBoolean(index, value)
+        else -> error("Unsupported SQLite bind value: ${value::class.simpleName}")
+    }
 }
 
 internal fun navidromeTrackIdFor(sourceId: String, songId: String): String {

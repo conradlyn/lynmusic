@@ -85,6 +85,55 @@ data class TrackEntity(
     val channelCount: Int? = null,
 )
 
+@Entity(
+    tableName = "import_track_stage",
+    primaryKeys = ["scanId", "id"],
+    indices = [
+        Index(value = ["sourceId"]),
+        Index(value = ["scanId"]),
+    ],
+)
+data class ImportTrackStageEntity(
+    val scanId: String,
+    val id: String,
+    val sourceId: String,
+    val title: String,
+    val artistId: String?,
+    val artistName: String?,
+    val albumId: String?,
+    val albumTitle: String?,
+    val durationMs: Long,
+    val trackNumber: Int?,
+    val discNumber: Int?,
+    val mediaLocator: String,
+    val relativePath: String,
+    val artworkLocator: String?,
+    val sizeBytes: Long,
+    val modifiedAt: Long,
+    val addedAt: Long,
+    val bitDepth: Int? = null,
+    val samplingRate: Int? = null,
+    val bitRate: Int? = null,
+    val channelCount: Int? = null,
+)
+
+data class TrackAddedAtRow(
+    val id: String,
+    val addedAt: Long,
+)
+
+data class ArtistSummaryRow(
+    val name: String,
+    val trackCount: Int,
+)
+
+data class AlbumSummaryRow(
+    val id: String,
+    val title: String,
+    val artistName: String?,
+    val trackCount: Int,
+)
+
 @Entity(tableName = "track_playback_stats")
 data class TrackPlaybackStatsEntity(
     @PrimaryKey val trackId: String,
@@ -299,6 +348,9 @@ interface TrackDao {
     @Query("SELECT * FROM track WHERE sourceId = :sourceId")
     suspend fun getBySourceId(sourceId: String): List<TrackEntity>
 
+    @Query("SELECT id, addedAt FROM track WHERE sourceId = :sourceId")
+    suspend fun getAddedAtBySourceId(sourceId: String): List<TrackAddedAtRow>
+
     @Query("DELETE FROM track WHERE sourceId = :sourceId")
     suspend fun deleteBySourceId(sourceId: String)
 
@@ -338,6 +390,49 @@ interface TrackDao {
 
     @Upsert
     suspend fun upsertAll(items: List<TrackEntity>)
+
+    @Query(
+        """
+        SELECT artistName AS name, COUNT(*) AS trackCount
+        FROM track
+        WHERE sourceId IN (:sourceIds)
+            AND artistName IS NOT NULL
+            AND TRIM(artistName) != ''
+        GROUP BY artistName
+        """,
+    )
+    suspend fun getArtistSummariesBySourceIds(sourceIds: List<String>): List<ArtistSummaryRow>
+
+    @Query(
+        """
+        SELECT albumId AS id, MIN(albumTitle) AS title, MIN(artistName) AS artistName, COUNT(*) AS trackCount
+        FROM track
+        WHERE sourceId IN (:sourceIds)
+            AND albumId IS NOT NULL
+            AND albumTitle IS NOT NULL
+            AND TRIM(albumTitle) != ''
+        GROUP BY albumId
+        """,
+    )
+    suspend fun getAlbumSummariesBySourceIds(sourceIds: List<String>): List<AlbumSummaryRow>
+}
+
+@Dao
+interface ImportTrackStageDao {
+    @Query("DELETE FROM import_track_stage WHERE sourceId = :sourceId")
+    suspend fun deleteBySourceId(sourceId: String)
+
+    @Query("DELETE FROM import_track_stage WHERE scanId = :scanId")
+    suspend fun deleteByScanId(scanId: String)
+
+    @Query("SELECT COUNT(*) FROM import_track_stage WHERE scanId = :scanId")
+    suspend fun countByScanId(scanId: String): Int
+
+    @Query("SELECT COUNT(*) FROM import_track_stage WHERE sourceId = :sourceId")
+    suspend fun countBySourceId(sourceId: String): Int
+
+    @Upsert
+    suspend fun upsertAll(items: List<ImportTrackStageEntity>)
 }
 
 @Dao
@@ -708,8 +803,9 @@ interface OfflineDownloadDao {
         WorkflowLyricsSourceConfigEntity::class,
         LyricsCacheEntity::class,
         OfflineDownloadEntity::class,
+        ImportTrackStageEntity::class,
     ],
-    version = 16,
+    version = 17,
 )
 @ConstructedBy(LynMusicDatabaseConstructor::class)
 abstract class LynMusicDatabase : RoomDatabase() {
@@ -718,6 +814,7 @@ abstract class LynMusicDatabase : RoomDatabase() {
     abstract fun importSourceDao(): ImportSourceDao
     abstract fun importIndexStateDao(): ImportIndexStateDao
     abstract fun trackDao(): TrackDao
+    abstract fun importTrackStageDao(): ImportTrackStageDao
     abstract fun trackPlaybackStatsDao(): TrackPlaybackStatsDao
     abstract fun albumPlaybackStatsDao(): AlbumPlaybackStatsDao
     abstract fun dailyRecommendationDao(): DailyRecommendationDao
@@ -756,6 +853,7 @@ fun buildLynMusicDatabase(builder: Builder<LynMusicDatabase>): LynMusicDatabase 
         .addMigrations(MIGRATION_13_14)
         .addMigrations(MIGRATION_14_15)
         .addMigrations(MIGRATION_15_16)
+        .addMigrations(MIGRATION_16_17)
         .build()
 }
 
@@ -1028,6 +1126,55 @@ val MIGRATION_15_16: Migration = object : Migration(15, 16) {
             """.trimIndent(),
         )
     }
+}
+
+val MIGRATION_16_17: Migration = object : Migration(16, 17) {
+    override fun migrate(connection: SQLiteConnection) {
+        connection.createImportTrackStageTable()
+    }
+}
+
+fun SQLiteConnection.createImportTrackStageTable() {
+    execSql(
+        """
+        CREATE TABLE IF NOT EXISTS import_track_stage (
+            scanId TEXT NOT NULL,
+            id TEXT NOT NULL,
+            sourceId TEXT NOT NULL,
+            title TEXT NOT NULL,
+            artistId TEXT,
+            artistName TEXT,
+            albumId TEXT,
+            albumTitle TEXT,
+            durationMs INTEGER NOT NULL,
+            trackNumber INTEGER,
+            discNumber INTEGER,
+            mediaLocator TEXT NOT NULL,
+            relativePath TEXT NOT NULL,
+            artworkLocator TEXT,
+            sizeBytes INTEGER NOT NULL,
+            modifiedAt INTEGER NOT NULL,
+            addedAt INTEGER NOT NULL,
+            bitDepth INTEGER,
+            samplingRate INTEGER,
+            bitRate INTEGER,
+            channelCount INTEGER,
+            PRIMARY KEY(scanId, id)
+        )
+        """.trimIndent(),
+    )
+    execSql(
+        """
+        CREATE INDEX IF NOT EXISTS index_import_track_stage_sourceId
+        ON import_track_stage(sourceId)
+        """.trimIndent(),
+    )
+    execSql(
+        """
+        CREATE INDEX IF NOT EXISTS index_import_track_stage_scanId
+        ON import_track_stage(scanId)
+        """.trimIndent(),
+    )
 }
 
 private fun SQLiteConnection.execSql(sql: String) {

@@ -6,6 +6,7 @@ import io.ktor.http.appendPathSegments
 import io.ktor.http.decodeURLPart
 import io.ktor.http.encodedPath
 import io.ktor.http.parseUrl
+import kotlin.math.roundToLong
 import kotlin.random.Random
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -22,6 +23,8 @@ import top.iwesley.lyn.music.core.model.ImportScanProgress
 import top.iwesley.lyn.music.core.model.ImportScanProgressSink
 import top.iwesley.lyn.music.core.model.ImportSource
 import top.iwesley.lyn.music.core.model.ImportSourceType
+import top.iwesley.lyn.music.core.model.ImportStreamingScanReport
+import top.iwesley.lyn.music.core.model.ImportTrackBatchSink
 import top.iwesley.lyn.music.core.model.ImportedTrackCandidate
 import top.iwesley.lyn.music.core.model.LyricsDocument
 import top.iwesley.lyn.music.core.model.LyricsHttpClient
@@ -49,6 +52,8 @@ const val SUBSONIC_LYRICS_SOURCE_ID = "subsonic-lyrics"
 
 private const val SUBSONIC_CLIENT_NAME = "LynMusic"
 private const val SUBSONIC_API_VERSION = "1.16.1"
+private const val NAVIDROME_NATIVE_IMPORT_PAGE_SIZE = 1_000
+private val MIN_NAVIDROME_NATIVE_API_VERSION = NavidromeServerVersion(0, 44, 0)
 private val subsonicJson = Json { ignoreUnknownKeys = true }
 
 data class NavidromeResolvedSource(
@@ -111,6 +116,7 @@ data class NavidromeSongCandidate(
     val samplingRate: Int?,
     val bitRate: Int?,
     val channelCount: Int?,
+    val path: String? = null,
 )
 
 fun normalizeNavidromeBaseUrl(rawUrl: String?): String {
@@ -286,23 +292,203 @@ suspend fun scanNavidromeLibrary(
     progressSink: ImportScanProgressSink = ImportScanProgressSink.NoOp,
     timeoutMillis: Long? = null,
 ): ImportScanReport {
+    val tracks = mutableListOf<ImportedTrackCandidate>()
+    val streamingReport = scanNavidromeLibraryStreaming(
+        draft = draft,
+        sourceId = sourceId,
+        httpClient = httpClient,
+        supportedImportExtensions = supportedImportExtensions,
+        logger = logger,
+        progressSink = progressSink,
+        trackBatchSink = ImportTrackBatchSink { batch -> tracks += batch },
+        timeoutMillis = timeoutMillis,
+    )
+    return ImportScanReport(
+        tracks = tracks,
+        warnings = streamingReport.warnings,
+        discoveredAudioFileCount = streamingReport.discoveredAudioFileCount,
+        failures = streamingReport.failures,
+        totalTrackCount = streamingReport.totalTrackCount,
+    )
+}
+
+suspend fun scanNavidromeLibraryStreaming(
+    draft: NavidromeSourceDraft,
+    sourceId: String,
+    httpClient: LyricsHttpClient,
+    supportedImportExtensions: Set<String>,
+    logger: DiagnosticLogger = NoopDiagnosticLogger,
+    progressSink: ImportScanProgressSink = ImportScanProgressSink.NoOp,
+    trackBatchSink: ImportTrackBatchSink = ImportTrackBatchSink.NoOp,
+    timeoutMillis: Long? = null,
+): ImportStreamingScanReport {
+    val source = prepareNavidromeResolvedSource(draft)
+    val serverInfo = requestNavidromeServerInfo(
+        httpClient = httpClient,
+        source = source,
+        logger = logger,
+        timeoutMillis = timeoutMillis,
+    )
+    if (serverInfo.requiresLegacyScan()) {
+        logger.log(
+            level = DiagnosticLogLevel.INFO,
+            tag = source.logTag,
+            message = "native-scan-skip source=$sourceId baseUrl=${source.baseUrl} type=${serverInfo.type.orEmpty()} serverVersion=${serverInfo.rawServerVersion.orEmpty()}",
+        )
+        return scanNavidromeLegacyStreaming(
+            sourceId = sourceId,
+            source = source,
+            httpClient = httpClient,
+            supportedImportExtensions = supportedImportExtensions,
+            logger = logger,
+            progressSink = progressSink,
+            trackBatchSink = trackBatchSink,
+            timeoutMillis = timeoutMillis,
+        )
+    }
+
+    var nativeBatchEmitted = false
+    return try {
+        scanNavidromeNativeStreaming(
+            sourceId = sourceId,
+            source = source,
+            httpClient = httpClient,
+            supportedImportExtensions = supportedImportExtensions,
+            logger = logger,
+            progressSink = progressSink,
+            trackBatchSink = ImportTrackBatchSink { batch ->
+                if (batch.isNotEmpty()) nativeBatchEmitted = true
+                trackBatchSink.onBatch(batch)
+            },
+            timeoutMillis = timeoutMillis,
+        )
+    } catch (exception: NavidromeNativeApiIncompatibleException) {
+        if (nativeBatchEmitted) throw exception
+        logger.log(
+            level = DiagnosticLogLevel.INFO,
+            tag = source.logTag,
+            message = "native-scan-fallback source=$sourceId baseUrl=${source.baseUrl} reason=${exception.message.orEmpty()}",
+        )
+        scanNavidromeLegacyStreaming(
+            sourceId = sourceId,
+            source = source,
+            httpClient = httpClient,
+            supportedImportExtensions = supportedImportExtensions,
+            logger = logger,
+            progressSink = progressSink,
+            trackBatchSink = trackBatchSink,
+            timeoutMillis = timeoutMillis,
+        )
+    }
+}
+
+private fun prepareNavidromeResolvedSource(draft: NavidromeSourceDraft): NavidromeResolvedSource {
     val baseUrl = normalizeNavidromeBaseUrl(draft.baseUrl)
     require(draft.username.isNotBlank()) { "请填写 Navidrome 用户名。" }
     require(draft.password.isNotBlank()) { "请填写 Navidrome 密码。" }
-    val source = NavidromeResolvedSource(
+    return NavidromeResolvedSource(
         baseUrl = baseUrl,
         username = draft.username.trim(),
         password = draft.password,
         authMode = SubsonicAuthMode.PASSWORD,
         sourceType = ImportSourceType.NAVIDROME,
     )
-    val totalTrackCount = requestNavidromeNativeSongCount(
+}
+
+private suspend fun scanNavidromeNativeStreaming(
+    sourceId: String,
+    source: NavidromeResolvedSource,
+    httpClient: LyricsHttpClient,
+    supportedImportExtensions: Set<String>,
+    logger: DiagnosticLogger,
+    progressSink: ImportScanProgressSink,
+    trackBatchSink: ImportTrackBatchSink,
+    timeoutMillis: Long? = null,
+): ImportStreamingScanReport {
+    val token = requestNavidromeNativeToken(
         httpClient = httpClient,
         source = source,
         logger = logger,
         timeoutMillis = timeoutMillis,
     )
-    return scanSubsonicCompatibleLibrary(
+    val failures = mutableListOf<top.iwesley.lyn.music.core.model.ImportScanFailure>()
+    val seenSongIds = linkedSetOf<String>()
+    var discoveredAudioFileCount = 0
+    var importedTrackCount = 0
+    var totalTrackCount: Int? = null
+    var start = 0
+
+    while (true) {
+        val page = requestNavidromeNativeSongPage(
+            httpClient = httpClient,
+            source = source,
+            token = token,
+            start = start,
+            pageSize = NAVIDROME_NATIVE_IMPORT_PAGE_SIZE,
+            timeoutMillis = timeoutMillis,
+        )
+        page.totalTrackCount?.let { totalTrackCount = it }
+        if (page.songs.isEmpty()) break
+
+        val batch = mutableListOf<ImportedTrackCandidate>()
+        page.songs.forEach { candidate ->
+            require(candidate.songId.isNotBlank()) { "Navidrome /api/song 返回缺少歌曲 ID。" }
+            if (!seenSongIds.add(candidate.songId)) return@forEach
+            discoveredAudioFileCount += 1
+            when (classifyAudioExtensionForImport(candidate.suffix, supportedImportExtensions)) {
+                NonNavidromeAudioScanResult.IMPORT_SUPPORTED -> {
+                    batch += candidate.toImportedTrackCandidate(sourceId, source.sourceType)
+                }
+
+                NonNavidromeAudioScanResult.IMPORT_UNSUPPORTED,
+                NonNavidromeAudioScanResult.NOT_AUDIO -> {
+                    failures += unsupportedAudioImportFailure(candidate.relativePath())
+                }
+            }
+        }
+        if (batch.isNotEmpty()) {
+            trackBatchSink.onBatch(batch)
+            importedTrackCount += batch.size
+        }
+        progressSink.onProgress(
+            ImportScanProgress(
+                sourceId = sourceId,
+                phase = ImportScanPhase.Scanning,
+                importedTrackCount = importedTrackCount,
+                totalTrackCount = totalTrackCount,
+            ),
+        )
+        start += NAVIDROME_NATIVE_IMPORT_PAGE_SIZE
+        if (page.songs.size < NAVIDROME_NATIVE_IMPORT_PAGE_SIZE) break
+        val total = totalTrackCount
+        if (total != null && start >= total) break
+    }
+
+    logger.log(
+        level = DiagnosticLogLevel.INFO,
+        tag = source.logTag,
+        message = "native-scan-complete source=$sourceId baseUrl=${source.baseUrl} discovered=$discoveredAudioFileCount imported=$importedTrackCount failures=${failures.size}",
+    )
+    return ImportStreamingScanReport(
+        discoveredAudioFileCount = discoveredAudioFileCount,
+        importedTrackCount = importedTrackCount,
+        warnings = if (discoveredAudioFileCount == 0) listOf("当前 ${source.displayName} 账号下没有可同步的歌曲。") else emptyList(),
+        failures = failures,
+        totalTrackCount = totalTrackCount,
+    )
+}
+
+private suspend fun scanNavidromeLegacyStreaming(
+    sourceId: String,
+    source: NavidromeResolvedSource,
+    httpClient: LyricsHttpClient,
+    supportedImportExtensions: Set<String>,
+    logger: DiagnosticLogger,
+    progressSink: ImportScanProgressSink,
+    trackBatchSink: ImportTrackBatchSink,
+    timeoutMillis: Long? = null,
+): ImportStreamingScanReport {
+    val report = scanSubsonicCompatibleLibrary(
         sourceId = sourceId,
         source = source,
         httpClient = httpClient,
@@ -310,7 +496,17 @@ suspend fun scanNavidromeLibrary(
         logger = logger,
         progressSink = progressSink,
         timeoutMillis = timeoutMillis,
-        totalTrackCount = totalTrackCount,
+        totalTrackCount = null,
+    )
+    if (report.tracks.isNotEmpty()) {
+        trackBatchSink.onBatch(report.tracks)
+    }
+    return ImportStreamingScanReport(
+        discoveredAudioFileCount = report.discoveredAudioFileCount,
+        importedTrackCount = report.tracks.size,
+        warnings = report.warnings,
+        failures = report.failures,
+        totalTrackCount = null,
     )
 }
 
@@ -402,71 +598,160 @@ private suspend fun scanSubsonicCompatibleLibrary(
     )
 }
 
-private suspend fun requestNavidromeNativeSongCount(
+private data class NavidromeNativeSongPage(
+    val songs: List<NavidromeSongCandidate>,
+    val totalTrackCount: Int?,
+)
+
+private data class NavidromeServerInfo(
+    val type: String?,
+    val rawServerVersion: String?,
+    val serverVersion: NavidromeServerVersion?,
+) {
+    fun requiresLegacyScan(): Boolean {
+        val serverType = type?.trim()
+        if (!serverType.isNullOrBlank() && !serverType.equals("navidrome", ignoreCase = true)) {
+            return true
+        }
+        return serverVersion != null && serverVersion < MIN_NAVIDROME_NATIVE_API_VERSION
+    }
+}
+
+private data class NavidromeServerVersion(
+    val major: Int,
+    val minor: Int,
+    val patch: Int,
+) : Comparable<NavidromeServerVersion> {
+    override fun compareTo(other: NavidromeServerVersion): Int {
+        return compareValuesBy(this, other, NavidromeServerVersion::major, NavidromeServerVersion::minor, NavidromeServerVersion::patch)
+    }
+}
+
+private class NavidromeNativeApiIncompatibleException(
+    message: String,
+    cause: Throwable? = null,
+) : IllegalStateException(message, cause)
+
+private suspend fun requestNavidromeServerInfo(
     httpClient: LyricsHttpClient,
     source: NavidromeResolvedSource,
     logger: DiagnosticLogger,
     timeoutMillis: Long? = null,
-): Int? {
-    return runCatching {
-        val loginResponse = httpClient.request(
-            LyricsRequest(
-                method = RequestMethod.POST,
-                url = buildNavidromeNativeUrl(source.baseUrl, "auth", "login"),
-                headers = mapOf("Content-Type" to "application/json"),
-                body = subsonicJson.encodeToString(
-                    mapOf(
-                        "username" to source.username,
-                        "password" to source.password,
-                    ),
-                ),
-                timeoutMillis = timeoutMillis,
-            ),
-        ).getOrElse { throwable ->
-            logger.logNavidromeNativeSongCountFailure(source, "登录请求失败: ${throwable.message.orEmpty()}", throwable)
-            return@runCatching null
-        }
-        if (loginResponse.statusCode !in 200..299) {
-            logger.logNavidromeNativeSongCountFailure(source, "登录失败，HTTP ${loginResponse.statusCode}")
-            return@runCatching null
-        }
-        val loginPayload = subsonicJson.parseToJsonElement(loginResponse.body) as? JsonObject
-        val token = loginPayload?.string("token")
-        if (token.isNullOrBlank()) {
-            logger.logNavidromeNativeSongCountFailure(source, "登录响应缺少 token")
-            return@runCatching null
-        }
+): NavidromeServerInfo {
+    val payload = requestNavidromeJson(
+        httpClient = httpClient,
+        source = source,
+        endpoint = "ping",
+        logger = logger,
+        timeoutMillis = timeoutMillis,
+    )
+    val rawServerVersion = payload.string("serverVersion")
+    return NavidromeServerInfo(
+        type = payload.string("type"),
+        rawServerVersion = rawServerVersion,
+        serverVersion = parseNavidromeServerVersion(rawServerVersion),
+    )
+}
 
-        val countResponse = httpClient.request(
-            LyricsRequest(
-                method = RequestMethod.GET,
-                url = buildNavidromeNativeUrl(
-                    source.baseUrl,
-                    "api",
-                    "song",
-                    queryParameters = mapOf("_start" to "0", "_end" to "1"),
+private suspend fun requestNavidromeNativeToken(
+    httpClient: LyricsHttpClient,
+    source: NavidromeResolvedSource,
+    logger: DiagnosticLogger,
+    timeoutMillis: Long? = null,
+): String {
+    val loginResponse = httpClient.request(
+        LyricsRequest(
+            method = RequestMethod.POST,
+            url = buildNavidromeNativeUrl(source.baseUrl, "auth", "login"),
+            headers = mapOf("Content-Type" to "application/json"),
+            body = subsonicJson.encodeToString(
+                mapOf(
+                    "username" to source.username,
+                    "password" to source.password,
                 ),
-                headers = mapOf("X-ND-Authorization" to "Bearer $token"),
-                timeoutMillis = timeoutMillis,
             ),
-        ).getOrElse { throwable ->
-            logger.logNavidromeNativeSongCountFailure(source, "歌曲总数请求失败: ${throwable.message.orEmpty()}", throwable)
-            return@runCatching null
-        }
-        if (countResponse.statusCode !in 200..299) {
-            logger.logNavidromeNativeSongCountFailure(source, "歌曲总数请求失败，HTTP ${countResponse.statusCode}")
-            return@runCatching null
-        }
-        val rawTotal = countResponse.headers.headerIgnoreCase("X-Total-Count")
-        val total = rawTotal?.toIntOrNull()
-        if (total == null) {
-            logger.logNavidromeNativeSongCountFailure(source, "歌曲总数响应缺少有效 X-Total-Count")
-        }
-        total
-    }.getOrElse { throwable ->
-        logger.logNavidromeNativeSongCountFailure(source, "歌曲总数探测失败: ${throwable.message.orEmpty()}", throwable)
-        null
+            timeoutMillis = timeoutMillis,
+        ),
+    ).getOrElse { throwable ->
+        throw IllegalStateException("Navidrome native 登录请求失败: ${throwable.message.orEmpty()}", throwable)
     }
+    if (loginResponse.statusCode.isNavidromeNativeIncompatibleStatus()) {
+        throw NavidromeNativeApiIncompatibleException("Navidrome native 登录接口不可用，HTTP ${loginResponse.statusCode}")
+    }
+    if (loginResponse.statusCode !in 200..299) {
+        throw IllegalStateException("Navidrome native 登录失败，HTTP ${loginResponse.statusCode}")
+    }
+    val loginPayload = try {
+        subsonicJson.parseToJsonElement(loginResponse.body) as? JsonObject
+    } catch (exception: Exception) {
+        throw NavidromeNativeApiIncompatibleException("Navidrome native 登录响应缺少 token。", exception)
+    } ?: throw NavidromeNativeApiIncompatibleException("Navidrome native 登录响应缺少 token。")
+    val token = loginPayload.string("token")
+    if (token.isNullOrBlank()) {
+        throw NavidromeNativeApiIncompatibleException("Navidrome native 登录响应缺少 token。")
+    }
+    if (logger !== NoopDiagnosticLogger) {
+        logger.log(
+            level = DiagnosticLogLevel.INFO,
+            tag = source.logTag,
+            message = "native-login status=${loginResponse.statusCode}",
+        )
+    }
+    return token
+}
+
+private suspend fun requestNavidromeNativeSongPage(
+    httpClient: LyricsHttpClient,
+    source: NavidromeResolvedSource,
+    token: String,
+    start: Int,
+    pageSize: Int,
+    timeoutMillis: Long? = null,
+): NavidromeNativeSongPage {
+    val end = start + pageSize
+    val response = httpClient.request(
+        LyricsRequest(
+            method = RequestMethod.GET,
+            url = buildNavidromeNativeUrl(
+                source.baseUrl,
+                "api",
+                "song",
+                queryParameters = mapOf(
+                    "_start" to start.toString(),
+                    "_end" to end.toString(),
+                    "_sort" to "path",
+                    "_order" to "ASC",
+                ),
+            ),
+            headers = mapOf("X-ND-Authorization" to "Bearer $token"),
+            timeoutMillis = timeoutMillis,
+        ),
+    ).getOrElse { throwable ->
+        throw IllegalStateException("Navidrome native 歌曲分页请求失败: ${throwable.message.orEmpty()}", throwable)
+    }
+    if (response.statusCode.isNavidromeNativeIncompatibleStatus()) {
+        throw NavidromeNativeApiIncompatibleException("Navidrome native 歌曲分页接口不可用，HTTP ${response.statusCode}")
+    }
+    if (response.statusCode !in 200..299) {
+        throw IllegalStateException("Navidrome native 歌曲分页失败，HTTP ${response.statusCode}")
+    }
+    val root = try {
+        subsonicJson.parseToJsonElement(response.body)
+    } catch (exception: Exception) {
+        throw NavidromeNativeApiIncompatibleException("Navidrome /api/song 返回不是 native song 数组。", exception)
+    }
+    val songArray = root as? JsonArray
+        ?: throw NavidromeNativeApiIncompatibleException("Navidrome /api/song 返回不是 native song 数组。")
+    val songs = songArray
+        .mapIndexed { index, element ->
+            val song = element as? JsonObject
+                ?: throw NavidromeNativeApiIncompatibleException("Navidrome /api/song 第 ${start + index} 条歌曲格式错误。")
+            song.toNavidromeNativeSongCandidate()
+        }
+    return NavidromeNativeSongPage(
+        songs = songs,
+        totalTrackCount = response.headers.headerIgnoreCase("X-Total-Count")?.toIntOrNull(),
+    )
 }
 
 private fun buildNavidromeNativeUrl(
@@ -483,20 +768,6 @@ private fun buildNavidromeNativeUrl(
 
 private fun Map<String, String>.headerIgnoreCase(name: String): String? {
     return entries.firstOrNull { (key, _) -> key.equals(name, ignoreCase = true) }?.value
-}
-
-private fun DiagnosticLogger.logNavidromeNativeSongCountFailure(
-    source: NavidromeResolvedSource,
-    message: String,
-    throwable: Throwable? = null,
-) {
-    if (this === NoopDiagnosticLogger) return
-    log(
-        level = DiagnosticLogLevel.WARN,
-        tag = source.logTag,
-        message = "native-song-count $message",
-        throwable = throwable,
-    )
 }
 
 suspend fun testNavidromeConnection(
@@ -724,6 +995,21 @@ suspend fun resolveSubsonicCompatibleStreamUrlCandidates(
             ),
         )
     }
+}
+
+private fun Int.isNavidromeNativeIncompatibleStatus(): Boolean {
+    return this == 404 || this == 405 || this == 501
+}
+
+private fun parseNavidromeServerVersion(value: String?): NavidromeServerVersion? {
+    val match = Regex("""v?(\d+)\.(\d+)\.(\d+)""")
+        .find(value.orEmpty().trim())
+        ?: return null
+    return NavidromeServerVersion(
+        major = match.groupValues[1].toIntOrNull() ?: return null,
+        minor = match.groupValues[2].toIntOrNull() ?: return null,
+        patch = match.groupValues[3].toIntOrNull() ?: return null,
+    )
 }
 
 suspend fun resolveNavidromeDownloadUrl(
@@ -1241,6 +1527,12 @@ private fun buildNavidromeRelativePath(
 }
 
 private fun NavidromeSongCandidate.relativePath(): String {
+    path
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+        ?.trimStart('/')
+        ?.takeIf { it.isNotBlank() }
+        ?.let { return it }
     return buildNavidromeRelativePath(
         artistName = artistName,
         albumTitle = albumTitle,
@@ -1270,6 +1562,31 @@ private fun NavidromeSongCandidate.toImportedTrackCandidate(
         samplingRate = samplingRate,
         bitRate = bitRate,
         channelCount = channelCount,
+    )
+}
+
+private fun JsonObject.toNavidromeNativeSongCandidate(): NavidromeSongCandidate {
+    val path = string("path")
+    val suffix = string("suffix") ?: path?.substringAfterLast('/', path)?.substringAfterLast('.', "")
+    val title = string("title")
+        ?: path?.substringAfterLast('/')?.substringBeforeLast('.', missingDelimiterValue = path.substringAfterLast('/'))
+        ?: "未知曲目"
+    return NavidromeSongCandidate(
+        songId = string("id").orEmpty(),
+        title = title.ifBlank { "未知曲目" },
+        artistName = string("artist") ?: string("albumArtist"),
+        albumTitle = string("album"),
+        durationMs = ((double("duration") ?: 0.0) * 1_000.0).roundToLong(),
+        trackNumber = int("trackNumber") ?: int("track"),
+        discNumber = int("discNumber"),
+        sizeBytes = long("size") ?: 0L,
+        suffix = suffix,
+        coverArtId = string("albumId"),
+        bitDepth = int("bitDepth"),
+        samplingRate = int("sampleRate") ?: int("samplingRate"),
+        bitRate = int("bitRate"),
+        channelCount = int("channels") ?: int("channelCount"),
+        path = path,
     )
 }
 
@@ -1338,3 +1655,5 @@ private fun JsonObject.boolean(key: String): Boolean? {
 private fun JsonObject.int(key: String): Int? = string(key)?.toIntOrNull()
 
 private fun JsonObject.long(key: String): Long? = string(key)?.toLongOrNull()
+
+private fun JsonObject.double(key: String): Double? = string(key)?.toDoubleOrNull()

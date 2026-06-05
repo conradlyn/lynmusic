@@ -242,6 +242,14 @@ data class ImportScanReport(
     val totalTrackCount: Int? = null,
 )
 
+data class ImportStreamingScanReport(
+    val discoveredAudioFileCount: Int,
+    val importedTrackCount: Int,
+    val warnings: List<String> = emptyList(),
+    val failures: List<ImportScanFailure> = emptyList(),
+    val totalTrackCount: Int? = null,
+)
+
 enum class ImportScanPhase {
     Scanning,
     Persisting,
@@ -259,6 +267,14 @@ fun interface ImportScanProgressSink {
 
     companion object {
         val NoOp: ImportScanProgressSink = ImportScanProgressSink {}
+    }
+}
+
+fun interface ImportTrackBatchSink {
+    suspend fun onBatch(tracks: List<ImportedTrackCandidate>)
+
+    companion object {
+        val NoOp: ImportTrackBatchSink = ImportTrackBatchSink {}
     }
 }
 
@@ -528,6 +544,22 @@ interface ImportSourceGateway {
         progressSink: ImportScanProgressSink,
     ): ImportScanReport {
         return scanNavidrome(draft, sourceId)
+    }
+    suspend fun scanNavidromeStreaming(
+        draft: NavidromeSourceDraft,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+        trackBatchSink: ImportTrackBatchSink,
+    ): ImportStreamingScanReport {
+        val report = scanNavidrome(draft, sourceId, progressSink)
+        trackBatchSink.onBatch(report.tracks)
+        return ImportStreamingScanReport(
+            discoveredAudioFileCount = report.discoveredAudioFileCount,
+            importedTrackCount = report.tracks.size,
+            warnings = report.warnings,
+            failures = report.failures,
+            totalTrackCount = report.totalTrackCount,
+        )
     }
     suspend fun testSubsonic(draft: SubsonicSourceDraft) {
         throw UnsupportedOperationException("Subsonic import is not supported on this platform.")
