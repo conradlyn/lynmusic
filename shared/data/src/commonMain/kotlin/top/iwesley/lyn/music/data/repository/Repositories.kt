@@ -370,9 +370,44 @@ interface PlaylistRepository {
     suspend fun renamePlaylist(playlistId: String, name: String): Result<PlaylistSummary>
     suspend fun deletePlaylist(playlistId: String): Result<Unit>
     suspend fun addTrackToPlaylist(playlistId: String, track: Track): Result<Unit>
+    suspend fun importPlaylistText(playlistId: String, text: String): Result<PlaylistImportReport>
     suspend fun removeTrackFromPlaylist(playlistId: String, trackId: String): Result<Unit>
     suspend fun refreshNavidromePlaylists(): Result<Unit>
 }
+
+data class PlaylistImportReport(
+    val addedCount: Int = 0,
+    val alreadyExistsCount: Int = 0,
+    val duplicateInputCount: Int = 0,
+    val malformedLines: List<PlaylistImportLineIssue> = emptyList(),
+    val notMatchedLines: List<PlaylistImportLineIssue> = emptyList(),
+    val ambiguousLines: List<PlaylistImportAmbiguousLineIssue> = emptyList(),
+    val failedLines: List<PlaylistImportFailedLineIssue> = emptyList(),
+) {
+    val hasIssues: Boolean
+        get() = duplicateInputCount > 0 ||
+            malformedLines.isNotEmpty() ||
+            notMatchedLines.isNotEmpty() ||
+            ambiguousLines.isNotEmpty() ||
+            failedLines.isNotEmpty()
+}
+
+data class PlaylistImportLineIssue(
+    val lineNumber: Int,
+    val rawText: String,
+)
+
+data class PlaylistImportAmbiguousLineIssue(
+    val lineNumber: Int,
+    val rawText: String,
+    val matchCount: Int,
+)
+
+data class PlaylistImportFailedLineIssue(
+    val lineNumber: Int,
+    val rawText: String,
+    val message: String,
+)
 
 interface LyricsRepository {
     suspend fun getLyrics(track: Track): ResolvedLyricsResult?

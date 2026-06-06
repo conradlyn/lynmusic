@@ -348,6 +348,21 @@ interface TrackDao {
     @Query("SELECT * FROM track WHERE sourceId = :sourceId")
     suspend fun getBySourceId(sourceId: String): List<TrackEntity>
 
+    @Query(
+        """
+        SELECT * FROM track
+        WHERE sourceId IN (:sourceIds)
+            AND LOWER(TRIM(title)) IN (:titles)
+            AND LOWER(TRIM(COALESCE(artistName, ''))) IN (:artists)
+        ORDER BY title COLLATE NOCASE ASC
+        """,
+    )
+    suspend fun getByNormalizedTitleAndArtistCandidates(
+        sourceIds: List<String>,
+        titles: List<String>,
+        artists: List<String>,
+    ): List<TrackEntity>
+
     @Query("SELECT id, addedAt FROM track WHERE sourceId = :sourceId")
     suspend fun getAddedAtBySourceId(sourceId: String): List<TrackAddedAtRow>
 

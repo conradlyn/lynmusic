@@ -29,6 +29,7 @@ import top.iwesley.lyn.music.core.model.SourceWithStatus
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.WebDavSourceDraft
 import top.iwesley.lyn.music.data.repository.ImportSourceRepository
+import top.iwesley.lyn.music.data.repository.PlaylistImportReport
 import top.iwesley.lyn.music.data.repository.PlaylistRepository
 import top.iwesley.lyn.music.feature.TestOfflineDownloadRepository
 import top.iwesley.lyn.music.feature.library.LibrarySourceFilter
@@ -253,11 +254,51 @@ class PlaylistsStoreTest {
         )
         scope.cancel()
     }
+
+    @Test
+    fun `import playlist text forwards request and exposes report`() = runTest {
+        val repository = FakePlaylistRepository()
+        val importSources = FakePlaylistsImportSourceRepository()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = PlaylistsStore(repository, importSources, scope)
+
+        advanceUntilIdle()
+        store.dispatch(PlaylistsIntent.CreatePlaylist("导入"))
+        advanceUntilIdle()
+        val playlistId = requireNotNull(store.state.value.selectedPlaylistId)
+
+        store.dispatch(PlaylistsIntent.ImportPlaylistText(playlistId, "咖啡恋曲 - 旺福"))
+        advanceUntilIdle()
+
+        assertEquals(listOf(playlistId to "咖啡恋曲 - 旺福"), repository.importRequests)
+        assertEquals(2, store.state.value.playlistImportReport?.addedCount)
+        assertEquals(false, store.state.value.isImporting)
+        assertEquals(null, store.state.value.message)
+        scope.cancel()
+    }
+
+    @Test
+    fun `import playlist text failure surfaces message`() = runTest {
+        val repository = FakePlaylistRepository(importError = IllegalStateException("导入失败"))
+        val importSources = FakePlaylistsImportSourceRepository()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = PlaylistsStore(repository, importSources, scope)
+
+        advanceUntilIdle()
+        store.dispatch(PlaylistsIntent.ImportPlaylistText("missing", "咖啡恋曲 - 旺福"))
+        advanceUntilIdle()
+
+        assertEquals("导入失败", store.state.value.message)
+        assertEquals(null, store.state.value.playlistImportReport)
+        assertEquals(false, store.state.value.isImporting)
+        scope.cancel()
+    }
 }
 
 private class FakePlaylistRepository(
     private val createError: Throwable? = null,
     private val deleteError: Throwable? = null,
+    private val importError: Throwable? = null,
 ) : PlaylistRepository {
     private val mutablePlaylists = MutableStateFlow<List<PlaylistSummary>>(emptyList())
     private val mutableDetails = MutableStateFlow<Map<String, PlaylistDetail>>(emptyMap())
@@ -267,6 +308,7 @@ private class FakePlaylistRepository(
         private set
     val addedTrackIds = mutableListOf<String>()
     val deletedPlaylistIds = mutableListOf<String>()
+    val importRequests = mutableListOf<Pair<String, String>>()
 
     override val playlists: Flow<List<PlaylistSummary>> = mutablePlaylists.asStateFlow()
 
@@ -340,6 +382,12 @@ private class FakePlaylistRepository(
             )
         )
         return Result.success(Unit)
+    }
+
+    override suspend fun importPlaylistText(playlistId: String, text: String): Result<PlaylistImportReport> {
+        importRequests += playlistId to text
+        importError?.let { return Result.failure(it) }
+        return Result.success(PlaylistImportReport(addedCount = 2))
     }
 
     override suspend fun removeTrackFromPlaylist(playlistId: String, trackId: String): Result<Unit> {

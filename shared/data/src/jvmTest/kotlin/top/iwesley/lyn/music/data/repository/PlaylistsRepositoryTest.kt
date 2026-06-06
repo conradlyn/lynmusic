@@ -53,6 +53,248 @@ class PlaylistsRepositoryTest {
     }
 
     @Test
+    fun `import playlist text parses hyphen formats and reports malformed lines`() = runTest {
+        val database = createPlaylistTestDatabase()
+        database.importSourceDao().upsert(localSourceEntity())
+        database.trackDao().upsertAll(
+            listOf(
+                localTrackEntity(id = "track-coffee", title = "咖啡恋曲", artistName = "旺福"),
+                localTrackEntity(id = "track-night", title = "夜空中最亮的星", artistName = "逃跑计划"),
+            ),
+        )
+        val repository = playlistRepository(database)
+        val playlist = repository.createPlaylist("导入测试").getOrThrow()
+
+        val report = repository.importPlaylistText(
+            playlistId = playlist.id,
+            text = """
+                咖啡恋曲 - 旺福
+
+                夜空中最亮的星-逃跑计划
+                没有分隔符
+                - 缺标题
+                缺歌手 -
+            """.trimIndent(),
+        ).getOrThrow()
+
+        assertEquals(2, report.addedCount)
+        assertEquals(listOf(4, 5, 6), report.malformedLines.map { it.lineNumber })
+        assertEquals(
+            listOf("track-coffee", "track-night"),
+            repository.observePlaylistDetail(playlist.id).first()?.tracks?.map { it.track.id },
+        )
+    }
+
+    @Test
+    fun `import playlist text supports hyphenated artists and spaced hyphens in titles`() = runTest {
+        val database = createPlaylistTestDatabase()
+        database.importSourceDao().upsert(localSourceEntity())
+        database.trackDao().upsertAll(
+            listOf(
+                localTrackEntity(id = "track-tara", title = "Sugar Free", artistName = "T-ARA"),
+                localTrackEntity(id = "track-title-hyphen", title = "Song - Title", artistName = "Artist"),
+            ),
+        )
+        val repository = playlistRepository(database)
+        val playlist = repository.createPlaylist("连字符测试").getOrThrow()
+
+        val report = repository.importPlaylistText(
+            playlistId = playlist.id,
+            text = """
+                Sugar Free - T-ARA
+                Song - Title - Artist
+            """.trimIndent(),
+        ).getOrThrow()
+
+        assertEquals(2, report.addedCount)
+        assertEquals(emptyList(), report.malformedLines)
+        assertEquals(emptyList(), report.notMatchedLines)
+        assertEquals(
+            listOf("track-tara", "track-title-hyphen"),
+            repository.observePlaylistDetail(playlist.id).first()?.tracks?.map { it.track.id },
+        )
+    }
+
+    @Test
+    fun `import playlist text matches enabled exact title and artist only`() = runTest {
+        val database = createPlaylistTestDatabase()
+        database.importSourceDao().upsert(localSourceEntity(sourceId = "enabled"))
+        database.importSourceDao().upsert(localSourceEntity(sourceId = "disabled", enabled = false))
+        database.importSourceDao().upsert(localSourceEntity(sourceId = "other-enabled"))
+        database.trackDao().upsertAll(
+            listOf(
+                localTrackEntity(
+                    id = "track-enabled",
+                    sourceId = "enabled",
+                    title = " Morning Light ",
+                    artistName = " Artist A ",
+                ),
+                localTrackEntity(id = "track-title-only", sourceId = "enabled", title = "Morning Light", artistName = "Artist B"),
+                localTrackEntity(id = "track-artist-only", sourceId = "enabled", title = "Other Song", artistName = "Artist A"),
+                localTrackEntity(id = "track-disabled", sourceId = "disabled", title = "Ghost", artistName = "Artist A"),
+                localTrackEntity(id = "track-same-1", sourceId = "enabled", title = "Same Song", artistName = "Artist A"),
+                localTrackEntity(
+                    id = "track-same-2",
+                    sourceId = "other-enabled",
+                    title = "Same Song",
+                    artistName = "Artist A",
+                ),
+            ),
+        )
+        val repository = playlistRepository(database)
+        val playlist = repository.createPlaylist("匹配测试").getOrThrow()
+
+        val report = repository.importPlaylistText(
+            playlistId = playlist.id,
+            text = """
+                morning light - artist a
+                Ghost - Artist A
+                Same Song - Artist A
+            """.trimIndent(),
+        ).getOrThrow()
+
+        assertEquals(1, report.addedCount)
+        assertEquals(listOf(2), report.notMatchedLines.map { it.lineNumber })
+        assertEquals(listOf(3), report.ambiguousLines.map { it.lineNumber })
+        assertEquals(2, report.ambiguousLines.single().matchCount)
+        assertEquals(
+            listOf("track-enabled"),
+            repository.observePlaylistDetail(playlist.id).first()?.tracks?.map { it.track.id },
+        )
+    }
+
+    @Test
+    fun `import playlist text ignores unrelated large library candidates`() = runTest {
+        val database = createPlaylistTestDatabase()
+        database.importSourceDao().upsert(localSourceEntity())
+        database.trackDao().upsertAll(
+            buildList {
+                add(localTrackEntity(id = "track-target", title = "Needle", artistName = "Singer"))
+                repeat(250) { index ->
+                    add(
+                        localTrackEntity(
+                            id = "track-unrelated-$index",
+                            title = "Unrelated $index",
+                            artistName = "Other Artist $index",
+                        ),
+                    )
+                }
+            },
+        )
+        val repository = playlistRepository(database)
+        val playlist = repository.createPlaylist("大曲库测试").getOrThrow()
+
+        val report = repository.importPlaylistText(
+            playlistId = playlist.id,
+            text = "Needle - Singer",
+        ).getOrThrow()
+
+        assertEquals(1, report.addedCount)
+        assertFalse(report.hasIssues)
+        assertEquals(
+            listOf("track-target"),
+            repository.observePlaylistDetail(playlist.id).first()?.tracks?.map { it.track.id },
+        )
+    }
+
+    @Test
+    fun `import playlist text batches candidate lookup for many distinct lines`() = runTest {
+        val database = createPlaylistTestDatabase()
+        database.importSourceDao().upsert(localSourceEntity())
+        database.trackDao().upsertAll(
+            List(520) { index ->
+                localTrackEntity(
+                    id = "track-bulk-$index",
+                    title = "Bulk Song $index",
+                    artistName = "Bulk Artist $index",
+                )
+            },
+        )
+        val repository = playlistRepository(database)
+        val playlist = repository.createPlaylist("批量导入测试").getOrThrow()
+
+        val report = repository.importPlaylistText(
+            playlistId = playlist.id,
+            text = (0 until 520).joinToString("\n") { index ->
+                "Bulk Song $index - Bulk Artist $index"
+            },
+        ).getOrThrow()
+
+        assertEquals(520, report.addedCount)
+        assertFalse(report.hasIssues)
+        assertEquals(
+            (0 until 520).map { "track-bulk-$it" },
+            repository.observePlaylistDetail(playlist.id).first()?.tracks?.map { it.track.id },
+        )
+    }
+
+    @Test
+    fun `import playlist text skips existing and duplicate input tracks`() = runTest {
+        val database = createPlaylistTestDatabase()
+        database.importSourceDao().upsert(localSourceEntity())
+        database.trackDao().upsertAll(
+            listOf(
+                localTrackEntity(),
+                localTrackEntity(id = "track-second", title = "Second Song", artistName = "Artist B"),
+            ),
+        )
+        val repository = playlistRepository(database)
+        val playlist = repository.createPlaylist("重复测试").getOrThrow()
+        repository.addTrackToPlaylist(playlist.id, localTrack()).getOrThrow()
+
+        val report = repository.importPlaylistText(
+            playlistId = playlist.id,
+            text = """
+                Morning Light - Artist A
+                Second Song - Artist B
+                Second Song - Artist B
+                Morning Light - Artist A
+            """.trimIndent(),
+        ).getOrThrow()
+
+        assertEquals(1, report.addedCount)
+        assertEquals(1, report.alreadyExistsCount)
+        assertEquals(2, report.duplicateInputCount)
+        assertEquals(
+            listOf(localTrack().id, "track-second"),
+            repository.observePlaylistDetail(playlist.id).first()?.tracks?.map { it.track.id },
+        )
+    }
+
+    @Test
+    fun `import playlist text syncs navidrome tracks through remote playlist api`() = runTest {
+        val database = createPlaylistTestDatabase()
+        seedNavidromeSource(database, sourceId = "nav", username = "alpha", credentialKey = "cred-a", label = "Alpha")
+        database.trackDao().upsertAll(listOf(navidromeTrackEntity(sourceId = "nav", songId = "song-a1")))
+        val httpClient = RecordingPlaylistsHttpClient(
+            remotePlaylistsByUser = mutableMapOf(
+                "alpha" to linkedMapOf(),
+            ),
+        )
+        val repository = RoomPlaylistRepository(
+            database = database,
+            secureCredentialStore = MapPlaylistSecureCredentialStore(mutableMapOf("cred-a" to "pass-a")),
+            httpClient = httpClient,
+            logger = NoopDiagnosticLogger,
+        )
+        val playlist = repository.createPlaylist("Road Trip").getOrThrow()
+
+        val report = repository.importPlaylistText(
+            playlistId = playlist.id,
+            text = "Song song-a1 - Artist nav",
+        ).getOrThrow()
+
+        assertEquals(1, report.addedCount)
+        assertTrue(httpClient.requestedEndpoints.contains("createPlaylist"))
+        assertTrue(httpClient.requestedEndpoints.contains("updatePlaylist"))
+        assertTrue(httpClient.requestedEndpoints.contains("getPlaylist"))
+        assertEquals(
+            listOf(navidromeTrack(sourceId = "nav", songId = "song-a1").id),
+            repository.observePlaylistDetail(playlist.id).first()?.tracks?.map { it.track.id },
+        )
+    }
+
+    @Test
     fun `playlist summary artwork uses newest visible playlist track`() = runTest {
         val database = createPlaylistTestDatabase()
         database.importSourceDao().upsert(localSourceEntity())
@@ -74,6 +316,7 @@ class PlaylistsRepositoryTest {
         val summary = repository.playlists.first().single()
 
         assertEquals("/art/new.jpg", summary.artworkLocator)
+        assertEquals("album:local-1:album:artist a:album one", summary.artworkCacheKey)
     }
 
     @Test
@@ -101,6 +344,31 @@ class PlaylistsRepositoryTest {
 
         assertEquals(1, summary.trackCount)
         assertEquals("/art/enabled.jpg", summary.artworkLocator)
+    }
+
+    @Test
+    fun `playlist summary artwork skips newer tracks without artwork`() = runTest {
+        val database = createPlaylistTestDatabase()
+        database.importSourceDao().upsert(localSourceEntity())
+        database.trackDao().upsertAll(
+            listOf(
+                localTrackEntity(id = "track-covered", title = "Covered", artworkLocator = "/art/covered.jpg"),
+                localTrackEntity(id = "track-empty", title = "Empty", artworkLocator = null),
+            ),
+        )
+        val repository = playlistRepository(database)
+        val playlist = repository.createPlaylist("空封面回退").getOrThrow()
+        database.playlistTrackDao().upsertAll(
+            listOf(
+                playlistTrackEntity(playlist.id, "track-covered", addedAt = 10L, localOrdinal = 0),
+                playlistTrackEntity(playlist.id, "track-empty", addedAt = 20L, localOrdinal = 1),
+            ),
+        )
+
+        val summary = repository.playlists.first().single()
+
+        assertEquals("/art/covered.jpg", summary.artworkLocator)
+        assertEquals("album:local-1:album:artist a:album one", summary.artworkCacheKey)
     }
 
     @Test
@@ -647,15 +915,16 @@ private fun localTrackEntity(
     id: String = localTrack().id,
     sourceId: String = "local-1",
     title: String = "Morning Light",
+    artistName: String = "Artist A",
     artworkLocator: String? = null,
 ): TrackEntity {
     return TrackEntity(
         id = id,
         sourceId = sourceId,
         title = title,
-        artistId = "artist:artist a",
-        artistName = "Artist A",
-        albumId = "album:artist a:album one",
+        artistId = "artist:${artistName.trim().lowercase()}",
+        artistName = artistName,
+        albumId = "album:${artistName.trim().lowercase()}:album one",
         albumTitle = "Album One",
         durationMs = 210_000L,
         trackNumber = 1,

@@ -20,14 +20,15 @@ import top.iwesley.lyn.music.core.model.SecureCredentialStore
 import top.iwesley.lyn.music.core.model.SubsonicAuthMode
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.error
-import top.iwesley.lyn.music.core.model.normalizeArtworkLocator
 import top.iwesley.lyn.music.core.model.parseEmbySongLocator
 import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleSongLocator
+import top.iwesley.lyn.music.core.model.trackArtworkCacheKey
 import top.iwesley.lyn.music.data.db.ImportSourceEntity
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
 import top.iwesley.lyn.music.data.db.PlaylistEntity
 import top.iwesley.lyn.music.data.db.PlaylistRemoteBindingEntity
 import top.iwesley.lyn.music.data.db.PlaylistTrackEntity
+import top.iwesley.lyn.music.data.db.TrackEntity
 import top.iwesley.lyn.music.domain.addEmbyPlaylistItem
 import top.iwesley.lyn.music.domain.createEmbyPlaylist
 import top.iwesley.lyn.music.domain.deleteEmbyPlaylist
@@ -76,9 +77,11 @@ class RoomPlaylistRepository(
             val memberTrackIds = visiblePlaylistTracks.asSequence()
                 .map { it.trackId }
                 .toCollection(linkedSetOf())
+            val artwork = visiblePlaylistTracks.latestPlaylistArtwork(trackById)
             playlist.toSummary(
                 memberTrackIds = memberTrackIds,
-                artworkLocator = visiblePlaylistTracks.latestPlaylistArtworkLocator(trackById),
+                artworkLocator = artwork?.locator,
+                artworkCacheKey = artwork?.cacheKey,
             )
         }
     }
@@ -240,6 +243,144 @@ class RoomPlaylistRepository(
                 }
             }
         }
+    }
+
+    override suspend fun importPlaylistText(
+        playlistId: String,
+        text: String,
+    ): Result<PlaylistImportReport> {
+        return runCatching {
+            database.playlistDao().getById(playlistId) ?: error("歌单不存在。")
+            val enabledSourceIds = database.importSourceDao().getAll()
+                .filter { it.enabled }
+                .mapTo(linkedSetOf()) { it.id }
+            val malformedLines = mutableListOf<PlaylistImportLineIssue>()
+            val parsedLines = mutableListOf<PlaylistTextImportLine>()
+            val requestedKeys = linkedSetOf<PlaylistTextImportKey>()
+
+            text.lineSequence().forEachIndexed { index, rawLine ->
+                if (rawLine.isBlank()) return@forEachIndexed
+                val lineNumber = index + 1
+                val parsedLine = parsePlaylistTextImportLine(lineNumber, rawLine)
+                if (parsedLine == null) {
+                    malformedLines += PlaylistImportLineIssue(
+                        lineNumber = lineNumber,
+                        rawText = rawLine,
+                    )
+                } else {
+                    parsedLines += parsedLine
+                    requestedKeys += parsedLine.key
+                }
+            }
+
+            val tracksByImportKey = if (enabledSourceIds.isEmpty() || requestedKeys.isEmpty()) {
+                emptyMap()
+            } else {
+                getPlaylistTextImportCandidateTracks(
+                    enabledSourceIds = enabledSourceIds.toList(),
+                    requestedKeys = requestedKeys.toList(),
+                )
+                    .map { it.toDomain() }
+                    .groupBy { track ->
+                        PlaylistTextImportKey(
+                            title = normalizePlaylistTextImportPart(track.title),
+                            artist = normalizePlaylistTextImportPart(track.artistName.orEmpty()),
+                        )
+                    }
+            }
+            val currentMemberTrackIds = database.playlistTrackDao()
+                .getByPlaylistId(playlistId)
+                .mapTo(linkedSetOf()) { it.trackId }
+            val seenInputTrackIds = linkedSetOf<String>()
+            var addedCount = 0
+            var alreadyExistsCount = 0
+            var duplicateInputCount = 0
+            val notMatchedLines = mutableListOf<PlaylistImportLineIssue>()
+            val ambiguousLines = mutableListOf<PlaylistImportAmbiguousLineIssue>()
+            val failedLines = mutableListOf<PlaylistImportFailedLineIssue>()
+
+            parsedLines.forEach { parsedLine ->
+                val lineNumber = parsedLine.lineNumber
+                val rawLine = parsedLine.rawText
+                val matches = tracksByImportKey[parsedLine.key].orEmpty()
+                when {
+                    matches.isEmpty() -> {
+                        notMatchedLines += PlaylistImportLineIssue(
+                            lineNumber = lineNumber,
+                            rawText = rawLine,
+                        )
+                    }
+
+                    matches.size > 1 -> {
+                        ambiguousLines += PlaylistImportAmbiguousLineIssue(
+                            lineNumber = lineNumber,
+                            rawText = rawLine,
+                            matchCount = matches.size,
+                        )
+                    }
+
+                    else -> {
+                        val track = matches.single()
+                        if (!seenInputTrackIds.add(track.id)) {
+                            duplicateInputCount += 1
+                            return@forEach
+                        }
+                        if (track.id in currentMemberTrackIds) {
+                            alreadyExistsCount += 1
+                            return@forEach
+                        }
+                        addTrackToPlaylist(playlistId, track)
+                            .onSuccess {
+                                currentMemberTrackIds += track.id
+                                addedCount += 1
+                            }
+                            .onFailure { throwable ->
+                                failedLines += PlaylistImportFailedLineIssue(
+                                    lineNumber = lineNumber,
+                                    rawText = rawLine,
+                                    message = throwable.message.orEmpty().ifBlank { "加入失败。" },
+                                )
+                            }
+                    }
+                }
+            }
+
+            PlaylistImportReport(
+                addedCount = addedCount,
+                alreadyExistsCount = alreadyExistsCount,
+                duplicateInputCount = duplicateInputCount,
+                malformedLines = malformedLines,
+                notMatchedLines = notMatchedLines,
+                ambiguousLines = ambiguousLines,
+                failedLines = failedLines,
+            )
+        }
+    }
+
+    private suspend fun getPlaylistTextImportCandidateTracks(
+        enabledSourceIds: List<String>,
+        requestedKeys: List<PlaylistTextImportKey>,
+    ): List<TrackEntity> {
+        if (enabledSourceIds.isEmpty() || requestedKeys.isEmpty()) return emptyList()
+        val candidatesById = linkedMapOf<String, TrackEntity>()
+        enabledSourceIds.chunked(PlaylistTextImportSourceChunkSize).forEach { sourceChunk ->
+            val keyChunkSize = maxOf(
+                1,
+                (PlaylistTextImportSqlBindLimit - sourceChunk.size) / PlaylistTextImportBindingsPerKey,
+            )
+            requestedKeys.chunked(keyChunkSize).forEach { keyChunk ->
+                database.trackDao()
+                    .getByNormalizedTitleAndArtistCandidates(
+                        sourceIds = sourceChunk,
+                        titles = keyChunk.map { it.title }.distinct(),
+                        artists = keyChunk.map { it.artist }.distinct(),
+                    )
+                    .forEach { track ->
+                        candidatesById.getOrPut(track.id) { track }
+                    }
+            }
+        }
+        return candidatesById.values.toList()
     }
 
     override suspend fun removeTrackFromPlaylist(playlistId: String, trackId: String): Result<Unit> {
@@ -794,6 +935,7 @@ class RoomPlaylistRepository(
 private fun PlaylistEntity.toSummary(
     memberTrackIds: Set<String> = emptySet(),
     artworkLocator: String? = null,
+    artworkCacheKey: String? = null,
 ): PlaylistSummary {
     return PlaylistSummary(
         id = id,
@@ -803,15 +945,40 @@ private fun PlaylistEntity.toSummary(
         updatedAt = updatedAt,
         memberTrackIds = memberTrackIds,
         artworkLocator = artworkLocator,
+        artworkCacheKey = artworkCacheKey,
     )
 }
 
-private fun List<PlaylistTrackEntity>.latestPlaylistArtworkLocator(trackById: Map<String, Track>): String? {
-    val latestTrack = maxWithOrNull(
-        compareBy<PlaylistTrackEntity> { it.addedAt }
-            .thenBy { it.localOrdinal ?: it.remoteOrdinal ?: -1 },
-    ) ?: return null
-    return trackById[latestTrack.trackId]?.artworkLocator?.takeIf { it.isNotBlank() }
+private data class PlaylistSummaryArtwork(
+    val locator: String,
+    val cacheKey: String?,
+)
+
+private fun List<PlaylistTrackEntity>.latestPlaylistArtwork(trackById: Map<String, Track>): PlaylistSummaryArtwork? {
+    var bestRow: PlaylistTrackEntity? = null
+    var bestArtwork: PlaylistSummaryArtwork? = null
+    for (row in this) {
+        val track = trackById[row.trackId] ?: continue
+        val locator = track.artworkLocator?.takeIf { it.isNotBlank() } ?: continue
+        val currentBest = bestRow
+        if (currentBest == null || row.isNewerPlaylistArtworkCandidateThan(currentBest)) {
+            bestRow = row
+            bestArtwork = PlaylistSummaryArtwork(
+                locator = locator,
+                cacheKey = trackArtworkCacheKey(track),
+            )
+        }
+    }
+    return bestArtwork
+}
+
+private fun PlaylistTrackEntity.isNewerPlaylistArtworkCandidateThan(other: PlaylistTrackEntity): Boolean {
+    if (addedAt != other.addedAt) return addedAt > other.addedAt
+    return playlistArtworkOrdinal() > other.playlistArtworkOrdinal()
+}
+
+private fun PlaylistTrackEntity.playlistArtworkOrdinal(): Int {
+    return localOrdinal ?: remoteOrdinal ?: -1
 }
 
 private fun PlaylistEntity.toDetail(
@@ -860,6 +1027,48 @@ private data class RemotePlaylistTrackSnapshot(
     val trackId: String,
     val remoteOrdinal: Int,
 )
+
+private data class PlaylistTextImportLine(
+    val lineNumber: Int,
+    val rawText: String,
+    val key: PlaylistTextImportKey,
+)
+
+private data class PlaylistTextImportKey(
+    val title: String,
+    val artist: String,
+)
+
+private val PlaylistTextImportSpacedSeparator = Regex("""\s+-\s+""")
+private const val PlaylistTextImportSqlBindLimit = 900
+private const val PlaylistTextImportSourceChunkSize = 100
+private const val PlaylistTextImportBindingsPerKey = 2
+
+private fun parsePlaylistTextImportLine(lineNumber: Int, rawText: String): PlaylistTextImportLine? {
+    val spacedSeparator = PlaylistTextImportSpacedSeparator.findAll(rawText).lastOrNull()
+    val title: String
+    val artist: String
+    if (spacedSeparator != null) {
+        title = rawText.substring(0, spacedSeparator.range.first).trim()
+        artist = rawText.substring(spacedSeparator.range.last + 1).trim()
+    } else {
+        val separatorIndex = rawText.lastIndexOf('-')
+        if (separatorIndex < 0) return null
+        title = rawText.substring(0, separatorIndex).trim()
+        artist = rawText.substring(separatorIndex + 1).trim()
+    }
+    if (title.isBlank() || artist.isBlank()) return null
+    return PlaylistTextImportLine(
+        lineNumber = lineNumber,
+        rawText = rawText,
+        key = PlaylistTextImportKey(
+            title = normalizePlaylistTextImportPart(title),
+            artist = normalizePlaylistTextImportPart(artist),
+        ),
+    )
+}
+
+private fun normalizePlaylistTextImportPart(value: String): String = value.trim().lowercase()
 
 private fun JsonElement?.asJsonObjectOrNull(): JsonObject? = this as? JsonObject
 

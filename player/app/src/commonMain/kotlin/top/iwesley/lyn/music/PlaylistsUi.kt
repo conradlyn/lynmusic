@@ -6,6 +6,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -25,6 +27,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -76,11 +79,15 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import top.iwesley.lyn.music.core.model.ImportSourceType
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.OfflineDownload
@@ -91,6 +98,7 @@ import top.iwesley.lyn.music.core.model.PlaylistSummary
 import top.iwesley.lyn.music.core.model.SYSTEM_LIKED_PLAYLIST_ID
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.trackArtworkCacheKey
+import top.iwesley.lyn.music.data.repository.PlaylistImportReport
 import top.iwesley.lyn.music.feature.library.LibrarySourceFilter
 import top.iwesley.lyn.music.feature.library.matchesLibrarySourceFilter
 import top.iwesley.lyn.music.feature.offline.OfflineDownloadIntent
@@ -625,6 +633,7 @@ internal fun PlaylistsTab(
     modifier: Modifier = Modifier,
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
+    var showImportDialog by rememberSaveable { mutableStateOf(false) }
     val detail = state.selectedPlaylist
     val requestedPlaylistId = state.selectedPlaylistId
     val filteredPlaylists = remember(state.playlists, playlistSearchQuery) {
@@ -669,6 +678,11 @@ internal fun PlaylistsTab(
     }
     val resolvedDetail = filteredDetailPresentation.resolvedDetail
     val resolvedRawDetail = rawDetailPresentation.resolvedDetail
+    LaunchedEffect(showImportDialog, resolvedRawDetail?.id) {
+        if (showImportDialog && resolvedRawDetail == null) {
+            showImportDialog = false
+        }
+    }
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val density = LocalDensity.current
         val layoutProfile = buildLayoutProfile(
@@ -678,6 +692,7 @@ internal fun PlaylistsTab(
             density = density,
         )
         val wide = layoutProfile.isExpandedLayout
+        val showPlaylistTrackDuration = !layoutProfile.isCompactLayout
         if (showCreateDialog) {
             PlaylistNameDialog(
                 onDismiss = { showCreateDialog = false },
@@ -686,6 +701,22 @@ internal fun PlaylistsTab(
                     onPlaylistsIntent(PlaylistsIntent.CreatePlaylist(name))
                 },
             )
+        }
+        if (showImportDialog) {
+            resolvedRawDetail?.let { importTarget ->
+                PlaylistTextImportDialog(
+                    playlistName = importTarget.name,
+                    isImporting = state.isImporting,
+                    report = state.playlistImportReport,
+                    onDismiss = {
+                        showImportDialog = false
+                        onPlaylistsIntent(PlaylistsIntent.ClearPlaylistImportReport)
+                    },
+                    onImport = { text ->
+                        onPlaylistsIntent(PlaylistsIntent.ImportPlaylistText(importTarget.id, text))
+                    },
+                )
+            }
         }
         if (wide) {
             Row(
@@ -728,11 +759,14 @@ internal fun PlaylistsTab(
                     onPlayTrack = { tracks, index ->
                         onPlayerIntent(PlayerIntent.PlayTracks(tracks, index))
                     },
+                    isImportingPlaylist = state.isImporting,
+                    onImportPlaylist = { showImportDialog = true },
                     onRemoveTrack = { trackId ->
                         resolvedRawDetail?.id?.let { playlistId ->
                             onPlaylistsIntent(PlaylistsIntent.RemoveTrackFromPlaylist(playlistId, trackId))
                         }
                     },
+                    showTrackDuration = showPlaylistTrackDuration,
                     modifier = Modifier.weight(0.64f).fillMaxHeight(),
                     showBackButton = false,
                     batchSelectionRequestKey = batchSelectionRequestKey,
@@ -777,11 +811,14 @@ internal fun PlaylistsTab(
                 onPlayTrack = { tracks, index ->
                     onPlayerIntent(PlayerIntent.PlayTracks(tracks, index))
                 },
+                isImportingPlaylist = state.isImporting,
+                onImportPlaylist = { showImportDialog = true },
                 onRemoveTrack = { trackId ->
                     resolvedRawDetail?.id?.let { playlistId ->
                         onPlaylistsIntent(PlaylistsIntent.RemoveTrackFromPlaylist(playlistId, trackId))
                     }
                 },
+                showTrackDuration = showPlaylistTrackDuration,
                 modifier = Modifier.fillMaxSize(),
                 showBackButton = true,
                 batchSelectionRequestKey = batchSelectionRequestKey,
@@ -1069,6 +1106,7 @@ private fun PlaylistSummaryCard(
             ) {
                 PlaylistArtworkThumbnail(
                     artworkLocator = playlistSummaryArtworkLocator(playlist),
+                    artworkCacheKey = playlistSummaryArtworkCacheKey(playlist),
                     cornerRadius = 8.dp,
                     containerColor = if (selected) Color.Transparent else shellColors.navContainer,
                     fallbackTint = if (selected) {
@@ -1135,6 +1173,10 @@ internal fun playlistSummaryArtworkLocator(playlist: PlaylistSummary): String? {
     return playlist.artworkLocator?.takeIf { it.isNotBlank() }
 }
 
+internal fun playlistSummaryArtworkCacheKey(playlist: PlaylistSummary): String? {
+    return playlist.artworkCacheKey?.takeIf { it.isNotBlank() }
+}
+
 @Composable
 private fun PlaylistDeleteDialog(
     playlistName: String,
@@ -1169,6 +1211,293 @@ private fun PlaylistDeleteDialog(
 }
 
 @Composable
+private fun PlaylistTextImportDialog(
+    playlistName: String,
+    isImporting: Boolean,
+    report: PlaylistImportReport?,
+    onDismiss: () -> Unit,
+    onImport: (String) -> Unit,
+) {
+    val shellColors = mainShellColors
+    val appDensity = LocalDensity.current
+    val uriHandler = LocalUriHandler.current
+    var text by rememberSaveable(playlistName) { mutableStateOf("") }
+    val fieldColors = OutlinedTextFieldDefaults.colors(
+        focusedBorderColor = shellColors.cardBorder,
+        unfocusedBorderColor = shellColors.cardBorder,
+        disabledBorderColor = shellColors.cardBorder,
+    )
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        CompositionLocalProvider(LocalDensity provides appDensity) {
+            BoxWithConstraints(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .imePadding()
+                    .navigationBarsPadding(),
+            ) {
+                val dialogLayout = playlistImportDialogLayout(maxWidth = maxWidth, maxHeight = maxHeight)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(
+                            horizontal = dialogLayout.outerHorizontalPadding,
+                            vertical = dialogLayout.outerVerticalPadding,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth(0.94f)
+                            .widthIn(max = 460.dp)
+                            .heightIn(max = dialogLayout.maxHeight),
+                        shape = RoundedCornerShape(28.dp),
+                        colors = CardDefaults.cardColors(containerColor = shellColors.navContainer),
+                        border = BorderStroke(1.dp, shellColors.cardBorder),
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = dialogLayout.maxHeight)
+                                .padding(
+                                    horizontal = dialogLayout.contentHorizontalPadding,
+                                    vertical = dialogLayout.contentVerticalPadding,
+                                ),
+                            verticalArrangement = Arrangement.spacedBy(dialogLayout.verticalSpacing),
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    text = "导入歌单",
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                Text(
+                                    text = "导入到“$playlistName”。每行使用“歌名 - 歌手”，只会匹配已有曲库中的歌曲。",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                            }
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f, fill = false)
+                                    .verticalScroll(rememberScrollState()),
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                ImeAwareOutlinedTextField(
+                                    value = text,
+                                    onValueChange = { text = it },
+                                    label = { Text("导入内容") },
+                                    placeholder = { Text("喜欢你 - BEYOND\n唯一 - 邓紫棋") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(18.dp),
+                                    minLines = dialogLayout.textFieldLines,
+                                    maxLines = dialogLayout.textFieldLines,
+                                    colors = fieldColors,
+                                )
+                                report?.let { PlaylistImportReportContent(it) }
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                TextButton(onClick = onDismiss) {
+                                    Text("关闭", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Spacer(Modifier.width(8.dp))
+                                TextButton(
+                                    onClick = { uriHandler.openUri(PlaylistImportAssistantUrl) },
+                                ) {
+                                    Text("助手", color = MaterialTheme.colorScheme.primary)
+                                }
+                                Spacer(Modifier.width(8.dp))
+                                TextButton(
+                                    onClick = { onImport(text) },
+                                    enabled = canConfirmPlaylistImport(text, isImporting),
+                                ) {
+                                    Text(
+                                        text = if (isImporting) "导入中" else "导入",
+                                        color = if (canConfirmPlaylistImport(text, isImporting)) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaylistImportReportContent(report: PlaylistImportReport) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(mainShellColors.cardContainer.copy(alpha = 0.65f))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = playlistImportReportSummary(report),
+            fontWeight = FontWeight.SemiBold,
+        )
+        if (report.hasIssues) {
+            PlaylistImportIssueGroup("格式错误", report.malformedLines.map(::formatPlaylistImportLineIssue))
+            PlaylistImportIssueGroup("未匹配", report.notMatchedLines.map(::formatPlaylistImportLineIssue))
+            PlaylistImportIssueGroup(
+                title = "多个匹配",
+                lines = report.ambiguousLines.map { issue ->
+                    "第 ${issue.lineNumber} 行：${issue.rawText}（${issue.matchCount} 个匹配）"
+                },
+            )
+            PlaylistImportIssueGroup(
+                title = "加入失败",
+                lines = report.failedLines.map { issue ->
+                    "第 ${issue.lineNumber} 行：${issue.rawText}（${issue.message}）"
+                },
+            )
+            if (report.duplicateInputCount > 0) {
+                Text(
+                    text = "输入内重复：${report.duplicateInputCount} 首",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaylistImportIssueGroup(
+    title: String,
+    lines: List<String>,
+) {
+    if (lines.isEmpty()) return
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = title,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = FontWeight.SemiBold,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        lines.forEach { line ->
+            Text(
+                text = line,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+internal fun canConfirmPlaylistImport(
+    text: String,
+    isImporting: Boolean,
+): Boolean = text.trim().isNotEmpty() && !isImporting
+
+internal fun canShowPlaylistImportAction(detail: PlaylistDetail?): Boolean = detail != null
+
+internal const val PlaylistImportAssistantUrl = "https://music.unmeta.cn/"
+
+internal data class PlaylistImportDialogLayout(
+    val outerHorizontalPadding: Dp,
+    val outerVerticalPadding: Dp,
+    val contentHorizontalPadding: Dp,
+    val contentVerticalPadding: Dp,
+    val verticalSpacing: Dp,
+    val maxHeight: Dp,
+    val textFieldLines: Int,
+)
+
+internal fun playlistImportDialogLayout(
+    maxWidth: Dp,
+    maxHeight: Dp,
+): PlaylistImportDialogLayout {
+    val outerHorizontalPadding = when {
+        maxWidth < 360.dp -> 12.dp
+        maxWidth < 430.dp -> 16.dp
+        else -> 20.dp
+    }
+    val outerVerticalPadding = when {
+        maxHeight < 460.dp -> 8.dp
+        maxHeight < 620.dp -> 16.dp
+        else -> 24.dp
+    }
+    val contentHorizontalPadding = when {
+        maxWidth < 360.dp || maxHeight < 460.dp -> 16.dp
+        maxHeight < 620.dp -> 20.dp
+        else -> 24.dp
+    }
+    val contentVerticalPadding = when {
+        maxHeight < 460.dp -> 14.dp
+        maxHeight < 620.dp -> 18.dp
+        else -> 22.dp
+    }
+    val availableHeight = maxDp(280.dp, maxHeight - outerVerticalPadding - outerVerticalPadding)
+    val scaledHeightCap = maxDp(320.dp, maxHeight * 0.78f)
+    val dialogMaxHeight = minDp(playlistImportDialogMaxHeight(), minDp(availableHeight, scaledHeightCap))
+    return PlaylistImportDialogLayout(
+        outerHorizontalPadding = outerHorizontalPadding,
+        outerVerticalPadding = outerVerticalPadding,
+        contentHorizontalPadding = contentHorizontalPadding,
+        contentVerticalPadding = contentVerticalPadding,
+        verticalSpacing = if (dialogMaxHeight < 420.dp) 10.dp else 14.dp,
+        maxHeight = dialogMaxHeight,
+        textFieldLines = playlistImportTextFieldLines(dialogMaxHeight),
+    )
+}
+
+internal fun playlistImportTextFieldLines(dialogHeight: Dp): Int {
+    return when {
+        dialogHeight < 360.dp -> 2
+        dialogHeight < 440.dp -> 3
+        dialogHeight < 520.dp -> 4
+        else -> 6
+    }
+}
+
+internal fun playlistImportDialogMaxHeight(): Dp = 560.dp
+
+private fun minDp(first: Dp, second: Dp): Dp = if (first < second) first else second
+
+private fun maxDp(first: Dp, second: Dp): Dp = if (first > second) first else second
+
+internal fun playlistImportReportSummary(report: PlaylistImportReport): String {
+    val parts = mutableListOf("已加入 ${report.addedCount} 首")
+    if (report.alreadyExistsCount > 0) {
+        parts += "已存在 ${report.alreadyExistsCount} 首"
+    }
+    if (report.duplicateInputCount > 0) {
+        parts += "重复 ${report.duplicateInputCount} 首"
+    }
+    val issueCount = report.malformedLines.size +
+        report.notMatchedLines.size +
+        report.ambiguousLines.size +
+        report.failedLines.size
+    if (issueCount > 0) {
+        parts += "未导入 $issueCount 行"
+    }
+    return parts.joinToString("，")
+}
+
+private fun formatPlaylistImportLineIssue(
+    issue: top.iwesley.lyn.music.data.repository.PlaylistImportLineIssue,
+): String {
+    return "第 ${issue.lineNumber} 行：${issue.rawText}"
+}
+
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun PlaylistDetailPane(
     detail: PlaylistDetail?,
     isLoadingContent: Boolean,
@@ -1178,7 +1507,10 @@ private fun PlaylistDetailPane(
     onBack: () -> Unit,
     onPlayAll: (List<Track>) -> Unit,
     onPlayTrack: (List<Track>, Int) -> Unit,
+    isImportingPlaylist: Boolean,
+    onImportPlaylist: () -> Unit,
     onRemoveTrack: (String) -> Unit,
+    showTrackDuration: Boolean,
     modifier: Modifier = Modifier,
     showBackButton: Boolean,
     batchSelectionRequestKey: Int = 0,
@@ -1310,7 +1642,11 @@ private fun PlaylistDetailPane(
                         title = detail.name,
                         subtitle = "${detail.tracks.size} 首歌曲",
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
                         OutlinedButton(
                             onClick = { onPlayAll(detail.tracks.map { it.track }) },
                             enabled = detail.tracks.isNotEmpty(),
@@ -1318,6 +1654,18 @@ private fun PlaylistDetailPane(
                             Icon(Icons.Rounded.PlayArrow, contentDescription = null)
                             Spacer(Modifier.width(8.dp))
                             Text("播放全部")
+                        }
+                        OutlinedButton(
+                            onClick = onImportPlaylist,
+                            enabled = canShowPlaylistImportAction(detail) && !isImportingPlaylist,
+                        ) {
+                            Icon(Icons.AutoMirrored.Rounded.List, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = if (isImportingPlaylist) "导入中" else "导入歌单",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
                         if (
                             supportsBatchDownload &&
@@ -1372,6 +1720,7 @@ private fun PlaylistDetailPane(
                     },
                     onClick = { onPlayTrack(detail.tracks.map { it.track }, index) },
                     onRemove = { onRemoveTrack(item.track.id) },
+                    showDuration = showTrackDuration,
                 )
             }
         }
@@ -1477,6 +1826,7 @@ private fun PlaylistTrackRow(
     onSelectionToggle: (() -> Unit)? = null,
     onClick: () -> Unit,
     onRemove: () -> Unit,
+    showDuration: Boolean,
 ) {
     val shellColors = mainShellColors
     val offlineDownload = LocalOfflineDownloadUiState.current.downloadsByTrackId[entry.track.id]
@@ -1486,6 +1836,7 @@ private fun PlaylistTrackRow(
     } else {
         onClick
     }
+    val trailingWidth = playlistTrackTrailingWidth(selectionMode = selectionMode, showDuration = showDuration)
     Column(modifier = Modifier.fillMaxWidth()) {
         TrackActionContainer(
             track = entry.track,
@@ -1523,13 +1874,7 @@ private fun PlaylistTrackRow(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        buildString {
-                            append(entry.track.artistName ?: "未知艺人")
-                            entry.sourceLabel?.takeIf { it.isNotBlank() }?.let {
-                                append(" · ")
-                                append(it)
-                            }
-                        },
+                        entry.track.artistName ?: "未知艺人",
                         modifier = Modifier.weight(1f, fill = false),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -1538,12 +1883,35 @@ private fun PlaylistTrackRow(
                     offlineRowIndicatorState?.let { OfflineDownloadRowIndicator(it) }
                 }
             }
-            if (!selectionMode) {
-                IconButton(onClick = onRemove) {
-                    Icon(Icons.Rounded.Delete, contentDescription = "移出歌单")
+            if (trailingWidth > 0.dp) {
+                Row(
+                    modifier = Modifier.width(trailingWidth),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (!selectionMode) {
+                        IconButton(
+                            onClick = onRemove,
+                            modifier = Modifier.size(48.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Delete,
+                                contentDescription = "移出歌单",
+                                modifier = Modifier.size(24.dp),
+                            )
+                        }
+                    }
+                    if (showDuration) {
+                        Text(
+                            text = formatDuration(entry.track.durationMs),
+                            modifier = Modifier.width(56.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.End,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"),
+                        )
+                    }
                 }
             }
-            Text(formatDuration(entry.track.durationMs), color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Box(
             modifier = Modifier
@@ -1552,6 +1920,18 @@ private fun PlaylistTrackRow(
                 .height(1.dp)
                 .background(shellColors.cardBorder),
         )
+    }
+}
+
+internal fun playlistTrackTrailingWidth(
+    selectionMode: Boolean,
+    showDuration: Boolean,
+): Dp {
+    return when {
+        !selectionMode && showDuration -> 112.dp
+        !selectionMode -> 48.dp
+        showDuration -> 56.dp
+        else -> 0.dp
     }
 }
 

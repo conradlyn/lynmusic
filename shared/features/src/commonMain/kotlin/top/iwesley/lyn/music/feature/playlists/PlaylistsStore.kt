@@ -14,6 +14,7 @@ import top.iwesley.lyn.music.core.mvi.BaseStore
 import top.iwesley.lyn.music.data.repository.ImportSourceRepository
 import top.iwesley.lyn.music.data.repository.NoopOfflineDownloadRepository
 import top.iwesley.lyn.music.data.repository.OfflineDownloadRepository
+import top.iwesley.lyn.music.data.repository.PlaylistImportReport
 import top.iwesley.lyn.music.data.repository.PlaylistRepository
 import top.iwesley.lyn.music.feature.library.LibrarySourceFilter
 import top.iwesley.lyn.music.feature.library.toLibrarySourceFilter
@@ -31,6 +32,8 @@ data class PlaylistsState(
     val sourceTypesById: Map<String, ImportSourceType> = emptyMap(),
     val offlineDownloadsByTrackId: Map<String, OfflineDownload> = emptyMap(),
     val isRefreshing: Boolean = false,
+    val isImporting: Boolean = false,
+    val playlistImportReport: PlaylistImportReport? = null,
     val message: String? = null,
 )
 
@@ -43,8 +46,10 @@ sealed interface PlaylistsIntent {
     data class DeletePlaylist(val playlistId: String) : PlaylistsIntent
     data class CreatePlaylistAndAddTrack(val name: String, val track: Track?) : PlaylistsIntent
     data class AddTrackToPlaylist(val playlistId: String, val track: Track) : PlaylistsIntent
+    data class ImportPlaylistText(val playlistId: String, val text: String) : PlaylistsIntent
     data class RemoveTrackFromPlaylist(val playlistId: String, val trackId: String) : PlaylistsIntent
     data object Refresh : PlaylistsIntent
+    data object ClearPlaylistImportReport : PlaylistsIntent
     data object ClearMessage : PlaylistsIntent
 }
 
@@ -128,6 +133,7 @@ class PlaylistsStore(
         when (intent) {
             PlaylistsIntent.BackToList -> observeSelectedPlaylist(null)
             PlaylistsIntent.ClearMessage -> updateState { it.copy(message = null) }
+            PlaylistsIntent.ClearPlaylistImportReport -> updateState { it.copy(playlistImportReport = null) }
             PlaylistsIntent.Refresh -> refreshPlaylists()
             is PlaylistsIntent.SourceFilterChanged -> updateState { state ->
                 state.copy(
@@ -142,6 +148,7 @@ class PlaylistsStore(
             is PlaylistsIntent.DeletePlaylist -> deletePlaylist(intent.playlistId)
             is PlaylistsIntent.CreatePlaylistAndAddTrack -> createPlaylistAndMaybeAddTrack(intent.name, intent.track)
             is PlaylistsIntent.AddTrackToPlaylist -> addTrackToPlaylist(intent.playlistId, intent.track)
+            is PlaylistsIntent.ImportPlaylistText -> importPlaylistText(intent.playlistId, intent.text)
             is PlaylistsIntent.RemoveTrackFromPlaylist -> removeTrackFromPlaylist(intent.playlistId, intent.trackId)
         }
     }
@@ -152,6 +159,7 @@ class PlaylistsStore(
             it.copy(
                 selectedPlaylistId = playlistId,
                 selectedPlaylist = if (playlistId == null) null else it.selectedPlaylist,
+                playlistImportReport = null,
             )
         }
         if (playlistId == null) {
@@ -219,6 +227,32 @@ class PlaylistsStore(
             .onSuccess { updateState { it.copy(message = null) } }
             .onFailure { throwable ->
                 updateState { it.copy(message = throwable.message.orEmpty().ifBlank { "加入歌单失败。" }) }
+            }
+    }
+
+    private suspend fun importPlaylistText(
+        playlistId: String,
+        text: String,
+    ) {
+        updateState { it.copy(isImporting = true, playlistImportReport = null, message = null) }
+        playlistRepository.importPlaylistText(playlistId, text)
+            .onSuccess { report ->
+                updateState {
+                    it.copy(
+                        isImporting = false,
+                        playlistImportReport = report,
+                        message = null,
+                    )
+                }
+            }
+            .onFailure { throwable ->
+                updateState {
+                    it.copy(
+                        isImporting = false,
+                        playlistImportReport = null,
+                        message = throwable.message.orEmpty().ifBlank { "歌单导入失败。" },
+                    )
+                }
             }
     }
 
