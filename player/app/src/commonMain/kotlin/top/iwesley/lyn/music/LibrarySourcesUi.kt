@@ -27,6 +27,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
@@ -42,6 +43,7 @@ import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.RecentActors
 import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material3.AlertDialog
@@ -140,6 +142,7 @@ internal fun LibraryTab(
     onOpenLibraryNavigationTarget: ((LibraryNavigationTarget) -> Unit)? = null,
     batchSelectionRequestKey: Int = 0,
     showInlineBatchOperationButton: Boolean = true,
+    rootSelectorStyle: LibraryRootSelectorStyle = LibraryRootSelectorStyle.Default,
     modifier: Modifier = Modifier,
 ) {
     LibraryBrowserTab(
@@ -155,9 +158,10 @@ internal fun LibraryTab(
             selectedTrackSortMode = state.selectedTrackSortMode,
             favoriteTrackIds = favoritesState.favoriteTrackIds,
             message = favoritesState.message,
+            sourceLabelsById = state.sourceLabelsById,
         ),
         strings = LibraryBrowserStrings(
-            searchLabel = "搜索歌曲 / 艺人 / 专辑",
+            searchLabel = "搜索歌曲 / 艺人 / 专辑 / 文件夹",
             sectionTitle = "",
             sectionSubtitle = "",
             songsIcon = Icons.Rounded.LibraryMusic,
@@ -168,6 +172,7 @@ internal fun LibraryTab(
             trackLabel = "歌曲",
             albumLabel = "专辑",
             artistLabel = "艺人",
+            folderLabel = "文件夹",
         ),
         onSearchChanged = { onLibraryIntent(LibraryIntent.SearchChanged(it)) },
         onSourceFilterChanged = { onLibraryIntent(LibraryIntent.SourceFilterChanged(it)) },
@@ -179,6 +184,8 @@ internal fun LibraryTab(
         showDuration = showDuration,
         showSearchField = showSearchField,
         showTrackSortActionButton = showSearchField,
+        showFolderBrowser = true,
+        rootSelectorStyle = rootSelectorStyle,
         navigationTarget = navigationTarget,
         onNavigationHandled = onNavigationHandled,
         onOpenLibraryNavigationTarget = onOpenLibraryNavigationTarget,
@@ -228,6 +235,7 @@ internal fun FavoritesTab(
             trackLabel = "喜欢的歌曲",
             albumLabel = "喜欢的专辑",
             artistLabel = "喜欢的艺人",
+            folderLabel = "喜欢的文件夹",
         ),
         onSearchChanged = { onFavoritesIntent(FavoritesIntent.SearchChanged(it)) },
         onSourceFilterChanged = { onFavoritesIntent(FavoritesIntent.SourceFilterChanged(it)) },
@@ -273,6 +281,7 @@ private data class LibraryBrowserPageState(
     val selectedTrackSortMode: TrackSortMode,
     val favoriteTrackIds: Set<String>,
     val message: String?,
+    val sourceLabelsById: Map<String, String> = emptyMap(),
 )
 
 private data class LibraryBrowserStrings(
@@ -287,13 +296,224 @@ private data class LibraryBrowserStrings(
     val trackLabel: String,
     val albumLabel: String,
     val artistLabel: String,
+    val folderLabel: String,
 )
 
 internal enum class LibraryBrowserRootView {
     Tracks,
     Albums,
     Artists,
+    Folders,
 }
+
+internal enum class LibraryRootSelectorStyle {
+    Default,
+    CompactHero,
+}
+
+internal data class LibraryRootSelectorItem(
+    val rootView: LibraryBrowserRootView,
+    val title: String,
+    val value: String,
+)
+
+internal data class LibraryRootSelectorModel(
+    val style: LibraryRootSelectorStyle,
+    val defaultItems: List<LibraryRootSelectorItem>,
+    val heroItem: LibraryRootSelectorItem?,
+    val secondaryItems: List<LibraryRootSelectorItem>,
+    val playAllEnabled: Boolean,
+)
+
+internal fun buildLibraryRootSelectorModel(
+    style: LibraryRootSelectorStyle,
+    trackCount: Int,
+    albumCount: Int,
+    artistCount: Int,
+    folderCount: Int,
+    showFolderBrowser: Boolean,
+): LibraryRootSelectorModel {
+    val trackItem = LibraryRootSelectorItem(
+        rootView = LibraryBrowserRootView.Tracks,
+        title = "歌曲",
+        value = trackCount.coerceAtLeast(0).toString(),
+    )
+    val albumItem = LibraryRootSelectorItem(
+        rootView = LibraryBrowserRootView.Albums,
+        title = "专辑",
+        value = albumCount.coerceAtLeast(0).toString(),
+    )
+    val artistItem = LibraryRootSelectorItem(
+        rootView = LibraryBrowserRootView.Artists,
+        title = "艺人",
+        value = artistCount.coerceAtLeast(0).toString(),
+    )
+    val folderItem = LibraryRootSelectorItem(
+        rootView = LibraryBrowserRootView.Folders,
+        title = "文件夹",
+        value = folderCount.coerceAtLeast(0).toString(),
+    )
+    val defaultItems = buildList {
+        add(trackItem)
+        add(albumItem)
+        add(artistItem)
+        if (showFolderBrowser) add(folderItem)
+    }
+    return when (style) {
+        LibraryRootSelectorStyle.Default -> LibraryRootSelectorModel(
+            style = style,
+            defaultItems = defaultItems,
+            heroItem = null,
+            secondaryItems = emptyList(),
+            playAllEnabled = false,
+        )
+
+        LibraryRootSelectorStyle.CompactHero -> LibraryRootSelectorModel(
+            style = style,
+            defaultItems = emptyList(),
+            heroItem = trackItem.copy(title = "全部歌曲"),
+            secondaryItems = buildList {
+                add(albumItem)
+                add(artistItem)
+                if (showFolderBrowser) add(folderItem)
+            },
+            playAllEnabled = trackCount > 0,
+        )
+    }
+}
+
+internal data class LibraryFolderKey(
+    val sourceId: String,
+    val path: String,
+) {
+    val stableId: String
+        get() = "${sourceId.length}:$sourceId:$path"
+}
+
+internal data class LibraryFolderNode(
+    val key: LibraryFolderKey,
+    val name: String,
+    val sourceLabel: String,
+    val sourceId: String,
+    val path: String,
+    val trackCount: Int,
+    val directTrackCount: Int,
+    val childFolderCount: Int,
+)
+
+internal data class LibraryFolderTree(
+    val rootFolders: List<LibraryFolderNode>,
+    val nodesByKey: Map<LibraryFolderKey, LibraryFolderNode>,
+    val childFoldersByKey: Map<LibraryFolderKey, List<LibraryFolderNode>>,
+    val directTracksByKey: Map<LibraryFolderKey, List<Track>>,
+) {
+    val folderCount: Int = nodesByKey.size
+}
+
+internal fun deriveLibraryFolderTree(
+    tracks: List<Track>,
+    sourceLabelsById: Map<String, String>,
+): LibraryFolderTree {
+    val statsByKey = linkedMapOf<LibraryFolderKey, MutableLibraryFolderStats>()
+    val childPathsByKey = linkedMapOf<LibraryFolderKey, MutableSet<String>>()
+    val directTracksByKey = linkedMapOf<LibraryFolderKey, MutableList<Track>>()
+    tracks.forEach { track ->
+        val sourceId = track.sourceId
+        val rootKey = LibraryFolderKey(sourceId = sourceId, path = "")
+        val pathSegments = normalizedLibraryFolderPathSegments(track.relativePath)
+        val parentSegments = pathSegments.dropLast(1)
+        statsByKey.getOrPut(rootKey) { MutableLibraryFolderStats() }.trackCount += 1
+        if (parentSegments.isEmpty()) {
+            statsByKey.getOrPut(rootKey) { MutableLibraryFolderStats() }.directTrackCount += 1
+            directTracksByKey.getOrPut(rootKey) { mutableListOf() }.add(track)
+        } else {
+            childPathsByKey.getOrPut(rootKey) { linkedSetOf() }.add(parentSegments.first())
+            parentSegments.indices.forEach { index ->
+                val folderPath = parentSegments.take(index + 1).joinToString("/")
+                val folderKey = LibraryFolderKey(sourceId = sourceId, path = folderPath)
+                statsByKey.getOrPut(folderKey) { MutableLibraryFolderStats() }.trackCount += 1
+                if (index == parentSegments.lastIndex) {
+                    statsByKey.getOrPut(folderKey) { MutableLibraryFolderStats() }.directTrackCount += 1
+                    directTracksByKey.getOrPut(folderKey) { mutableListOf() }.add(track)
+                } else {
+                    val childPath = parentSegments.take(index + 2).joinToString("/")
+                    childPathsByKey.getOrPut(folderKey) { linkedSetOf() }.add(childPath)
+                }
+            }
+        }
+    }
+    val nodesByKey = statsByKey.mapValues { (key, stats) ->
+        val sourceLabel = sourceLabelsById[key.sourceId]?.trim()?.takeIf { it.isNotBlank() } ?: key.sourceId
+        LibraryFolderNode(
+            key = key,
+            name = if (key.path.isBlank()) sourceLabel else key.path.substringAfterLast('/'),
+            sourceLabel = sourceLabel,
+            sourceId = key.sourceId,
+            path = key.path,
+            trackCount = stats.trackCount,
+            directTrackCount = stats.directTrackCount,
+            childFolderCount = childPathsByKey[key]?.size ?: 0,
+        )
+    }
+    val childFoldersByKey = childPathsByKey.mapValues { (key, childPaths) ->
+        childPaths.mapNotNull { childPath ->
+            nodesByKey[LibraryFolderKey(sourceId = key.sourceId, path = childPath)]
+        }.sortedWith(LIBRARY_FOLDER_NODE_COMPARATOR)
+    }
+    return LibraryFolderTree(
+        rootFolders = nodesByKey.values
+            .filter { it.path.isBlank() }
+            .sortedWith(LIBRARY_FOLDER_NODE_COMPARATOR),
+        nodesByKey = nodesByKey,
+        childFoldersByKey = childFoldersByKey,
+        directTracksByKey = directTracksByKey.mapValues { (_, tracks) ->
+            tracks.sortedWith(LIBRARY_FOLDER_TRACK_COMPARATOR)
+        },
+    )
+}
+
+internal fun normalizedLibraryFolderPathSegments(relativePath: String): List<String> {
+    return relativePath
+        .replace('\\', '/')
+        .split('/')
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+}
+
+internal fun libraryFolderSummaryLabel(folder: LibraryFolderNode): String {
+    return if (folder.childFolderCount > 0) {
+        "${folder.trackCount} 首歌曲 · ${folder.childFolderCount} 个子文件夹"
+    } else {
+        "${folder.trackCount} 首歌曲"
+    }
+}
+
+internal fun libraryFolderDetailSubtitle(folder: LibraryFolderNode): String {
+    return if (folder.path.isBlank()) {
+        "来源根目录"
+    } else {
+        folder.path
+    }
+}
+
+private data class LibraryFolderDetailScrollPosition(
+    val firstVisibleItemIndex: Int,
+    val firstVisibleItemScrollOffset: Int,
+)
+
+private data class MutableLibraryFolderStats(
+    var trackCount: Int = 0,
+    var directTrackCount: Int = 0,
+)
+
+private val LIBRARY_FOLDER_NODE_COMPARATOR = compareBy<LibraryFolderNode> { it.name.lowercase() }
+    .thenBy { it.sourceLabel.lowercase() }
+    .thenBy { it.sourceId }
+    .thenBy { it.path.lowercase() }
+
+private val LIBRARY_FOLDER_TRACK_COMPARATOR = compareBy<Track> {
+    normalizedLibraryFolderPathSegments(it.relativePath).lastOrNull().orEmpty().lowercase()
+}.thenBy { it.title.lowercase() }.thenBy { it.id }
 
 internal fun resolveTrackRowLibraryNavigationTargets(
     track: Track,
@@ -323,6 +543,8 @@ private fun LibraryBrowserTab(
     showDuration: Boolean = true,
     showSearchField: Boolean = true,
     showTrackSortActionButton: Boolean = true,
+    showFolderBrowser: Boolean = false,
+    rootSelectorStyle: LibraryRootSelectorStyle = LibraryRootSelectorStyle.Default,
     actionButton: (@Composable () -> Unit)? = null,
     onDismissMessage: () -> Unit,
     onPlayTracks: (List<Track>, Int) -> Unit,
@@ -336,14 +558,44 @@ private fun LibraryBrowserTab(
     val tracksListState = rememberLazyListState()
     val albumsListState = rememberLazyListState()
     val artistsListState = rememberLazyListState()
+    val foldersListState = rememberLazyListState()
     val albumDetailListState = rememberLazyListState()
     val artistDetailListState = rememberLazyListState()
+    val folderDetailListState = rememberLazyListState()
+    val folderDetailScrollPositions = remember { mutableMapOf<String, LibraryFolderDetailScrollPosition>() }
     var sourceFilterMenuExpanded by remember { mutableStateOf(false) }
     var trackSortMenuExpanded by remember { mutableStateOf(false) }
     var rootView by rememberSaveable { mutableStateOf(LibraryBrowserRootView.Tracks) }
     var selectedArtistId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedAlbumId by rememberSaveable { mutableStateOf<String?>(null) }
-    when (resolveLibraryBrowserBackTarget(selectedArtistId, selectedAlbumId)) {
+    var selectedFolderSourceId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedFolderPath by rememberSaveable { mutableStateOf<String?>(null) }
+    fun selectedFolderStableId(): String? {
+        val sourceId = selectedFolderSourceId ?: return null
+        return LibraryFolderKey(sourceId = sourceId, path = selectedFolderPath.orEmpty()).stableId
+    }
+    fun saveSelectedFolderScrollPosition() {
+        val stableId = selectedFolderStableId() ?: return
+        folderDetailScrollPositions[stableId] = LibraryFolderDetailScrollPosition(
+            firstVisibleItemIndex = folderDetailListState.firstVisibleItemIndex,
+            firstVisibleItemScrollOffset = folderDetailListState.firstVisibleItemScrollOffset,
+        )
+    }
+    fun selectFolder(folder: LibraryFolderNode) {
+        saveSelectedFolderScrollPosition()
+        selectedFolderSourceId = folder.sourceId
+        selectedFolderPath = folder.path
+    }
+    fun navigateBackFromSelectedFolder() {
+        saveSelectedFolderScrollPosition()
+        val destination = resolveLibraryFolderBackDestination(
+            selectedFolderSourceId = selectedFolderSourceId,
+            selectedFolderPath = selectedFolderPath,
+        )
+        selectedFolderSourceId = destination.sourceId
+        selectedFolderPath = destination.path
+    }
+    when (resolveLibraryBrowserBackTarget(selectedArtistId, selectedAlbumId, selectedFolderSourceId)) {
         LibraryBrowserBackTarget.Album -> {
             PlatformBackHandler { selectedAlbumId = null }
         }
@@ -353,6 +605,10 @@ private fun LibraryBrowserTab(
                 selectedArtistId = null
                 selectedAlbumId = null
             }
+        }
+
+        LibraryBrowserBackTarget.Folder -> {
+            PlatformBackHandler { navigateBackFromSelectedFolder() }
         }
 
         null -> Unit
@@ -393,6 +649,42 @@ private fun LibraryBrowserTab(
             selectedArtistId != null -> artistTracks.filter { it.albumLibraryIdOrNull() == selectedAlbumId }
             else -> tracksByAlbumId[selectedAlbumId].orEmpty()
         }.sortedWith(ALBUM_DETAIL_TRACK_COMPARATOR)
+    }
+    val folderTree = remember(state.filteredTracks, state.sourceLabelsById) {
+        deriveLibraryFolderTree(
+            tracks = state.filteredTracks,
+            sourceLabelsById = state.sourceLabelsById,
+        )
+    }
+    val selectedFolderKey = selectedFolderSourceId?.let { sourceId ->
+        LibraryFolderKey(sourceId = sourceId, path = selectedFolderPath.orEmpty())
+    }
+    val selectedFolder = selectedFolderKey?.let { folderTree.nodesByKey[it] }
+    val selectedFolderChildren = selectedFolderKey?.let { folderTree.childFoldersByKey[it].orEmpty() }.orEmpty()
+    val selectedFolderTracks = selectedFolderKey?.let { folderTree.directTracksByKey[it].orEmpty() }.orEmpty()
+    val selectedFolderDetailItemCount = if (selectedFolder == null) {
+        0
+    } else {
+        val childItems = if (selectedFolderChildren.isEmpty()) 0 else 1 + selectedFolderChildren.size
+        val trackItems = 1 + if (selectedFolderTracks.isEmpty()) 1 else selectedFolderTracks.size
+        2 + childItems + trackItems
+    }
+    val rootSelectorModel = remember(
+        rootSelectorStyle,
+        state.filteredTracks.size,
+        state.filteredAlbums.size,
+        state.filteredArtists.size,
+        folderTree.folderCount,
+        showFolderBrowser,
+    ) {
+        buildLibraryRootSelectorModel(
+            style = rootSelectorStyle,
+            trackCount = state.filteredTracks.size,
+            albumCount = state.filteredAlbums.size,
+            artistCount = state.filteredArtists.size,
+            folderCount = folderTree.folderCount,
+            showFolderBrowser = showFolderBrowser,
+        )
     }
     var selectionMode by rememberSaveable { mutableStateOf(false) }
     var selectedTrackIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
@@ -537,21 +829,29 @@ private fun LibraryBrowserTab(
         selectedArtistId,
         selectedAlbumId,
         artistAlbums,
+        selectedFolderKey,
+        folderTree.nodesByKey,
     ) {
         when (rootView) {
             LibraryBrowserRootView.Tracks -> {
                 if (selectedArtistId != null) selectedArtistId = null
                 if (selectedAlbumId != null) selectedAlbumId = null
+                if (selectedFolderSourceId != null) selectedFolderSourceId = null
+                if (selectedFolderPath != null) selectedFolderPath = null
             }
 
             LibraryBrowserRootView.Albums -> {
                 if (selectedArtistId != null) selectedArtistId = null
+                if (selectedFolderSourceId != null) selectedFolderSourceId = null
+                if (selectedFolderPath != null) selectedFolderPath = null
                 if (selectedAlbumId != null && state.filteredAlbums.none { it.id == selectedAlbumId }) {
                     selectedAlbumId = null
                 }
             }
 
             LibraryBrowserRootView.Artists -> {
+                if (selectedFolderSourceId != null) selectedFolderSourceId = null
+                if (selectedFolderPath != null) selectedFolderPath = null
                 if (selectedArtistId != null && state.filteredArtists.none { it.id == selectedArtistId }) {
                     selectedArtistId = null
                     selectedAlbumId = null
@@ -559,16 +859,48 @@ private fun LibraryBrowserTab(
                     selectedAlbumId = null
                 }
             }
+
+            LibraryBrowserRootView.Folders -> {
+                if (!showFolderBrowser) {
+                    rootView = LibraryBrowserRootView.Tracks
+                    selectedFolderSourceId = null
+                    selectedFolderPath = null
+                    return@LaunchedEffect
+                }
+                if (selectedArtistId != null) selectedArtistId = null
+                if (selectedAlbumId != null) selectedAlbumId = null
+                if (selectedFolderKey != null && selectedFolderKey !in folderTree.nodesByKey) {
+                    selectedFolderSourceId = null
+                    selectedFolderPath = null
+                }
+            }
         }
+    }
+
+    LaunchedEffect(selectedFolderKey?.stableId, selectedFolder != null) {
+        val stableId = selectedFolderKey?.stableId ?: return@LaunchedEffect
+        if (selectedFolderDetailItemCount <= 0) return@LaunchedEffect
+        val position = folderDetailScrollPositions[stableId] ?: LibraryFolderDetailScrollPosition(
+            firstVisibleItemIndex = 0,
+            firstVisibleItemScrollOffset = 0,
+        )
+        val itemIndex = position.firstVisibleItemIndex.coerceIn(0, selectedFolderDetailItemCount - 1)
+        folderDetailListState.scrollToItem(
+            index = itemIndex,
+            scrollOffset = position.firstVisibleItemScrollOffset.coerceAtLeast(0),
+        )
     }
 
     fun selectRootView(view: LibraryBrowserRootView) {
         if (selectionMode) {
             exitSelectionMode()
         }
+        saveSelectedFolderScrollPosition()
         rootView = view
         selectedArtistId = null
         selectedAlbumId = null
+        selectedFolderSourceId = null
+        selectedFolderPath = null
     }
     fun trackRowNavigationTargets(track: Track): PlaybackLibraryNavigationTargets {
         return resolveTrackRowLibraryNavigationTargets(
@@ -639,8 +971,10 @@ private fun LibraryBrowserTab(
     val activeListState = when {
         selectedAlbum != null -> albumDetailListState
         rootView == LibraryBrowserRootView.Artists && selectedArtist != null -> artistDetailListState
+        rootView == LibraryBrowserRootView.Folders && selectedFolder != null -> folderDetailListState
         rootView == LibraryBrowserRootView.Albums -> albumsListState
         rootView == LibraryBrowserRootView.Artists -> artistsListState
+        rootView == LibraryBrowserRootView.Folders -> foldersListState
         else -> tracksListState
     }
     val useDesktopToolbar = useDesktopLibraryBrowserToolbar(
@@ -743,34 +1077,18 @@ private fun LibraryBrowserTab(
                 }
             }
             item {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    StatCard(
-                        title = "歌曲",
-                        value = state.filteredTracks.size.toString(),
-                        icon = strings.songsIcon,
-                        selected = rootView == LibraryBrowserRootView.Tracks,
-                        onClick = { selectRootView(LibraryBrowserRootView.Tracks) },
-                        modifier = Modifier
-                            .weight(1f)
-                            .focusRequester(tracksStatFocusRequester),
-                    )
-                    StatCard(
-                        title = "专辑",
-                        value = state.filteredAlbums.size.toString(),
-                        icon = Icons.Rounded.Album,
-                        selected = rootView == LibraryBrowserRootView.Albums,
-                        onClick = { selectRootView(LibraryBrowserRootView.Albums) },
-                        modifier = Modifier.weight(1f),
-                    )
-                    StatCard(
-                        title = "艺人",
-                        value = state.filteredArtists.size.toString(),
-                        icon = Icons.Rounded.RecentActors,
-                        selected = rootView == LibraryBrowserRootView.Artists,
-                        onClick = { selectRootView(LibraryBrowserRootView.Artists) },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
+                LibraryRootSelector(
+                    model = rootSelectorModel,
+                    selectedRootView = rootView,
+                    songsIcon = strings.songsIcon,
+                    tracksStatFocusRequester = tracksStatFocusRequester,
+                    onSelectRootView = ::selectRootView,
+                    onPlayAllTracks = {
+                        if (state.filteredTracks.isNotEmpty()) {
+                            onPlayTracks(state.filteredTracks, 0)
+                        }
+                    },
+                )
             }
             state.message?.let { message ->
                 item {
@@ -893,16 +1211,78 @@ private fun LibraryBrowserTab(
                     }
                 }
 
+                rootView == LibraryBrowserRootView.Folders && selectedFolder != null -> {
+                    item {
+                        DetailBackButton(
+                            onClick = ::navigateBackFromSelectedFolder,
+                        )
+                    }
+                    item {
+                        DetailSummaryCard(
+                            title = selectedFolder.name,
+                            subtitle = libraryFolderDetailSubtitle(selectedFolder),
+                            supportingText = libraryFolderSummaryLabel(selectedFolder),
+                            artworkLocator = selectedFolderTracks.firstOrNull()?.artworkLocator,
+                            artworkCacheKey = selectedFolderTracks.firstOrNull()?.let(::trackArtworkCacheKey),
+                        )
+                    }
+                    if (selectedFolderChildren.isNotEmpty()) {
+                        item {
+                            SectionTitle(title = "文件夹", subtitle = "当前目录下的子文件夹。")
+                        }
+                        items(selectedFolderChildren, key = { it.key.stableId }) { folder ->
+                            FolderRow(
+                                folder = folder,
+                                onClick = { selectFolder(folder) },
+                            )
+                        }
+                    }
+                    item {
+                        SectionTitle(title = "歌曲", subtitle = "当前目录下的歌曲。")
+                    }
+                    if (selectedFolderTracks.isEmpty()) {
+                        item {
+                            EmptyStateCard(
+                                title = "这个目录下没有直接歌曲",
+                                body = if (selectedFolderChildren.isEmpty()) {
+                                    "当前筛选结果里已经没有这个目录的可见歌曲。"
+                                } else {
+                                    "可继续进入子文件夹查看歌曲。"
+                                },
+                            )
+                        }
+                    } else {
+                        itemsIndexed(selectedFolderTracks, key = { _, item -> item.id }) { index, track ->
+                            val navigationTargets = trackRowNavigationTargets(track)
+                            TrackRow(
+                                track = track,
+                                index = index,
+                                isFavorite = track.id in state.favoriteTrackIds,
+                                onToggleFavorite = { onToggleFavorite(track) },
+                                showFavoriteButton = showFavoriteButton,
+                                showDuration = showDuration,
+                                onArtistClick = navigationTargetClick(navigationTargets.artistTarget),
+                                onAlbumClick = navigationTargetClick(navigationTargets.albumTarget),
+                                onClick = {
+                                    onPlayTracks(selectedFolderTracks, index)
+                                },
+                            )
+                        }
+                    }
+                }
+
                 else -> {
                     val currentItemCount = when (rootView) {
                         LibraryBrowserRootView.Tracks -> state.filteredTracks.size
                         LibraryBrowserRootView.Albums -> state.filteredAlbums.size
                         LibraryBrowserRootView.Artists -> state.filteredArtists.size
+                        LibraryBrowserRootView.Folders -> folderTree.rootFolders.size
                     }
                     val currentLabel = when (rootView) {
                         LibraryBrowserRootView.Tracks -> strings.trackLabel
                         LibraryBrowserRootView.Albums -> strings.albumLabel
                         LibraryBrowserRootView.Artists -> strings.artistLabel
+                        LibraryBrowserRootView.Folders -> strings.folderLabel
                     }
                     item {
                         Row(
@@ -995,6 +1375,15 @@ private fun LibraryBrowserTab(
                                     )
                                 }
                             }
+
+                            LibraryBrowserRootView.Folders -> {
+                                items(folderTree.rootFolders, key = { it.key.stableId }) { folder ->
+                                    FolderRow(
+                                        folder = folder,
+                                        onClick = { selectFolder(folder) },
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -1020,6 +1409,327 @@ private fun LibraryBrowserTab(
                 batchQualitySheetVisible = false
                 pendingBatchDownloadTracks = emptyList()
             },
+        )
+    }
+}
+
+@Composable
+private fun LibraryRootSelector(
+    model: LibraryRootSelectorModel,
+    selectedRootView: LibraryBrowserRootView,
+    songsIcon: ImageVector,
+    tracksStatFocusRequester: FocusRequester,
+    onSelectRootView: (LibraryBrowserRootView) -> Unit,
+    onPlayAllTracks: () -> Unit,
+) {
+    when (model.style) {
+        LibraryRootSelectorStyle.Default -> DefaultLibraryRootSelector(
+            items = model.defaultItems,
+            selectedRootView = selectedRootView,
+            songsIcon = songsIcon,
+            tracksStatFocusRequester = tracksStatFocusRequester,
+            onSelectRootView = onSelectRootView,
+        )
+
+        LibraryRootSelectorStyle.CompactHero -> CompactLibraryRootSelector(
+            model = model,
+            selectedRootView = selectedRootView,
+            songsIcon = songsIcon,
+            tracksStatFocusRequester = tracksStatFocusRequester,
+            onSelectRootView = onSelectRootView,
+            onPlayAllTracks = onPlayAllTracks,
+        )
+    }
+}
+
+@Composable
+private fun DefaultLibraryRootSelector(
+    items: List<LibraryRootSelectorItem>,
+    selectedRootView: LibraryBrowserRootView,
+    songsIcon: ImageVector,
+    tracksStatFocusRequester: FocusRequester,
+    onSelectRootView: (LibraryBrowserRootView) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        items.forEach { item ->
+            val focusModifier = if (item.rootView == LibraryBrowserRootView.Tracks) {
+                Modifier.focusRequester(tracksStatFocusRequester)
+            } else {
+                Modifier
+            }
+            StatCard(
+                title = item.title,
+                value = item.value,
+                icon = defaultLibraryRootIcon(item.rootView, songsIcon),
+                selected = selectedRootView == item.rootView,
+                onClick = { onSelectRootView(item.rootView) },
+                modifier = Modifier
+                    .weight(1f)
+                    .then(focusModifier),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CompactLibraryRootSelector(
+    model: LibraryRootSelectorModel,
+    selectedRootView: LibraryBrowserRootView,
+    songsIcon: ImageVector,
+    tracksStatFocusRequester: FocusRequester,
+    onSelectRootView: (LibraryBrowserRootView) -> Unit,
+    onPlayAllTracks: () -> Unit,
+) {
+    val heroItem = model.heroItem ?: return
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        CompactLibraryHeroCard(
+            item = heroItem,
+            selected = selectedRootView == heroItem.rootView,
+            songsIcon = songsIcon,
+            tracksStatFocusRequester = tracksStatFocusRequester,
+            playAllEnabled = model.playAllEnabled,
+            onSelectTracks = { onSelectRootView(heroItem.rootView) },
+            onPlayAllTracks = onPlayAllTracks,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            model.secondaryItems.forEach { item ->
+                CompactLibrarySmallCard(
+                    item = item,
+                    icon = compactLibraryRootIcon(item.rootView, songsIcon),
+                    selected = selectedRootView == item.rootView,
+                    onClick = { onSelectRootView(item.rootView) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompactLibraryHeroCard(
+    item: LibraryRootSelectorItem,
+    selected: Boolean,
+    songsIcon: ImageVector,
+    tracksStatFocusRequester: FocusRequester,
+    playAllEnabled: Boolean,
+    onSelectTracks: () -> Unit,
+    onPlayAllTracks: () -> Unit,
+) {
+    val containerColor = if (selected) {
+        MaterialTheme.colorScheme.secondary
+    } else {
+        MaterialTheme.colorScheme.secondary.copy(alpha = 0.92f)
+    }
+    val contentColor = MaterialTheme.colorScheme.onSecondary
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(84.dp)
+            .focusRequester(tracksStatFocusRequester)
+            .clip(RoundedCornerShape(24.dp))
+            .background(containerColor)
+            .clickable(onClick = onSelectTracks)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(contentColor.copy(alpha = 0.18f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = songsIcon,
+                contentDescription = null,
+                tint = contentColor,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                text = item.title,
+                style = MaterialTheme.typography.titleMedium,
+                color = contentColor,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = item.value,
+                style = MaterialTheme.typography.headlineMedium,
+                color = contentColor,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        IconButton(
+            onClick = onPlayAllTracks,
+            enabled = playAllEnabled,
+            modifier = Modifier
+                .size(42.dp)
+                .clip(CircleShape)
+                .background(contentColor.copy(alpha = if (playAllEnabled) 0.22f else 0.12f)),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.PlayArrow,
+                contentDescription = "播放全部歌曲",
+                tint = contentColor.copy(alpha = if (playAllEnabled) 1f else 0.48f),
+                modifier = Modifier.size(24.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CompactLibrarySmallCard(
+    item: LibraryRootSelectorItem,
+    icon: ImageVector,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val shellColors = mainShellColors
+    val shape = RoundedCornerShape(24.dp)
+    val accentColor = MaterialTheme.colorScheme.primary
+    Box(
+        modifier = modifier
+            .clip(shape)
+            .background(shellColors.cardContainer)
+            .border(BorderStroke(1.dp, shellColors.cardBorder), shape)
+            .clickable(onClick = onClick),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(
+                        if (selected) {
+                            accentColor.copy(alpha = 0.15f)
+                        } else {
+                            Color.Transparent
+                        },
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = accentColor,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+            Text(
+                text = item.value,
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = item.title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = shellColors.secondaryText,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+private fun defaultLibraryRootIcon(
+    view: LibraryBrowserRootView,
+    songsIcon: ImageVector,
+): ImageVector {
+    return when (view) {
+        LibraryBrowserRootView.Tracks -> songsIcon
+        LibraryBrowserRootView.Albums -> Icons.Rounded.Album
+        LibraryBrowserRootView.Artists -> Icons.Rounded.RecentActors
+        LibraryBrowserRootView.Folders -> Icons.Rounded.FolderOpen
+    }
+}
+
+private fun compactLibraryRootIcon(
+    view: LibraryBrowserRootView,
+    songsIcon: ImageVector,
+): ImageVector {
+    return defaultLibraryRootIcon(view, songsIcon)
+}
+
+@Composable
+private fun FolderRow(
+    folder: LibraryFolderNode,
+    onClick: () -> Unit,
+) {
+    val shellColors = mainShellColors
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(18.dp))
+                .clickable(onClick = onClick)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(shellColors.cardContainer)
+                    .border(
+                        border = BorderStroke(1.dp, shellColors.cardBorder),
+                        shape = RoundedCornerShape(16.dp),
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.FolderOpen,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = folder.name,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = libraryFolderSummaryLabel(folder),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 88.dp)
+                .height(1.dp)
+                .background(shellColors.cardBorder),
         )
     }
 }

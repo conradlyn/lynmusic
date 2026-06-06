@@ -57,6 +57,7 @@ data class LibraryState(
     val visibleAlbumCount: Int = 0,
     val visibleArtistCount: Int = 0,
     val sourceTypesById: Map<String, ImportSourceType> = emptyMap(),
+    val sourceLabelsById: Map<String, String> = emptyMap(),
 )
 
 sealed interface LibraryIntent {
@@ -126,6 +127,7 @@ class LibraryStore(
                     trackPlaybackStats = trackPlaybackStats,
                     offlineDownloadsByTrackId = offlineDownloads,
                     sourceTypesById = enabledSources.associate { it.id to it.type },
+                    sourceLabelsById = enabledSources.associate { it.id to it.label.trim().ifBlank { it.id } },
                     availableSourceFilters = buildAvailableSourceFilters(enabledSources.map { it.type }),
                 )
             }.collect { snapshot ->
@@ -141,6 +143,7 @@ class LibraryStore(
                             trackPlaybackStats = snapshot.trackPlaybackStats,
                             offlineDownloadsByTrackId = snapshot.offlineDownloadsByTrackId,
                             sourceTypesById = snapshot.sourceTypesById,
+                            sourceLabelsById = snapshot.sourceLabelsById,
                             availableSourceFilters = snapshot.availableSourceFilters,
                         ),
                     )
@@ -202,7 +205,8 @@ class LibraryStore(
                     normalized.isBlank() ||
                         track.title.lowercase().contains(normalized) ||
                         track.artistName.orEmpty().lowercase().contains(normalized) ||
-                        track.albumTitle.orEmpty().lowercase().contains(normalized)
+                        track.albumTitle.orEmpty().lowercase().contains(normalized) ||
+                        track.relativePath.lowercase().contains(normalized)
                     )
         }
     }
@@ -225,6 +229,7 @@ class LibraryStore(
         val trackPlaybackStats: Map<String, TrackPlaybackStat>,
         val offlineDownloadsByTrackId: Map<String, OfflineDownload>,
         val sourceTypesById: Map<String, ImportSourceType>,
+        val sourceLabelsById: Map<String, String>,
         val availableSourceFilters: List<LibrarySourceFilter>,
     )
 

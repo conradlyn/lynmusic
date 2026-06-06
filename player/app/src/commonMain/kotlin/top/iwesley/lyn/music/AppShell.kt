@@ -769,6 +769,11 @@ private fun TabContent(
             navigationTarget = libraryNavigationTarget,
             onNavigationHandled = onLibraryNavigationHandled,
             onOpenLibraryNavigationTarget = onOpenLibraryNavigationTarget,
+            rootSelectorStyle = if (compact) {
+                LibraryRootSelectorStyle.CompactHero
+            } else {
+                LibraryRootSelectorStyle.Default
+            },
             modifier = modifier,
         )
 
@@ -1070,6 +1075,7 @@ private fun MobileLibraryHubTab(
                     showInlineBatchOperationButton = false,
                     navigationTarget = libraryNavigationTarget,
                     onNavigationHandled = onLibraryNavigationHandled,
+                    rootSelectorStyle = LibraryRootSelectorStyle.CompactHero,
                     modifier = Modifier.fillMaxSize(),
                 )
 

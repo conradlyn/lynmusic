@@ -81,6 +81,13 @@ class LibraryStoreTest {
             ),
             store.state.value.availableSourceFilters,
         )
+        assertEquals(
+            mapOf(
+                "local-1" to "下载目录",
+                "dav-1" to "WebDAV 曲库",
+            ),
+            store.state.value.sourceLabelsById,
+        )
         scope.cancel()
     }
 
@@ -174,6 +181,30 @@ class LibraryStoreTest {
         assertEquals(listOf("Artist B"), state.filteredArtists.map { it.name })
         assertEquals(1, state.visibleAlbumCount)
         assertEquals(1, state.visibleArtistCount)
+        scope.cancel()
+    }
+
+    @Test
+    fun `search query matches relative path folders`() = runTest {
+        val pathOnlyTrack = Track(
+            id = "track-path-only",
+            sourceId = "local-1",
+            title = "Hidden Song",
+            durationMs = 120_000L,
+            mediaLocator = "file:///music/hidden-song.mp3",
+            relativePath = "Mixtapes/Special Folder/hidden-song.mp3",
+        )
+        val libraryRepository = FakeLibraryRepository(sampleTracks() + pathOnlyTrack)
+        val importSourceRepository = FakeImportSourceRepository(sampleSources())
+        val preferencesStore = FakeLibrarySourceFilterPreferencesStore()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = LibraryStore(libraryRepository, importSourceRepository, preferencesStore, scope)
+
+        advanceUntilIdle()
+        store.dispatch(LibraryIntent.SearchChanged("special folder"))
+        advanceUntilIdle()
+
+        assertEquals(listOf("track-path-only"), store.state.value.filteredTracks.map { it.id })
         scope.cancel()
     }
 
