@@ -6,6 +6,7 @@ private const val ANDROID_SIGNING_STORE_FILE = "ANDROID_SIGNING_STORE_FILE"
 private const val ANDROID_SIGNING_STORE_PASSWORD = "ANDROID_SIGNING_STORE_PASSWORD"
 private const val ANDROID_SIGNING_KEY_ALIAS = "ANDROID_SIGNING_KEY_ALIAS"
 private const val ANDROID_SIGNING_KEY_PASSWORD = "ANDROID_SIGNING_KEY_PASSWORD"
+private const val ANDROID_LINT_ON_ASSEMBLE = "lyn.android.lintOnAssemble"
 
 fun Project.readSharedVersionConfig(): Map<String, String> =
     rootProject.file("app-version.xcconfig")
@@ -26,6 +27,14 @@ fun Project.readSharedVersionConfig(): Map<String, String> =
             }
         }
         .toMap()
+
+fun Project.isAndroidLintOnAssembleEnabled(): Boolean {
+    return rootProject.readLocalProperties()
+        .getProperty(ANDROID_LINT_ON_ASSEMBLE)
+        ?.trim()
+        ?.toBooleanStrictOrNull()
+        ?: true
+}
 
 fun Any.configureLynReleaseSigning(project: Project) {
     val signingConfig = project.readAndroidReleaseSigningConfig() ?: return

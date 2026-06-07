@@ -90,11 +90,13 @@ dependencies {
     debugImplementation(libs.compose.uiTooling)
 }
 
-androidComponents {
-    onVariants { variant ->
-        val variantName = variant.name.replaceFirstChar { it.titlecase() }
-        tasks.matching { it.name == "assemble$variantName" }.configureEach {
-            dependsOn("lint$variantName")
+if (rootProject.isAndroidLintOnAssembleEnabled()) {
+    androidComponents {
+        onVariants { variant ->
+            val variantName = variant.name.replaceFirstChar { it.titlecase() }
+            tasks.matching { it.name == "assemble$variantName" }.configureEach {
+                dependsOn("lint$variantName")
+            }
         }
     }
 }
