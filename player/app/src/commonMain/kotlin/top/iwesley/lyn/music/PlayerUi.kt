@@ -120,6 +120,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.absoluteValue
@@ -1811,7 +1812,10 @@ private fun PlayerBottomControls(
                 ) {
                     Text(
                         text = snapshot.currentDisplayTitle,
-                        style = MaterialTheme.typography.headlineSmall,
+                        style = MaterialTheme.typography.headlineSmall.copy(
+                            fontSize = 20.sp,
+                            lineHeight = 28.sp,
+                        ),
                         fontWeight = FontWeight.ExtraBold,
                         color = Color.White.copy(alpha = 0.96f),
                         maxLines = 2,
