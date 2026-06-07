@@ -13,6 +13,7 @@ import top.iwesley.lyn.music.core.model.PlaybackAudioFormat
 import top.iwesley.lyn.music.core.model.PlaybackSnapshot
 import top.iwesley.lyn.music.core.model.PlatformCapabilities
 import top.iwesley.lyn.music.core.model.PlatformDescriptor
+import top.iwesley.lyn.music.core.model.PlayerArtworkStyle
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.feature.player.PlayerIntent
 
@@ -434,6 +435,17 @@ class MiniPlayerBarLogicTest {
                 hasCompactLyrics = false,
             ),
         )
+    }
+
+    @Test
+    fun `player artwork display visual factors keep layout height stable`() {
+        assertEquals(1f, playerArtworkDisplayVisualWidthFactor(PlayerArtworkStyle.VINYL))
+        assertEquals(1.24f, playerArtworkDisplayVisualWidthFactor(PlayerArtworkStyle.HALF_RECORD))
+        assertEquals(1f, playerArtworkDisplayVisualWidthFactor(PlayerArtworkStyle.MINIMAL_COVER))
+
+        PlayerArtworkStyle.entries.forEach { style ->
+            assertEquals(1f, playerArtworkDisplayVisualHeightFactor(style))
+        }
     }
 
     @Test

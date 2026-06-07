@@ -30,6 +30,7 @@ import top.iwesley.lyn.music.core.model.NetworkConnectionTypeProvider
 import top.iwesley.lyn.music.core.model.OfflineDownloadGateway
 import top.iwesley.lyn.music.core.model.PlatformDescriptor
 import top.iwesley.lyn.music.core.model.PlaybackDecoderPreferencesStore
+import top.iwesley.lyn.music.core.model.PlayerArtworkStylePreferencesStore
 import top.iwesley.lyn.music.core.model.PlaybackStatsReporter
 import top.iwesley.lyn.music.core.model.RemotePlaybackUrlCandidate
 import top.iwesley.lyn.music.core.model.SambaCachePreferencesStore
@@ -52,6 +53,7 @@ import top.iwesley.lyn.music.core.model.UnsupportedMenuBarLyricsControlsPreferen
 import top.iwesley.lyn.music.core.model.UnsupportedNavidromeAudioQualityPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedOfflineDownloadGateway
 import top.iwesley.lyn.music.core.model.UnsupportedPlaybackDecoderPreferencesStore
+import top.iwesley.lyn.music.core.model.UnsupportedPlayerArtworkStylePreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedSameNameLyricsFileGateway
 import top.iwesley.lyn.music.core.model.UnsupportedVlcPathPickerPlatformService
 import top.iwesley.lyn.music.core.model.VlcPathPickerPlatformService
@@ -115,6 +117,8 @@ data class SharedRuntimeServices(
         UnsupportedNavidromeAudioQualityPreferencesStore,
     val playbackDecoderPreferencesStore: PlaybackDecoderPreferencesStore =
         UnsupportedPlaybackDecoderPreferencesStore,
+    val playerArtworkStylePreferencesStore: PlayerArtworkStylePreferencesStore =
+        UnsupportedPlayerArtworkStylePreferencesStore,
     val networkConnectionTypeProvider: NetworkConnectionTypeProvider = MobileNetworkConnectionTypeProvider,
     val remoteSourceAddressSelector: RemoteSourceAddressSelector =
         RemoteSourceAddressSelector(networkConnectionTypeProvider),
@@ -205,6 +209,7 @@ fun buildSharedGraph(
         autoPlayOnStartupPreferencesStore = runtimeServices.autoPlayOnStartupPreferencesStore,
         navidromeAudioQualityPreferencesStore = runtimeServices.navidromeAudioQualityPreferencesStore,
         playbackDecoderPreferencesStore = runtimeServices.playbackDecoderPreferencesStore,
+        playerArtworkStylePreferencesStore = runtimeServices.playerArtworkStylePreferencesStore,
     )
     val appUpdateRepository = DefaultAppUpdateRepository(runtimeServices.lyricsHttpClient)
     NavidromeLocatorRuntime.install(

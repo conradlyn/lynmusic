@@ -25,6 +25,7 @@ import top.iwesley.lyn.music.core.model.LyricsResponseFormat
 import top.iwesley.lyn.music.core.model.LyricsSourceDefinition
 import top.iwesley.lyn.music.core.model.LyricsSourceConfig
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
+import top.iwesley.lyn.music.core.model.PlayerArtworkStyle
 import top.iwesley.lyn.music.core.model.RequestMethod
 import top.iwesley.lyn.music.core.model.UnsupportedAppStorageGateway
 import top.iwesley.lyn.music.core.model.UnsupportedDeviceInfoGateway
@@ -73,6 +74,7 @@ data class SettingsState(
     val navidromeWifiAudioQuality: NavidromeAudioQuality = NavidromeAudioQuality.Original,
     val navidromeMobileAudioQuality: NavidromeAudioQuality = NavidromeAudioQuality.Kbps192,
     val useAndroidExtensionDecoder: Boolean = false,
+    val playerArtworkStyle: PlayerArtworkStyle = PlayerArtworkStyle.VINYL,
     val supportsLyricsShareFontImport: Boolean = false,
     val importedLyricsShareFonts: List<LyricsShareFontOption> = emptyList(),
     val lyricsShareFontsLoading: Boolean = false,
@@ -126,6 +128,7 @@ sealed interface SettingsIntent {
     data class NavidromeWifiAudioQualityChanged(val value: NavidromeAudioQuality) : SettingsIntent
     data class NavidromeMobileAudioQualityChanged(val value: NavidromeAudioQuality) : SettingsIntent
     data class AndroidExtensionDecoderChanged(val value: Boolean) : SettingsIntent
+    data class PlayerArtworkStyleChanged(val value: PlayerArtworkStyle) : SettingsIntent
     data class ThemeSelected(val value: AppThemeId) : SettingsIntent
     data class ThemeTextPaletteSelected(val themeId: AppThemeId, val value: AppThemeTextPalette) : SettingsIntent
     data class CustomThemeColorUpdated(val role: CustomThemeColorRole, val argb: Int) : SettingsIntent
@@ -293,6 +296,11 @@ class SettingsStore(
             }
         }
         scope.launch {
+            repository.playerArtworkStyle.collect { style ->
+                updateState { state -> state.copy(playerArtworkStyle = style) }
+            }
+        }
+        scope.launch {
             repository.selectedTheme.collect { themeId ->
                 updateState { state -> state.copy(selectedTheme = themeId) }
             }
@@ -375,6 +383,11 @@ class SettingsStore(
             is SettingsIntent.AndroidExtensionDecoderChanged -> {
                 repository.setUseAndroidExtensionDecoder(intent.value)
                 updateState { it.copy(useAndroidExtensionDecoder = intent.value) }
+            }
+
+            is SettingsIntent.PlayerArtworkStyleChanged -> {
+                repository.setPlayerArtworkStyle(intent.value)
+                updateState { it.copy(playerArtworkStyle = intent.value) }
             }
 
             is SettingsIntent.ThemeSelected -> {

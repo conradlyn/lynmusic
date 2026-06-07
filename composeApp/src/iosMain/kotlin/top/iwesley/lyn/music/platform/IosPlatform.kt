@@ -49,6 +49,8 @@ import top.iwesley.lyn.music.core.model.NetworkConnectionTypeProvider
 import top.iwesley.lyn.music.core.model.PlatformCapabilities
 import top.iwesley.lyn.music.core.model.PlatformDescriptor
 import top.iwesley.lyn.music.core.model.PlaybackPreferencesStore
+import top.iwesley.lyn.music.core.model.PlayerArtworkStyle
+import top.iwesley.lyn.music.core.model.PlayerArtworkStylePreferencesStore
 import top.iwesley.lyn.music.core.model.RequestMethod
 import top.iwesley.lyn.music.core.model.DEFAULT_PLAYBACK_VOLUME
 import top.iwesley.lyn.music.core.model.SambaCachePreferencesStore
@@ -61,6 +63,7 @@ import top.iwesley.lyn.music.core.model.defaultCustomThemeTokens
 import top.iwesley.lyn.music.core.model.defaultThemeTextPalettePreferences
 import top.iwesley.lyn.music.core.model.navidromeAudioQualityOrDefault
 import top.iwesley.lyn.music.core.model.normalizePlaybackVolume
+import top.iwesley.lyn.music.core.model.playerArtworkStyleOrDefault
 import top.iwesley.lyn.music.core.model.withThemePalette
 import top.iwesley.lyn.music.core.model.SambaSourceDraft
 import top.iwesley.lyn.music.core.model.SecureCredentialStore
@@ -170,6 +173,7 @@ fun createIosAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
             compactPlayerLyricsPreferencesStore = appPreferencesStore,
             autoPlayOnStartupPreferencesStore = appPreferencesStore,
             navidromeAudioQualityPreferencesStore = appPreferencesStore,
+            playerArtworkStylePreferencesStore = appPreferencesStore,
             networkConnectionTypeProvider = networkConnectionTypeProvider,
             remoteSourceAddressSelector = remoteSourceAddressSelector,
             librarySourceFilterPreferencesStore = appPreferencesStore,
@@ -363,7 +367,7 @@ private class IosKeychainCredentialStore : SecureCredentialStore {
 
 private class IosAppPreferencesStore : PlaybackPreferencesStore, SambaCachePreferencesStore, ThemePreferencesStore,
     CompactPlayerLyricsPreferencesStore, NavidromeAudioQualityPreferencesStore, LyricsShareFontPreferencesStore,
-    LibrarySourceFilterPreferencesStore {
+    PlayerArtworkStylePreferencesStore, LibrarySourceFilterPreferencesStore {
     private val defaults = NSUserDefaults.standardUserDefaults
     private val mutableUseSambaCache = MutableStateFlow(
         if (defaults.objectForKey(KEY_USE_SAMBA_CACHE) == null) false else defaults.boolForKey(KEY_USE_SAMBA_CACHE),
@@ -400,6 +404,7 @@ private class IosAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
     private val mutableSelectedTheme = MutableStateFlow(readSelectedTheme())
     private val mutableCustomThemeTokens = MutableStateFlow(readCustomThemeTokens())
     private val mutableTextPalettePreferences = MutableStateFlow(readTextPalettePreferences())
+    private val mutablePlayerArtworkStyle = MutableStateFlow(readPlayerArtworkStyle())
     private val mutableSelectedLyricsShareFontKey = MutableStateFlow(readSelectedLyricsShareFontKey())
 
     override val useSambaCache: StateFlow<Boolean> = mutableUseSambaCache.asStateFlow()
@@ -413,6 +418,7 @@ private class IosAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
     override val selectedTheme: StateFlow<AppThemeId> = mutableSelectedTheme.asStateFlow()
     override val customThemeTokens: StateFlow<AppThemeTokens> = mutableCustomThemeTokens.asStateFlow()
     override val textPalettePreferences: StateFlow<AppThemeTextPalettePreferences> = mutableTextPalettePreferences.asStateFlow()
+    override val playerArtworkStyle: StateFlow<PlayerArtworkStyle> = mutablePlayerArtworkStyle.asStateFlow()
     override val selectedLyricsShareFontKey: StateFlow<String?> = mutableSelectedLyricsShareFontKey.asStateFlow()
     override val librarySourceFilter: StateFlow<LibrarySourceFilter> = mutableLibrarySourceFilter.asStateFlow()
     override val favoritesSourceFilter: StateFlow<LibrarySourceFilter> = mutableFavoritesSourceFilter.asStateFlow()
@@ -448,6 +454,11 @@ private class IosAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
     override suspend fun setNavidromeMobileAudioQuality(quality: NavidromeAudioQuality) {
         defaults.setObject(quality.name, KEY_NAVIDROME_MOBILE_AUDIO_QUALITY)
         mutableNavidromeMobileAudioQuality.value = quality
+    }
+
+    override suspend fun setPlayerArtworkStyle(style: PlayerArtworkStyle) {
+        defaults.setObject(style.name, KEY_PLAYER_ARTWORK_STYLE)
+        mutablePlayerArtworkStyle.value = style
     }
 
     override suspend fun setSelectedLyricsShareFontKey(value: String?) {
@@ -505,6 +516,10 @@ private class IosAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
     private fun readTrackSortMode(key: String, defaultMode: TrackSortMode): TrackSortMode {
         val name = defaults.stringForKey(key)
         return TrackSortMode.entries.firstOrNull { it.name == name } ?: defaultMode
+    }
+
+    private fun readPlayerArtworkStyle(): PlayerArtworkStyle {
+        return playerArtworkStyleOrDefault(defaults.stringForKey(KEY_PLAYER_ARTWORK_STYLE))
     }
 
     private fun readPlaybackVolume(): Float {
@@ -797,6 +812,7 @@ private const val KEY_USE_SAMBA_CACHE = "use_samba_cache"
 private const val KEY_PLAYBACK_VOLUME = "playback_volume"
 private const val KEY_SHOW_COMPACT_PLAYER_LYRICS = "show_compact_player_lyrics"
 private const val KEY_AUTO_PLAY_ON_STARTUP = "auto_play_on_startup"
+private const val KEY_PLAYER_ARTWORK_STYLE = "player_artwork_style"
 private const val KEY_NAVIDROME_WIFI_AUDIO_QUALITY = "navidrome_wifi_audio_quality"
 private const val KEY_NAVIDROME_MOBILE_AUDIO_QUALITY = "navidrome_mobile_audio_quality"
 private const val KEY_LIBRARY_SOURCE_FILTER = "library_source_filter"

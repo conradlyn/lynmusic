@@ -81,6 +81,8 @@ import top.iwesley.lyn.music.core.model.PlaybackGateway
 import top.iwesley.lyn.music.core.model.PlaybackGatewayState
 import top.iwesley.lyn.music.core.model.PlaybackLoadToken
 import top.iwesley.lyn.music.core.model.PlaybackPreferencesStore
+import top.iwesley.lyn.music.core.model.PlayerArtworkStyle
+import top.iwesley.lyn.music.core.model.PlayerArtworkStylePreferencesStore
 import top.iwesley.lyn.music.core.model.LyricsShareFontPreferencesStore
 import top.iwesley.lyn.music.core.model.DEFAULT_PLAYBACK_VOLUME
 import top.iwesley.lyn.music.core.model.SAME_NAME_LRC_MAX_BYTES
@@ -95,6 +97,7 @@ import top.iwesley.lyn.music.core.model.defaultThemeTextPalettePreferences
 import top.iwesley.lyn.music.core.model.inferArtworkFileExtension
 import top.iwesley.lyn.music.core.model.isCompleteArtworkPayload
 import top.iwesley.lyn.music.core.model.normalizePlaybackVolume
+import top.iwesley.lyn.music.core.model.playerArtworkStyleOrDefault
 import top.iwesley.lyn.music.core.model.RemotePlaybackUrlCandidate
 import top.iwesley.lyn.music.core.model.stableArtworkBytesHash
 import top.iwesley.lyn.music.core.model.withThemePalette
@@ -229,6 +232,7 @@ fun createJvmAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
             desktopLyricsPreferencesStore = appPreferencesStore,
             menuBarLyricsControlsPreferencesStore = appPreferencesStore,
             autoPlayOnStartupPreferencesStore = appPreferencesStore,
+            playerArtworkStylePreferencesStore = appPreferencesStore,
             desktopVlcPreferencesStore = appPreferencesStore,
             networkConnectionTypeProvider = WifiNetworkConnectionTypeProvider,
             remoteSourceAddressSelector = remoteSourceAddressSelector,
@@ -362,7 +366,8 @@ private class JvmLyricsHttpClient : LyricsHttpClient {
 
 private class JvmAppPreferencesStore : PlaybackPreferencesStore, SambaCachePreferencesStore, ThemePreferencesStore,
     CompactPlayerLyricsPreferencesStore, DesktopLyricsPreferencesStore, MenuBarLyricsControlsPreferencesStore,
-    DesktopVlcPreferencesStore, LyricsShareFontPreferencesStore, LibrarySourceFilterPreferencesStore {
+    DesktopVlcPreferencesStore, LyricsShareFontPreferencesStore, PlayerArtworkStylePreferencesStore,
+    LibrarySourceFilterPreferencesStore {
     private val settingsFile = File(File(System.getProperty("user.home")), ".lynmusic/settings.properties").apply {
         parentFile?.mkdirs()
     }
@@ -384,6 +389,7 @@ private class JvmAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
     private val mutableCustomThemeTokens = MutableStateFlow(readCustomThemeTokens())
     private val mutableTextPalettePreferences = MutableStateFlow(readTextPalettePreferences())
     private val mutableDesktopVlcManualPath = MutableStateFlow(readDesktopVlcManualPath())
+    private val mutablePlayerArtworkStyle = MutableStateFlow(readPlayerArtworkStyle())
     private val mutableDesktopVlcAutoDetectedPath = MutableStateFlow<String?>(null)
     private val mutableDesktopVlcEffectivePath = MutableStateFlow(
         resolveDesktopVlcEffectivePath(
@@ -406,6 +412,7 @@ private class JvmAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
     override val desktopVlcAutoDetectedPath: StateFlow<String?> = mutableDesktopVlcAutoDetectedPath.asStateFlow()
     override val desktopVlcEffectivePath: StateFlow<String?> = mutableDesktopVlcEffectivePath.asStateFlow()
     override val selectedLyricsShareFontKey: StateFlow<String?> = mutableSelectedLyricsShareFontKey.asStateFlow()
+    override val playerArtworkStyle: StateFlow<PlayerArtworkStyle> = mutablePlayerArtworkStyle.asStateFlow()
     override val librarySourceFilter: StateFlow<LibrarySourceFilter> = mutableLibrarySourceFilter.asStateFlow()
     override val favoritesSourceFilter: StateFlow<LibrarySourceFilter> = mutableFavoritesSourceFilter.asStateFlow()
     override val libraryTrackSortMode: StateFlow<TrackSortMode> = mutableLibraryTrackSortMode.asStateFlow()
@@ -452,6 +459,13 @@ private class JvmAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
         properties.setProperty(KEY_AUTO_PLAY_ON_STARTUP, enabled.toString())
         persistProperties(properties)
         mutableAutoPlayOnStartup.value = enabled
+    }
+
+    override suspend fun setPlayerArtworkStyle(style: PlayerArtworkStyle) {
+        val properties = loadProperties()
+        properties.setProperty(KEY_PLAYER_ARTWORK_STYLE, style.name)
+        persistProperties(properties)
+        mutablePlayerArtworkStyle.value = style
     }
 
     override suspend fun setLibrarySourceFilter(filter: LibrarySourceFilter) {
@@ -563,6 +577,10 @@ private class JvmAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
 
     private fun readAutoPlayOnStartup(): Boolean {
         return loadProperties().getProperty(KEY_AUTO_PLAY_ON_STARTUP)?.toBooleanStrictOrNull() ?: false
+    }
+
+    private fun readPlayerArtworkStyle(): PlayerArtworkStyle {
+        return playerArtworkStyleOrDefault(loadProperties().getProperty(KEY_PLAYER_ARTWORK_STYLE))
     }
 
     private fun readLibrarySourceFilter(key: String): LibrarySourceFilter {
@@ -2882,6 +2900,7 @@ private const val KEY_SHOW_COMPACT_PLAYER_LYRICS = "show_compact_player_lyrics"
 private const val KEY_SHOW_DESKTOP_LYRICS = "show_desktop_lyrics"
 private const val KEY_SHOW_MENU_BAR_LYRICS_CONTROLS = "show_menu_bar_lyrics_controls"
 private const val KEY_AUTO_PLAY_ON_STARTUP = "auto_play_on_startup"
+private const val KEY_PLAYER_ARTWORK_STYLE = "player_artwork_style"
 private const val KEY_LIBRARY_SOURCE_FILTER = "library_source_filter"
 private const val KEY_FAVORITES_SOURCE_FILTER = "favorites_source_filter"
 private const val KEY_LIBRARY_TRACK_SORT_MODE = "library_track_sort_mode"

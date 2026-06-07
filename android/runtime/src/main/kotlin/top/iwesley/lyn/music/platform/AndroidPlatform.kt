@@ -107,6 +107,8 @@ import top.iwesley.lyn.music.core.model.PlaybackGateway
 import top.iwesley.lyn.music.core.model.PlaybackGatewayState
 import top.iwesley.lyn.music.core.model.PlaybackLoadToken
 import top.iwesley.lyn.music.core.model.PlaybackPreferencesStore
+import top.iwesley.lyn.music.core.model.PlayerArtworkStyle
+import top.iwesley.lyn.music.core.model.PlayerArtworkStylePreferencesStore
 import top.iwesley.lyn.music.core.model.LyricsShareFontPreferencesStore
 import top.iwesley.lyn.music.core.model.RequestMethod
 import top.iwesley.lyn.music.core.model.DEFAULT_PLAYBACK_VOLUME
@@ -123,6 +125,7 @@ import top.iwesley.lyn.music.core.model.defaultThemeTextPalettePreferences
 import top.iwesley.lyn.music.core.model.inferArtworkFileExtension
 import top.iwesley.lyn.music.core.model.navidromeAudioQualityOrDefault
 import top.iwesley.lyn.music.core.model.normalizePlaybackVolume
+import top.iwesley.lyn.music.core.model.playerArtworkStyleOrDefault
 import top.iwesley.lyn.music.core.model.resolveNavidromeAudioQualityForCurrentNetwork
 import top.iwesley.lyn.music.core.model.stableArtworkBytesHash
 import top.iwesley.lyn.music.core.model.withThemePalette
@@ -263,6 +266,7 @@ fun createAndroidRuntimeGraph(
             autoPlayOnStartupPreferencesStore = appPreferencesStore,
             navidromeAudioQualityPreferencesStore = appPreferencesStore,
             playbackDecoderPreferencesStore = appPreferencesStore,
+            playerArtworkStylePreferencesStore = appPreferencesStore,
             networkConnectionTypeProvider = networkConnectionTypeProvider,
             remoteSourceAddressSelector = remoteSourceAddressSelector,
             librarySourceFilterPreferencesStore = appPreferencesStore,
@@ -534,7 +538,8 @@ internal class AndroidAppPreferencesStore(
     context: Context,
 ) : PlaybackPreferencesStore, SambaCachePreferencesStore, ThemePreferencesStore, AppDisplayPreferencesStore,
     CompactPlayerLyricsPreferencesStore, DesktopLyricsPreferencesStore, NavidromeAudioQualityPreferencesStore, LibrarySourceFilterPreferencesStore,
-    LyricsShareFontPreferencesStore, PlaybackDecoderPreferencesStore, AndroidEqualizerPreferencesStore {
+    LyricsShareFontPreferencesStore, PlaybackDecoderPreferencesStore, PlayerArtworkStylePreferencesStore,
+    AndroidEqualizerPreferencesStore {
     private val preferences: SharedPreferences =
         context.getSharedPreferences("lynmusic.settings", Context.MODE_PRIVATE)
     private val mutableUseSambaCache = MutableStateFlow(
@@ -556,6 +561,7 @@ internal class AndroidAppPreferencesStore(
             DEFAULT_ANDROID_EXTENSION_DECODER_ENABLED,
         ),
     )
+    private val mutablePlayerArtworkStyle = MutableStateFlow(readPlayerArtworkStyle())
     private val mutableEqualizerEnabled = MutableStateFlow(
         preferences.getBoolean(KEY_EQUALIZER_ENABLED, false),
     )
@@ -597,6 +603,10 @@ internal class AndroidAppPreferencesStore(
             when (key) {
                 KEY_ANDROID_EXTENSION_DECODER_ENABLED -> {
                     mutableUseAndroidExtensionDecoder.value = readUseAndroidExtensionDecoder()
+                }
+
+                KEY_PLAYER_ARTWORK_STYLE -> {
+                    mutablePlayerArtworkStyle.value = readPlayerArtworkStyle()
                 }
 
                 KEY_EQUALIZER_ENABLED -> {
@@ -644,6 +654,7 @@ internal class AndroidAppPreferencesStore(
     override val autoPlayOnStartup: StateFlow<Boolean> = mutableAutoPlayOnStartup.asStateFlow()
     override val useAndroidExtensionDecoder: StateFlow<Boolean> =
         mutableUseAndroidExtensionDecoder.asStateFlow()
+    override val playerArtworkStyle: StateFlow<PlayerArtworkStyle> = mutablePlayerArtworkStyle.asStateFlow()
     override val equalizerEnabled: StateFlow<Boolean> = mutableEqualizerEnabled.asStateFlow()
     override val equalizerPresetName: StateFlow<String?> = mutableEqualizerPresetName.asStateFlow()
     override val equalizerBandLevels: StateFlow<Map<Int, Int>> = mutableEqualizerBandLevels.asStateFlow()
@@ -690,6 +701,11 @@ internal class AndroidAppPreferencesStore(
     override suspend fun setUseAndroidExtensionDecoder(enabled: Boolean) {
         preferences.edit().putBoolean(KEY_ANDROID_EXTENSION_DECODER_ENABLED, enabled).apply()
         mutableUseAndroidExtensionDecoder.value = enabled
+    }
+
+    override suspend fun setPlayerArtworkStyle(style: PlayerArtworkStyle) {
+        preferences.edit().putString(KEY_PLAYER_ARTWORK_STYLE, style.name).apply()
+        mutablePlayerArtworkStyle.value = style
     }
 
     override suspend fun setEqualizerEnabled(enabled: Boolean) {
@@ -792,6 +808,10 @@ internal class AndroidAppPreferencesStore(
             KEY_ANDROID_EXTENSION_DECODER_ENABLED,
             DEFAULT_ANDROID_EXTENSION_DECODER_ENABLED,
         )
+    }
+
+    private fun readPlayerArtworkStyle(): PlayerArtworkStyle {
+        return playerArtworkStyleOrDefault(preferences.getString(KEY_PLAYER_ARTWORK_STYLE, null))
     }
 
     private fun readSelectedTheme(): AppThemeId {
@@ -3043,6 +3063,7 @@ private const val KEY_SHOW_COMPACT_PLAYER_LYRICS = "show_compact_player_lyrics"
 private const val KEY_SHOW_DESKTOP_LYRICS = "show_desktop_lyrics"
 private const val KEY_AUTO_PLAY_ON_STARTUP = "auto_play_on_startup"
 private const val KEY_ANDROID_EXTENSION_DECODER_ENABLED = "android_extension_decoder_enabled"
+private const val KEY_PLAYER_ARTWORK_STYLE = "player_artwork_style"
 private const val KEY_APP_DISPLAY_SCALE_PRESET = "app_display_scale_preset"
 private const val KEY_NAVIDROME_WIFI_AUDIO_QUALITY = "navidrome_wifi_audio_quality"
 private const val KEY_NAVIDROME_MOBILE_AUDIO_QUALITY = "navidrome_mobile_audio_quality"

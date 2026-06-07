@@ -62,9 +62,10 @@ import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import top.iwesley.lyn.music.ArtworkDecodeSize
 import top.iwesley.lyn.music.LibraryNavigationTarget
+import top.iwesley.lyn.music.PlayerArtworkDisplay
 import top.iwesley.lyn.music.PlayerLyricsPane
-import top.iwesley.lyn.music.VinylPlaceholder
 import top.iwesley.lyn.music.core.model.PlaybackSnapshot
+import top.iwesley.lyn.music.core.model.PlayerArtworkStyle
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.trackArtworkCacheKey
 import top.iwesley.lyn.music.derivePlaybackLibraryNavigationTargets
@@ -78,6 +79,7 @@ internal fun AutomotiveLandscapePlayerOverlayContent(
     state: PlayerState,
     track: Track,
     artworkBitmap: ImageBitmap?,
+    playerArtworkStyle: PlayerArtworkStyle,
     isFavorite: Boolean,
     onToggleFavorite: () -> Unit,
     onOpenQueue: () -> Unit,
@@ -99,6 +101,7 @@ internal fun AutomotiveLandscapePlayerOverlayContent(
                 state = state,
                 track = track,
                 artworkBitmap = artworkBitmap,
+                playerArtworkStyle = playerArtworkStyle,
                 isFavorite = isFavorite,
                 onToggleFavorite = onToggleFavorite,
                 onOpenQueue = onOpenQueue,
@@ -125,6 +128,7 @@ private fun AutomotivePlaybackPane(
     state: PlayerState,
     track: Track,
     artworkBitmap: ImageBitmap?,
+    playerArtworkStyle: PlayerArtworkStyle,
     isFavorite: Boolean,
     onToggleFavorite: () -> Unit,
     onOpenQueue: () -> Unit,
@@ -161,6 +165,7 @@ private fun AutomotivePlaybackPane(
             snapshot = snapshot,
             track = track,
             artworkBitmap = artworkBitmap,
+            playerArtworkStyle = playerArtworkStyle,
             isFavorite = isFavorite,
             onToggleFavorite = onToggleFavorite,
             onOpenLibraryNavigationTarget = onOpenLibraryNavigationTarget,
@@ -183,6 +188,7 @@ private fun AutomotiveTrackAndProgress(
     snapshot: PlaybackSnapshot,
     track: Track,
     artworkBitmap: ImageBitmap?,
+    playerArtworkStyle: PlayerArtworkStyle,
     isFavorite: Boolean,
     onToggleFavorite: () -> Unit,
     onOpenLibraryNavigationTarget: (LibraryNavigationTarget) -> Unit,
@@ -213,6 +219,7 @@ private fun AutomotiveTrackAndProgress(
                 snapshot = snapshot,
                 artworkBitmap = artworkBitmap,
                 artworkSize = layout.artworkSize,
+                playerArtworkStyle = playerArtworkStyle,
                 onPlayerIntent = onPlayerIntent,
             )
             Spacer(Modifier.height(layout.artworkTitleGap))
@@ -268,6 +275,7 @@ private fun AutomotiveSwipeableArtwork(
     snapshot: PlaybackSnapshot,
     artworkBitmap: ImageBitmap?,
     artworkSize: Dp,
+    playerArtworkStyle: PlayerArtworkStyle,
     onPlayerIntent: (PlayerIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -310,19 +318,43 @@ private fun AutomotiveSwipeableArtwork(
             },
         contentAlignment = Alignment.Center,
     ) {
-        VinylPlaceholder(
-            vinylSize = artworkSize,
+        val artworkDisplaySpec = resolveAutomotiveArtworkDisplaySpec(
+            artworkSize = artworkSize,
+            playerArtworkStyle = playerArtworkStyle,
+        )
+        PlayerArtworkDisplay(
+            style = artworkDisplaySpec.style,
+            artworkSize = artworkDisplaySpec.artworkSize,
             artworkBitmap = artworkBitmap,
             artworkLocator = snapshot.currentDisplayArtworkLocator,
             artworkCacheKey = snapshot.currentTrack?.let(::trackArtworkCacheKey),
             spinning = snapshot.isPlaying,
             enableArtworkTint = false,
-            artworkDiameterFraction = 0.76f,
-            innerGlowDiameterFraction = 0.72f,
+            vinylArtworkDiameterFraction = artworkDisplaySpec.vinylArtworkDiameterFraction,
+            vinylInnerGlowDiameterFraction = artworkDisplaySpec.vinylInnerGlowDiameterFraction,
             maxArtworkDecodeSizePx = ArtworkDecodeSize.Player,
             retainPreviousArtworkWhileLoading = true,
         )
     }
+}
+
+internal data class AutomotiveArtworkDisplaySpec(
+    val style: PlayerArtworkStyle,
+    val artworkSize: Dp,
+    val vinylArtworkDiameterFraction: Float,
+    val vinylInnerGlowDiameterFraction: Float,
+)
+
+internal fun resolveAutomotiveArtworkDisplaySpec(
+    artworkSize: Dp,
+    playerArtworkStyle: PlayerArtworkStyle = PlayerArtworkStyle.VINYL,
+): AutomotiveArtworkDisplaySpec {
+    return AutomotiveArtworkDisplaySpec(
+        style = playerArtworkStyle,
+        artworkSize = artworkSize,
+        vinylArtworkDiameterFraction = 0.76f,
+        vinylInnerGlowDiameterFraction = 0.72f,
+    )
 }
 
 @Composable

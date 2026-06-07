@@ -56,6 +56,8 @@ import top.iwesley.lyn.music.core.model.NavidromeSourceDraft
 import top.iwesley.lyn.music.core.model.NoopDiagnosticLogger
 import top.iwesley.lyn.music.core.model.OfflineDownloadGateway
 import top.iwesley.lyn.music.core.model.PlaybackDecoderPreferencesStore
+import top.iwesley.lyn.music.core.model.PlayerArtworkStyle
+import top.iwesley.lyn.music.core.model.PlayerArtworkStylePreferencesStore
 import top.iwesley.lyn.music.core.model.PlaylistDetail
 import top.iwesley.lyn.music.core.model.PlaylistSummary
 import top.iwesley.lyn.music.core.model.RequestMethod
@@ -82,6 +84,7 @@ import top.iwesley.lyn.music.core.model.UnsupportedMenuBarLyricsControlsPreferen
 import top.iwesley.lyn.music.core.model.UnsupportedNavidromeAudioQualityPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedSameNameLyricsFileGateway
 import top.iwesley.lyn.music.core.model.UnsupportedPlaybackDecoderPreferencesStore
+import top.iwesley.lyn.music.core.model.UnsupportedPlayerArtworkStylePreferencesStore
 import top.iwesley.lyn.music.core.model.WebDavSourceDraft
 import top.iwesley.lyn.music.core.model.WorkflowLyricsSourceConfig
 import top.iwesley.lyn.music.core.model.WorkflowSongCandidate
@@ -448,6 +451,7 @@ interface SettingsRepository {
     val navidromeWifiAudioQuality: StateFlow<NavidromeAudioQuality>
     val navidromeMobileAudioQuality: StateFlow<NavidromeAudioQuality>
     val useAndroidExtensionDecoder: StateFlow<Boolean>
+    val playerArtworkStyle: StateFlow<PlayerArtworkStyle>
     val selectedTheme: StateFlow<AppThemeId>
     val customThemeTokens: StateFlow<AppThemeTokens>
     val textPalettePreferences: StateFlow<AppThemeTextPalettePreferences>
@@ -465,6 +469,7 @@ interface SettingsRepository {
     suspend fun setNavidromeWifiAudioQuality(quality: NavidromeAudioQuality)
     suspend fun setNavidromeMobileAudioQuality(quality: NavidromeAudioQuality)
     suspend fun setUseAndroidExtensionDecoder(enabled: Boolean)
+    suspend fun setPlayerArtworkStyle(style: PlayerArtworkStyle)
     suspend fun setSelectedTheme(themeId: AppThemeId)
     suspend fun setCustomThemeTokens(tokens: AppThemeTokens)
     suspend fun setTextPalette(themeId: AppThemeId, palette: AppThemeTextPalette)
@@ -2027,6 +2032,8 @@ class DefaultSettingsRepository(
         UnsupportedNavidromeAudioQualityPreferencesStore,
     private val playbackDecoderPreferencesStore: PlaybackDecoderPreferencesStore =
         UnsupportedPlaybackDecoderPreferencesStore,
+    private val playerArtworkStylePreferencesStore: PlayerArtworkStylePreferencesStore =
+        UnsupportedPlayerArtworkStylePreferencesStore,
 ) : SettingsRepository {
     override val lyricsSources: Flow<List<LyricsSourceDefinition>> = combine(
         database.lyricsSourceConfigDao().observeAll(),
@@ -2052,6 +2059,8 @@ class DefaultSettingsRepository(
         navidromeAudioQualityPreferencesStore.navidromeMobileAudioQuality
     override val useAndroidExtensionDecoder: StateFlow<Boolean> =
         playbackDecoderPreferencesStore.useAndroidExtensionDecoder
+    override val playerArtworkStyle: StateFlow<PlayerArtworkStyle> =
+        playerArtworkStylePreferencesStore.playerArtworkStyle
     override val selectedTheme: StateFlow<AppThemeId> = themePreferencesStore.selectedTheme
     override val customThemeTokens: StateFlow<AppThemeTokens> = themePreferencesStore.customThemeTokens
     override val textPalettePreferences: StateFlow<AppThemeTextPalettePreferences> = themePreferencesStore.textPalettePreferences
@@ -2118,6 +2127,10 @@ class DefaultSettingsRepository(
 
     override suspend fun setUseAndroidExtensionDecoder(enabled: Boolean) {
         playbackDecoderPreferencesStore.setUseAndroidExtensionDecoder(enabled)
+    }
+
+    override suspend fun setPlayerArtworkStyle(style: PlayerArtworkStyle) {
+        playerArtworkStylePreferencesStore.setPlayerArtworkStyle(style)
     }
 
     override suspend fun setSelectedTheme(themeId: AppThemeId) {

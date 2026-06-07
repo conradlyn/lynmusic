@@ -24,6 +24,8 @@ import top.iwesley.lyn.music.core.model.MenuBarLyricsControlsPreferencesStore
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.NavidromeAudioQualityPreferencesStore
 import top.iwesley.lyn.music.core.model.PlaybackDecoderPreferencesStore
+import top.iwesley.lyn.music.core.model.PlayerArtworkStyle
+import top.iwesley.lyn.music.core.model.PlayerArtworkStylePreferencesStore
 import top.iwesley.lyn.music.core.model.RequestMethod
 import top.iwesley.lyn.music.core.model.SambaCachePreferencesStore
 import top.iwesley.lyn.music.core.model.ThemePreferencesStore
@@ -248,6 +250,39 @@ class SettingsRepositoryTest {
 
         assertEquals(true, preferences.useAndroidExtensionDecoder.value)
         assertEquals(true, repository.useAndroidExtensionDecoder.value)
+    }
+
+    @Test
+    fun `player artwork style preference defaults to vinyl`() = runTest {
+        val database = createSettingsTestDatabase()
+        val preferences = FakePreferencesStore()
+        val repository = DefaultSettingsRepository(
+            database = database,
+            sambaCachePreferencesStore = preferences,
+            themePreferencesStore = preferences,
+            desktopVlcPreferencesStore = preferences,
+            playerArtworkStylePreferencesStore = preferences,
+        )
+
+        assertEquals(PlayerArtworkStyle.VINYL, repository.playerArtworkStyle.value)
+    }
+
+    @Test
+    fun `setting player artwork style preference writes through to preference store`() = runTest {
+        val database = createSettingsTestDatabase()
+        val preferences = FakePreferencesStore()
+        val repository = DefaultSettingsRepository(
+            database = database,
+            sambaCachePreferencesStore = preferences,
+            themePreferencesStore = preferences,
+            desktopVlcPreferencesStore = preferences,
+            playerArtworkStylePreferencesStore = preferences,
+        )
+
+        repository.setPlayerArtworkStyle(PlayerArtworkStyle.HALF_RECORD)
+
+        assertEquals(PlayerArtworkStyle.HALF_RECORD, preferences.playerArtworkStyle.value)
+        assertEquals(PlayerArtworkStyle.HALF_RECORD, repository.playerArtworkStyle.value)
     }
 
     @Test
@@ -607,13 +642,14 @@ private fun createSettingsTestDatabase(): LynMusicDatabase {
 private class FakePreferencesStore : SambaCachePreferencesStore, ThemePreferencesStore, DesktopVlcPreferencesStore,
     AutoPlayOnStartupPreferencesStore,
     CompactPlayerLyricsPreferencesStore, DesktopLyricsPreferencesStore, MenuBarLyricsControlsPreferencesStore,
-    NavidromeAudioQualityPreferencesStore, PlaybackDecoderPreferencesStore {
+    NavidromeAudioQualityPreferencesStore, PlaybackDecoderPreferencesStore, PlayerArtworkStylePreferencesStore {
     override val useSambaCache = MutableStateFlow(true)
     override val showCompactPlayerLyrics = MutableStateFlow(false)
     override val showDesktopLyrics = MutableStateFlow(false)
     override val showMenuBarLyricsControls = MutableStateFlow(false)
     override val autoPlayOnStartup = MutableStateFlow(false)
     override val useAndroidExtensionDecoder = MutableStateFlow(false)
+    override val playerArtworkStyle = MutableStateFlow(PlayerArtworkStyle.VINYL)
     override val navidromeWifiAudioQuality = MutableStateFlow(NavidromeAudioQuality.Original)
     override val navidromeMobileAudioQuality = MutableStateFlow(NavidromeAudioQuality.Kbps192)
     override val selectedTheme = MutableStateFlow(AppThemeId.Ocean)
@@ -645,6 +681,10 @@ private class FakePreferencesStore : SambaCachePreferencesStore, ThemePreference
 
     override suspend fun setUseAndroidExtensionDecoder(enabled: Boolean) {
         useAndroidExtensionDecoder.value = enabled
+    }
+
+    override suspend fun setPlayerArtworkStyle(style: PlayerArtworkStyle) {
+        playerArtworkStyle.value = style
     }
 
     override suspend fun setNavidromeWifiAudioQuality(quality: NavidromeAudioQuality) {

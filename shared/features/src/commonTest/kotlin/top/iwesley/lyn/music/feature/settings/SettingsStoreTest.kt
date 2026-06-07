@@ -40,6 +40,7 @@ import top.iwesley.lyn.music.core.model.LyricsSourceConfig
 import top.iwesley.lyn.music.core.model.LyricsSourceDefinition
 import top.iwesley.lyn.music.core.model.LynMusicUpdateLinks
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
+import top.iwesley.lyn.music.core.model.PlayerArtworkStyle
 import top.iwesley.lyn.music.core.model.RequestMethod
 import top.iwesley.lyn.music.core.model.VlcPathPickerPlatformService
 import top.iwesley.lyn.music.core.model.WorkflowLyricsConfig
@@ -494,6 +495,35 @@ class SettingsStoreTest {
         advanceUntilIdle()
         assertFalse(store.state.value.useAndroidExtensionDecoder)
         assertFalse(repository.currentUseAndroidExtensionDecoder())
+        scope.cancel()
+    }
+
+    @Test
+    fun `store loads persisted player artwork style`() = runTest {
+        val repository = FakeSettingsRepository(playerArtworkStyle = PlayerArtworkStyle.HALF_RECORD)
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(repository, scope)
+
+        advanceUntilIdle()
+
+        assertEquals(PlayerArtworkStyle.HALF_RECORD, store.state.value.playerArtworkStyle)
+        scope.cancel()
+    }
+
+    @Test
+    fun `updating player artwork style writes through immediately`() = runTest {
+        val repository = FakeSettingsRepository()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(repository, scope)
+
+        advanceUntilIdle()
+        assertEquals(PlayerArtworkStyle.VINYL, store.state.value.playerArtworkStyle)
+
+        store.dispatch(SettingsIntent.PlayerArtworkStyleChanged(PlayerArtworkStyle.MINIMAL_COVER))
+        advanceUntilIdle()
+
+        assertEquals(PlayerArtworkStyle.MINIMAL_COVER, store.state.value.playerArtworkStyle)
+        assertEquals(PlayerArtworkStyle.MINIMAL_COVER, repository.currentPlayerArtworkStyle())
         scope.cancel()
     }
 
@@ -1649,6 +1679,7 @@ private class FakeSettingsRepository(
     showMenuBarLyricsControls: Boolean = false,
     autoPlayOnStartup: Boolean = false,
     useAndroidExtensionDecoder: Boolean = false,
+    playerArtworkStyle: PlayerArtworkStyle = PlayerArtworkStyle.VINYL,
     appDisplayScalePreset: AppDisplayScalePreset = AppDisplayScalePreset.Default,
     navidromeWifiAudioQuality: NavidromeAudioQuality = NavidromeAudioQuality.Original,
     navidromeMobileAudioQuality: NavidromeAudioQuality = NavidromeAudioQuality.Kbps192,
@@ -1665,6 +1696,7 @@ private class FakeSettingsRepository(
     private val mutableShowMenuBarLyricsControls = MutableStateFlow(showMenuBarLyricsControls)
     private val mutableAutoPlayOnStartup = MutableStateFlow(autoPlayOnStartup)
     private val mutableUseAndroidExtensionDecoder = MutableStateFlow(useAndroidExtensionDecoder)
+    private val mutablePlayerArtworkStyle = MutableStateFlow(playerArtworkStyle)
     private val mutableAppDisplayScalePreset = MutableStateFlow(appDisplayScalePreset)
     private val mutableNavidromeWifiAudioQuality = MutableStateFlow(navidromeWifiAudioQuality)
     private val mutableNavidromeMobileAudioQuality = MutableStateFlow(navidromeMobileAudioQuality)
@@ -1686,6 +1718,7 @@ private class FakeSettingsRepository(
     override val autoPlayOnStartup: StateFlow<Boolean> = mutableAutoPlayOnStartup.asStateFlow()
     override val useAndroidExtensionDecoder: StateFlow<Boolean> =
         mutableUseAndroidExtensionDecoder.asStateFlow()
+    override val playerArtworkStyle: StateFlow<PlayerArtworkStyle> = mutablePlayerArtworkStyle.asStateFlow()
     override val appDisplayScalePreset: StateFlow<AppDisplayScalePreset> = mutableAppDisplayScalePreset.asStateFlow()
     override val navidromeWifiAudioQuality: StateFlow<NavidromeAudioQuality> =
         mutableNavidromeWifiAudioQuality.asStateFlow()
@@ -1707,6 +1740,7 @@ private class FakeSettingsRepository(
     fun currentShowMenuBarLyricsControls(): Boolean = mutableShowMenuBarLyricsControls.value
     fun currentAutoPlayOnStartup(): Boolean = mutableAutoPlayOnStartup.value
     fun currentUseAndroidExtensionDecoder(): Boolean = mutableUseAndroidExtensionDecoder.value
+    fun currentPlayerArtworkStyle(): PlayerArtworkStyle = mutablePlayerArtworkStyle.value
     fun currentAppDisplayScalePreset(): AppDisplayScalePreset = mutableAppDisplayScalePreset.value
     fun currentNavidromeWifiAudioQuality(): NavidromeAudioQuality = mutableNavidromeWifiAudioQuality.value
     fun currentNavidromeMobileAudioQuality(): NavidromeAudioQuality = mutableNavidromeMobileAudioQuality.value
@@ -1739,6 +1773,10 @@ private class FakeSettingsRepository(
 
     override suspend fun setUseAndroidExtensionDecoder(enabled: Boolean) {
         mutableUseAndroidExtensionDecoder.value = enabled
+    }
+
+    override suspend fun setPlayerArtworkStyle(style: PlayerArtworkStyle) {
+        mutablePlayerArtworkStyle.value = style
     }
 
     override suspend fun setAppDisplayScalePreset(preset: AppDisplayScalePreset) {

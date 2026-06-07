@@ -20,9 +20,16 @@ enum class NavidromeAudioQuality(
     Kbps128(128),
 }
 
+enum class PlayerArtworkStyle {
+    VINYL,
+    HALF_RECORD,
+    MINIMAL_COVER,
+}
+
 val DEFAULT_NAVIDROME_WIFI_AUDIO_QUALITY: NavidromeAudioQuality = NavidromeAudioQuality.Original
 val DEFAULT_NAVIDROME_MOBILE_AUDIO_QUALITY: NavidromeAudioQuality = NavidromeAudioQuality.Kbps192
 const val DEFAULT_ANDROID_EXTENSION_DECODER_ENABLED: Boolean = false
+val DEFAULT_PLAYER_ARTWORK_STYLE: PlayerArtworkStyle = PlayerArtworkStyle.VINYL
 
 fun appDisplayScalePresetOrDefault(name: String?): AppDisplayScalePreset {
     return AppDisplayScalePreset.entries.firstOrNull { it.name == name } ?: AppDisplayScalePreset.Default
@@ -33,6 +40,10 @@ fun navidromeAudioQualityOrDefault(
     default: NavidromeAudioQuality,
 ): NavidromeAudioQuality {
     return NavidromeAudioQuality.entries.firstOrNull { it.name == name } ?: default
+}
+
+fun playerArtworkStyleOrDefault(name: String?): PlayerArtworkStyle {
+    return PlayerArtworkStyle.entries.firstOrNull { it.name == name } ?: DEFAULT_PLAYER_ARTWORK_STYLE
 }
 
 fun effectiveAppDisplayDensity(
@@ -101,6 +112,12 @@ interface PlaybackDecoderPreferencesStore {
     val useAndroidExtensionDecoder: StateFlow<Boolean>
 
     suspend fun setUseAndroidExtensionDecoder(enabled: Boolean)
+}
+
+interface PlayerArtworkStylePreferencesStore {
+    val playerArtworkStyle: StateFlow<PlayerArtworkStyle>
+
+    suspend fun setPlayerArtworkStyle(style: PlayerArtworkStyle)
 }
 
 interface LyricsShareFontPreferencesStore {
@@ -183,6 +200,16 @@ object UnsupportedPlaybackDecoderPreferencesStore : PlaybackDecoderPreferencesSt
 
     override suspend fun setUseAndroidExtensionDecoder(enabled: Boolean) {
         mutableUseAndroidExtensionDecoder.value = enabled
+    }
+}
+
+object UnsupportedPlayerArtworkStylePreferencesStore : PlayerArtworkStylePreferencesStore {
+    private val mutablePlayerArtworkStyle = MutableStateFlow(DEFAULT_PLAYER_ARTWORK_STYLE)
+
+    override val playerArtworkStyle: StateFlow<PlayerArtworkStyle> = mutablePlayerArtworkStyle
+
+    override suspend fun setPlayerArtworkStyle(style: PlayerArtworkStyle) {
+        mutablePlayerArtworkStyle.value = style
     }
 }
 

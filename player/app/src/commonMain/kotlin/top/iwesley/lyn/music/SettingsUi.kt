@@ -88,6 +88,7 @@ import top.iwesley.lyn.music.core.model.LyricsSourceConfig
 import top.iwesley.lyn.music.core.model.LynMusicUpdateLinks
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.PlatformDescriptor
+import top.iwesley.lyn.music.core.model.PlayerArtworkStyle
 import top.iwesley.lyn.music.core.model.deriveAppThemePalette
 import top.iwesley.lyn.music.core.model.formatThemeHexColor
 import top.iwesley.lyn.music.core.model.presetThemeTokens
@@ -659,6 +660,7 @@ private fun GeneralSettingsPane(
     val showAppDisplayScaleSetting =
         currentPlatformDescriptor.capabilities.supportsAppDisplayScaleAdjustment
     val showCompactPlayerLyricsSetting = isMobilePlatform
+    val showPlayerArtworkStyleSetting = shouldShowPlayerArtworkStyleSetting(currentPlatformDescriptor)
     val showDesktopLyricsSetting = currentPlatformDescriptor.capabilities.supportsDesktopLyrics
     val showMenuBarLyricsControlsSetting =
         currentPlatformDescriptor.capabilities.supportsMenuBarLyricsControls
@@ -861,7 +863,7 @@ private fun GeneralSettingsPane(
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
-                            text = "仅在移动端非分栏播放页显示黑胶下方歌词。",
+                            text = "仅在移动端非分栏播放页显示封面下方歌词。",
                             style = MaterialTheme.typography.bodySmall,
                             color = shellColors.secondaryText,
                         )
@@ -873,6 +875,63 @@ private fun GeneralSettingsPane(
                         },
                         colors = SwitchDefaults.colors(),
                     )
+                }
+            }
+        }
+        if (showPlayerArtworkStyleSetting) {
+            MainShellElevatedCard(shape = RoundedCornerShape(28.dp)) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "播放页封面样式",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = "控制播放界面的封面样式。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = shellColors.secondaryText,
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        PlayerArtworkStyle.entries.forEach { style ->
+                            val selected = state.playerArtworkStyle == style
+                            if (selected) {
+                                Button(
+                                    onClick = {
+                                        onSettingsIntent(SettingsIntent.PlayerArtworkStyleChanged(style))
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Text(
+                                        text = playerArtworkStyleLabel(style),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            } else {
+                                OutlinedButton(
+                                    onClick = {
+                                        onSettingsIntent(SettingsIntent.PlayerArtworkStyleChanged(style))
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Text(
+                                        text = playerArtworkStyleLabel(style),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2369,6 +2428,18 @@ private fun appDisplayScalePresetLabel(preset: AppDisplayScalePreset): String {
         AppDisplayScalePreset.Default -> "默认"
         AppDisplayScalePreset.Large -> "大号"
     }
+}
+
+private fun playerArtworkStyleLabel(style: PlayerArtworkStyle): String {
+    return when (style) {
+        PlayerArtworkStyle.VINYL -> "黑胶"
+        PlayerArtworkStyle.HALF_RECORD -> "半出唱片"
+        PlayerArtworkStyle.MINIMAL_COVER -> "极简大封面"
+    }
+}
+
+internal fun shouldShowPlayerArtworkStyleSetting(platform: PlatformDescriptor): Boolean {
+    return platform.isMobilePlatform() || platform.isPCPlatform() || platform.isAndroidAutomotivePlatform()
 }
 
 internal fun navidromeAudioQualityLabel(quality: NavidromeAudioQuality): String {

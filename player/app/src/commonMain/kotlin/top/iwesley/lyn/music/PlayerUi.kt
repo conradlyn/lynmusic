@@ -139,6 +139,7 @@ import top.iwesley.lyn.music.core.model.OfflineDownloadStatus
 import top.iwesley.lyn.music.core.model.PlatformDescriptor
 import top.iwesley.lyn.music.core.model.PlaybackAudioFormat
 import top.iwesley.lyn.music.core.model.PlaybackSnapshot
+import top.iwesley.lyn.music.core.model.PlayerArtworkStyle
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.debug
 import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleSongLocator
@@ -164,6 +165,7 @@ internal fun PlayerDrawerHost(
     logger: DiagnosticLogger,
     state: PlayerState,
     showCompactPlayerLyrics: Boolean,
+    playerArtworkStyle: PlayerArtworkStyle,
     showEqualizerEntry: Boolean,
     onOpenEqualizer: () -> Unit,
     lyricsShareThemeTokens: AppThemeTokens,
@@ -213,6 +215,7 @@ internal fun PlayerDrawerHost(
                 logger = logger,
                 state = state,
                 showCompactPlayerLyrics = showCompactPlayerLyrics,
+                playerArtworkStyle = playerArtworkStyle,
                 showEqualizerEntry = showEqualizerEntry,
                 onOpenEqualizer = onOpenEqualizer,
                 lyricsShareThemeTokens = lyricsShareThemeTokens,
@@ -1128,6 +1131,7 @@ private fun PlayerOverlay(
     logger: DiagnosticLogger,
     state: PlayerState,
     showCompactPlayerLyrics: Boolean,
+    playerArtworkStyle: PlayerArtworkStyle,
     showEqualizerEntry: Boolean,
     onOpenEqualizer: () -> Unit,
     lyricsShareThemeTokens: AppThemeTokens,
@@ -1286,6 +1290,7 @@ private fun PlayerOverlay(
                     state = state,
                     track = track,
                     artworkBitmap = paletteArtworkBitmap,
+                    playerArtworkStyle = playerArtworkStyle,
                     isFavorite = isFavorite,
                     onToggleFavorite = onToggleFavorite,
                     onOpenQueue = onOpenQueue,
@@ -1403,6 +1408,7 @@ private fun PlayerOverlay(
                             track = track,
                             artworkBitmap = null,
                             showCompactPlayerLyrics = showCompactPlayerLyrics,
+                            playerArtworkStyle = playerArtworkStyle,
                             onPlayerIntent = onPlayerIntent,
                             modifier = Modifier
                                 .weight(1f)
@@ -1420,6 +1426,7 @@ private fun PlayerOverlay(
                                 snapshot = snapshot,
                                 track = track,
                                 artworkBitmap = null,
+                                playerArtworkStyle = playerArtworkStyle,
                                 onPlayerIntent = onPlayerIntent,
                                 modifier = Modifier
                                     .weight(0.5f)
@@ -1448,6 +1455,7 @@ private fun PlayerOverlay(
                                 snapshot = snapshot,
                                 track = track,
                                 artworkBitmap = null,
+                                playerArtworkStyle = playerArtworkStyle,
                                 modifier = Modifier.fillMaxWidth(),
                                 compact = true,
                             )
@@ -1524,6 +1532,7 @@ private fun MobilePlayerPrimaryPane(
     track: Track,
     artworkBitmap: ImageBitmap?,
     showCompactPlayerLyrics: Boolean,
+    playerArtworkStyle: PlayerArtworkStyle,
     onPlayerIntent: (PlayerIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1555,6 +1564,7 @@ private fun MobilePlayerPrimaryPane(
                 snapshot = state.effectiveSnapshot,
                 track = track,
                 artworkBitmap = artworkBitmap,
+                playerArtworkStyle = playerArtworkStyle,
                 modifier = Modifier.fillMaxSize(),
                 compact = true,
                 compactLyricsText = displayCompactLyricsText,
@@ -1588,6 +1598,7 @@ private fun PlayerInfoPane(
     snapshot: PlaybackSnapshot,
     track: Track,
     artworkBitmap: ImageBitmap? = null,
+    playerArtworkStyle: PlayerArtworkStyle,
     modifier: Modifier = Modifier,
     compact: Boolean = false,
     compactLyricsText: String? = null,
@@ -1612,19 +1623,21 @@ private fun PlayerInfoPane(
             SwipeablePlayerArtwork(
                 snapshot = snapshot,
                 artworkBitmap = artworkBitmap,
+                playerArtworkStyle = playerArtworkStyle,
                 vinylSize = vinylSize,
                 onPlayerIntent = onPlayerIntent,
                 modifier = Modifier.align(Alignment.Center),
             )
         } else {
-            VinylPlaceholder(
-                vinylSize = vinylSize,
+            PlayerArtworkDisplay(
+                style = playerArtworkStyle,
+                artworkSize = vinylSize,
                 artworkBitmap = artworkBitmap,
                 artworkLocator = snapshot.currentDisplayArtworkLocator,
                 artworkCacheKey = snapshot.currentTrack?.let(::trackArtworkCacheKey),
                 spinning = snapshot.isPlaying,
-                artworkDiameterFraction = PLAYER_INFO_VINYL_ARTWORK_DIAMETER_FRACTION,
-                innerGlowDiameterFraction = PLAYER_INFO_VINYL_INNER_GLOW_DIAMETER_FRACTION,
+                vinylArtworkDiameterFraction = PLAYER_INFO_VINYL_ARTWORK_DIAMETER_FRACTION,
+                vinylInnerGlowDiameterFraction = PLAYER_INFO_VINYL_INNER_GLOW_DIAMETER_FRACTION,
                 maxArtworkDecodeSizePx = ArtworkDecodeSize.Player,
                 retainPreviousArtworkWhileLoading = true,
                 modifier = Modifier.align(Alignment.Center),
@@ -1660,6 +1673,7 @@ private fun PlayerInfoPane(
 private fun SwipeablePlayerArtwork(
     snapshot: PlaybackSnapshot,
     artworkBitmap: ImageBitmap?,
+    playerArtworkStyle: PlayerArtworkStyle,
     vinylSize: Dp,
     onPlayerIntent: (PlayerIntent) -> Unit,
     modifier: Modifier = Modifier,
@@ -1703,14 +1717,15 @@ private fun SwipeablePlayerArtwork(
             },
         contentAlignment = Alignment.Center,
     ) {
-        VinylPlaceholder(
-            vinylSize = vinylSize,
+        PlayerArtworkDisplay(
+            style = playerArtworkStyle,
+            artworkSize = vinylSize,
             artworkBitmap = artworkBitmap,
             artworkLocator = snapshot.currentDisplayArtworkLocator,
             artworkCacheKey = snapshot.currentTrack?.let(::trackArtworkCacheKey),
             spinning = snapshot.isPlaying,
-            artworkDiameterFraction = PLAYER_INFO_VINYL_ARTWORK_DIAMETER_FRACTION,
-            innerGlowDiameterFraction = PLAYER_INFO_VINYL_INNER_GLOW_DIAMETER_FRACTION,
+            vinylArtworkDiameterFraction = PLAYER_INFO_VINYL_ARTWORK_DIAMETER_FRACTION,
+            vinylInnerGlowDiameterFraction = PLAYER_INFO_VINYL_INNER_GLOW_DIAMETER_FRACTION,
             maxArtworkDecodeSizePx = ArtworkDecodeSize.Player,
             retainPreviousArtworkWhileLoading = true,
         )

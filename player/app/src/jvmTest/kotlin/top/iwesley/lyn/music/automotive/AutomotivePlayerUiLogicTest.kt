@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import top.iwesley.lyn.music.core.model.PlaybackSnapshot
+import top.iwesley.lyn.music.core.model.PlayerArtworkStyle
 import top.iwesley.lyn.music.feature.player.PlayerIntent
 
 class AutomotivePlayerUiLogicTest {
@@ -38,6 +39,29 @@ class AutomotivePlayerUiLogicTest {
         assertEquals(26.dp, layout.progressTopGap)
         assertEquals(8.dp, layout.bottomPadding)
         assertEquals(0.9f, layout.progressWidthFraction)
+    }
+
+    @Test
+    fun `artwork display spec defaults to vinyl with existing sizing`() {
+        val spec = resolveAutomotiveArtworkDisplaySpec(artworkSize = 320.dp)
+
+        assertEquals(PlayerArtworkStyle.VINYL, spec.style)
+        assertEquals(320.dp, spec.artworkSize)
+        assertEquals(0.76f, spec.vinylArtworkDiameterFraction)
+        assertEquals(0.72f, spec.vinylInnerGlowDiameterFraction)
+    }
+
+    @Test
+    fun `artwork display spec passes selected style without changing layout size`() {
+        PlayerArtworkStyle.entries.forEach { style ->
+            val spec = resolveAutomotiveArtworkDisplaySpec(
+                artworkSize = 320.dp,
+                playerArtworkStyle = style,
+            )
+
+            assertEquals(style, spec.style)
+            assertEquals(320.dp, spec.artworkSize)
+        }
     }
 
     @Test
