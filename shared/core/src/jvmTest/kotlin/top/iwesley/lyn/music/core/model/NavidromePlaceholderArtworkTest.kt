@@ -27,6 +27,17 @@ class NavidromePlaceholderArtworkTest {
     }
 
     @Test
+    fun `large webp with known blue vinyl placeholder sha is replaceable`() {
+        assertTrue(
+            isReplaceableNavidromePlaceholderArtwork(
+                bytes = webpPayload(size = 68 * 1024),
+                differenceHash = null,
+                sha256Hex = NAVIDROME_BLUE_VINYL_PLACEHOLDER_ARTWORK_SHA256,
+            ),
+        )
+    }
+
+    @Test
     fun `webp with similar placeholder dhash is replaceable`() {
         assertTrue(
             isReplaceableNavidromePlaceholderArtwork(
@@ -60,7 +71,7 @@ class NavidromePlaceholderArtworkTest {
     }
 
     @Test
-    fun `non webp and large webp are not replaceable`() {
+    fun `non webp and large webp without known sha are not replaceable`() {
         assertFalse(
             isReplaceableNavidromePlaceholderArtwork(
                 bytes = byteArrayOf(0x01, 0x02),
@@ -74,7 +85,7 @@ class NavidromePlaceholderArtworkTest {
                     completeWebpPayload().copyInto(bytes)
                 },
                 differenceHash = 0x0c1377615911370cUL,
-                sha256Hex = NAVIDROME_PLACEHOLDER_ARTWORK_SHA256,
+                sha256Hex = "not-the-sample-hash",
             ),
         )
     }
@@ -114,4 +125,10 @@ private fun completeWebpPayload(): ByteArray {
         0x42,
         0x50,
     )
+}
+
+private fun webpPayload(size: Int): ByteArray {
+    return ByteArray(size) { 0x00 }.also { bytes ->
+        completeWebpPayload().copyInto(bytes)
+    }
 }

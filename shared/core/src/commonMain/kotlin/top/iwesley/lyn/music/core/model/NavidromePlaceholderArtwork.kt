@@ -1,20 +1,32 @@
 package top.iwesley.lyn.music.core.model
 
 const val NAVIDROME_PLACEHOLDER_ARTWORK_MAX_BYTES = 20 * 1024
+const val NAVIDROME_PLACEHOLDER_ARTWORK_EXACT_SHA_MAX_BYTES = 128 * 1024
 const val NAVIDROME_PLACEHOLDER_ARTWORK_SHA256 =
     "b502979c464ab7a61f79bfd820e23b8dc3eeb36034b0722f7588972fd9fa7392"
+const val NAVIDROME_BLUE_VINYL_PLACEHOLDER_ARTWORK_SHA256 =
+    "273a4dbd61dfbb0a12d5d8ffe780eb7a3d4d000bc9771c5411cc70ae4dfa8a1f"
 const val NAVIDROME_PLACEHOLDER_ARTWORK_DHASH_DISTANCE = 8
 
 private const val NAVIDROME_PLACEHOLDER_ARTWORK_DHASH = 0x0c1377615911370cUL
+private val NAVIDROME_PLACEHOLDER_ARTWORK_SHA256S = setOf(
+    NAVIDROME_PLACEHOLDER_ARTWORK_SHA256,
+    NAVIDROME_BLUE_VINYL_PLACEHOLDER_ARTWORK_SHA256,
+)
 
 fun isReplaceableNavidromePlaceholderArtwork(
     bytes: ByteArray,
     differenceHash: ULong? = null,
     sha256Hex: String = bytes.sha256Hex(),
 ): Boolean {
-    if (bytes.size >= NAVIDROME_PLACEHOLDER_ARTWORK_MAX_BYTES) return false
     if (!isWebpArtworkPayload(bytes)) return false
-    if (sha256Hex.equals(NAVIDROME_PLACEHOLDER_ARTWORK_SHA256, ignoreCase = true)) return true
+    val isKnownPlaceholderSha = NAVIDROME_PLACEHOLDER_ARTWORK_SHA256S.any { knownSha ->
+        sha256Hex.equals(knownSha, ignoreCase = true)
+    }
+    if (isKnownPlaceholderSha) {
+        return bytes.size <= NAVIDROME_PLACEHOLDER_ARTWORK_EXACT_SHA_MAX_BYTES
+    }
+    if (bytes.size >= NAVIDROME_PLACEHOLDER_ARTWORK_MAX_BYTES) return false
     return differenceHash?.let { hash ->
         navidromePlaceholderArtworkDHashDistance(hash) <= NAVIDROME_PLACEHOLDER_ARTWORK_DHASH_DISTANCE
     } == true
