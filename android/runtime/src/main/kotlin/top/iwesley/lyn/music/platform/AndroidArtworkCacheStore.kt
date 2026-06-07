@@ -8,6 +8,7 @@ import android.system.Os
 import java.io.File
 import java.net.URI
 import java.net.URL
+import kotlin.jvm.Volatile
 import kotlinx.coroutines.flow.Flow
 import top.iwesley.lyn.music.core.model.ArtworkCachedTarget
 import top.iwesley.lyn.music.core.model.ArtworkCachedTargetRegistry
@@ -23,12 +24,33 @@ import top.iwesley.lyn.music.core.model.resolveArtworkCacheTargets
 import top.iwesley.lyn.music.core.model.stableArtworkCacheHash
 import top.iwesley.lyn.music.domain.readRemotePlaybackUrlCandidateWithFallback
 
-fun createAndroidArtworkCacheStore(context: Context): ArtworkCacheStore = AndroidArtworkCacheStore(context)
+fun createAndroidArtworkCacheStore(context: Context): ArtworkCacheStore {
+    return SharedAndroidArtworkCacheStore.get(context.applicationContext.cacheDir)
+}
+
+internal object SharedAndroidArtworkCacheStore {
+    @Volatile
+    private var store: ArtworkCacheStore? = null
+
+    fun get(cacheDirectory: File): ArtworkCacheStore {
+        return store ?: synchronized(this) {
+            store ?: AndroidArtworkCacheStore(
+                directory = File(cacheDirectory, "artwork-cache"),
+            ).also { store = it }
+        }
+    }
+
+    internal fun resetForTesting() {
+        synchronized(this) {
+            store = null
+        }
+    }
+}
 
 private class AndroidArtworkCacheStore(
-    context: Context,
+    directory: File,
 ) : ArtworkCacheStore {
-    private val directory = File(context.cacheDir, "artwork-cache").apply { mkdirs() }
+    private val directory = directory.apply { mkdirs() }
     private val versionRegistry = ArtworkCacheVersionRegistry()
     private val targetRegistry = ArtworkCachedTargetRegistry()
 
