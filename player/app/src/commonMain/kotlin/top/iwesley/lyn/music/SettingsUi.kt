@@ -85,6 +85,7 @@ import top.iwesley.lyn.music.core.model.AppThemeTokens
 import top.iwesley.lyn.music.core.model.BuildMetadata
 import top.iwesley.lyn.music.core.model.LyricsShareFontOption
 import top.iwesley.lyn.music.core.model.LyricsSourceConfig
+import top.iwesley.lyn.music.core.model.LynMusicUpdateLinks
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.PlatformDescriptor
 import top.iwesley.lyn.music.core.model.deriveAppThemePalette
@@ -92,8 +93,10 @@ import top.iwesley.lyn.music.core.model.formatThemeHexColor
 import top.iwesley.lyn.music.core.model.presetThemeTokens
 import top.iwesley.lyn.music.core.model.resolveAppThemeTextPalette
 import top.iwesley.lyn.music.feature.settings.CustomThemeColorRole
+import top.iwesley.lyn.music.feature.settings.AppUpdateUiStatus
 import top.iwesley.lyn.music.feature.settings.SettingsIntent
 import top.iwesley.lyn.music.feature.settings.SettingsState
+import top.iwesley.lyn.music.feature.settings.toAppUpdateUiModel
 import top.iwesley.lyn.music.platform.PlatformBackHandler
 import top.iwesley.lyn.music.platform.lyricsSharePreviewFontFamily
 import top.iwesley.lyn.music.ui.mainShellColors
@@ -248,6 +251,7 @@ internal fun SettingsTab(
                         sections = availableSections,
                         selectedSection = desktopSelectedSection,
                         desktop = true,
+                        showAppUpdateBadge = state.appUpdateHasNewVersion == true,
                         onSectionSelected = { section ->
                             desktopSelectedSectionName = section.name
                         },
@@ -316,6 +320,8 @@ internal fun SettingsTab(
 
                         SettingsSection.AboutApp -> AboutAppSettingsPane(
                             platformName = platform.name,
+                            state = state,
+                            onSettingsIntent = onSettingsIntent,
                             showHeading = true,
                             modifier = Modifier
                                 .weight(1f)
@@ -338,6 +344,7 @@ internal fun SettingsTab(
                             sections = availableSections,
                             selectedSection = null,
                             desktop = false,
+                            showAppUpdateBadge = state.appUpdateHasNewVersion == true,
                             onSectionSelected = { section ->
                                 desktopSelectedSectionName = section.name
                                 mobileDetailSectionName = section.name
@@ -403,6 +410,8 @@ internal fun SettingsTab(
 
                                 SettingsSection.AboutApp -> AboutAppSettingsPane(
                                     platformName = platform.name,
+                                    state = state,
+                                    onSettingsIntent = onSettingsIntent,
                                     showHeading = false,
                                     modifier = detailModifier,
                                 )
@@ -435,6 +444,7 @@ private fun SettingsSectionListPane(
     sections: List<SettingsSection>,
     selectedSection: SettingsSection?,
     desktop: Boolean,
+    showAppUpdateBadge: Boolean,
     onSectionSelected: (SettingsSection) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -454,6 +464,7 @@ private fun SettingsSectionListPane(
                 section = section,
                 selected = desktop && selectedSection == section,
                 showSubtitle = !desktop,
+                showUpdateBadge = showAppUpdateBadge && section == SettingsSection.AboutApp,
                 onClick = { onSectionSelected(section) },
             )
         }
@@ -465,6 +476,7 @@ private fun SettingsSectionListItem(
     section: SettingsSection,
     selected: Boolean,
     showSubtitle: Boolean,
+    showUpdateBadge: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -497,11 +509,12 @@ private fun SettingsSectionListItem(
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
+            BadgedIcon(
                 imageVector = settingsSectionIcon(section),
                 contentDescription = null,
-                tint = iconTint,
+                showBadge = showUpdateBadge,
                 modifier = Modifier.size(24.dp),
+                tint = iconTint,
             )
             Column(
                 modifier = Modifier.weight(1f),
@@ -1858,10 +1871,15 @@ private fun AboutDeviceSettingsPane(
 @Composable
 private fun AboutAppSettingsPane(
     platformName: String,
+    state: SettingsState,
+    onSettingsIntent: (SettingsIntent) -> Unit,
     showHeading: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val shellColors = mainShellColors
+    val uriHandler = LocalUriHandler.current
+    val appUpdateUiModel = state.toAppUpdateUiModel()
+    val appUpdateChecking = appUpdateUiModel.status == AppUpdateUiStatus.Checking
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -1908,6 +1926,90 @@ private fun AboutAppSettingsPane(
                 monospace = true,
             )
         }
+        AboutDeviceInfoCard(title = "版本更新") {
+            when (appUpdateUiModel.status) {
+                AppUpdateUiStatus.Checking -> {
+                    Text(
+                        text = appUpdateUiModel.message.orEmpty(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = shellColors.secondaryText,
+                    )
+                }
+
+                AppUpdateUiStatus.Error -> {
+                    Text(
+                        text = appUpdateUiModel.message.orEmpty(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+
+                AppUpdateUiStatus.UpdateAvailable -> {
+                    AboutAppFieldRow(
+                        label = "最新版本",
+                        value = appUpdateUiModel.latestVersion.orEmpty(),
+                        monospace = true,
+                    )
+                    Text(
+                        text = appUpdateUiModel.message.orEmpty(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = shellColors.secondaryText,
+                    )
+                }
+
+                AppUpdateUiStatus.UpToDate -> {
+                    Text(
+                        text = appUpdateUiModel.message.orEmpty(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = shellColors.secondaryText,
+                    )
+                }
+
+                AppUpdateUiStatus.Idle -> Unit
+            }
+            appUpdateUiModel.errorMessage?.let { errorMessage ->
+                Text(
+                    text = errorMessage,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                OutlinedButton(
+                    onClick = { onSettingsIntent(SettingsIntent.CheckAppUpdate) },
+                    enabled = !appUpdateChecking,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    if (appUpdateChecking) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Rounded.Sync,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (appUpdateChecking) "检查中" else "检查更新")
+                }
+                if (appUpdateUiModel.status == AppUpdateUiStatus.UpdateAvailable) {
+                    Button(
+                        onClick = {
+                            uriHandler.openUri(appUpdateUiModel.downloadUrl)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("打开下载页")
+                    }
+                }
+            }
+        }
         AboutDeviceInfoCard(title = "开发者") {
             AboutAppFieldRow(
                 label = "名称",
@@ -1917,8 +2019,8 @@ private fun AboutAppSettingsPane(
         AboutDeviceInfoCard(title = "项目地址") {
             AboutAppLinkFieldRow(
                 label = "地址",
-                value = ABOUT_APP_PROJECT_URL,
-                url = ABOUT_APP_PROJECT_URL,
+                value = LynMusicUpdateLinks.PROJECT_URL,
+                url = LynMusicUpdateLinks.PROJECT_URL,
             )
         }
         AboutDeviceInfoCard(title = "微信公众号") {
@@ -2355,7 +2457,6 @@ private const val ABOUT_APP_NAME = "LynMusic"
 private const val ABOUT_APP_SUMMARY =
     "以下为开发者、项目地址和公众号信息。"
 private const val ABOUT_APP_DEVELOPER = "锋风"
-private const val ABOUT_APP_PROJECT_URL = "https://github.com/wesley666/LynMusic"
 private const val ABOUT_APP_WECHAT_ACCOUNT = "锋风"
 
 @Composable

@@ -283,6 +283,7 @@ internal fun MobileShell(
     val mobileNavIconSize = 29.dp
     val moreTabs = remember(platform) { mobileMoreNavigationTabs(platform) }
     val isMoreSelected = selectedTab in moreTabs
+    val showSettingsUpdateBadge = settingsState.appUpdateHasNewVersion == true
     val effectivePlayerSnapshot = playerState.effectiveSnapshot
     val keyboardController = LocalSoftwareKeyboardController.current
     var isMoreSheetVisible by rememberSaveable { mutableStateOf(false) }
@@ -355,10 +356,12 @@ internal fun MobileShell(
                         selected = isMoreSelected,
                         onClick = { isMoreSheetVisible = true },
                         icon = {
-                            Icon(
-                                Icons.Rounded.MoreHoriz,
+                            BadgedIcon(
+                                imageVector = Icons.Rounded.MoreHoriz,
                                 contentDescription = "更多",
+                                showBadge = showSettingsUpdateBadge,
                                 modifier = Modifier.size(mobileNavIconSize),
+                                iconModifier = Modifier.size(mobileNavIconSize),
                             )
                         },
                         colors = NavigationBarItemDefaults.colors(
@@ -419,6 +422,7 @@ internal fun MobileShell(
                 selectMobileTab(tab)
             },
             tabs = moreTabs,
+            showSettingsUpdateBadge = showSettingsUpdateBadge,
         )
     }
 }
@@ -431,6 +435,7 @@ private fun MobileMoreSheet(
     onDismiss: () -> Unit,
     onSelect: (AppTab) -> Unit,
     tabs: List<AppTab>,
+    showSettingsUpdateBadge: Boolean,
 ) {
     val shellColors = mainShellColors
     val items = remember(tabs) {
@@ -478,10 +483,16 @@ private fun MobileMoreSheet(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(
+                    BadgedIcon(
                         imageVector = icon,
                         contentDescription = label,
-                        tint = if (selected) MaterialTheme.colorScheme.onSecondary else MaterialTheme.colorScheme.primary,
+                        showBadge = tab == AppTab.Settings && showSettingsUpdateBadge,
+                        modifier = Modifier.size(24.dp),
+                        tint = if (selected) {
+                            MaterialTheme.colorScheme.onSecondary
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        },
                     )
                     Text(
                         text = label,
@@ -543,6 +554,7 @@ internal fun DesktopShell(
                 DesktopNav(
                     selectedTab = selectedTab,
                     platform = platform,
+                    showSettingsUpdateBadge = settingsState.appUpdateHasNewVersion == true,
                     onTabSelected = onTabSelected,
                     modifier = Modifier.padding(horizontal = 18.dp),
                 )
@@ -619,6 +631,7 @@ internal fun DesktopShell(
 private fun DesktopNav(
     selectedTab: AppTab,
     platform: PlatformDescriptor,
+    showSettingsUpdateBadge: Boolean,
     onTabSelected: (AppTab) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -658,11 +671,12 @@ private fun DesktopNav(
                         .background(if (selected) primary else Color.Transparent),
                 )
                 Spacer(Modifier.width(17.dp))
-                Icon(
-                    icon,
+                BadgedIcon(
+                    imageVector = icon,
                     contentDescription = label,
-                    tint = if (selected) primary else inactiveContent,
+                    showBadge = tab == AppTab.Settings && showSettingsUpdateBadge,
                     modifier = Modifier.size(24.dp),
+                    tint = if (selected) primary else inactiveContent,
                 )
                 Spacer(Modifier.width(18.dp))
                 Text(

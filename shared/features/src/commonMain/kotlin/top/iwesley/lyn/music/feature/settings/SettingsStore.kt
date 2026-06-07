@@ -2,8 +2,10 @@ package top.iwesley.lyn.music.feature.settings
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlin.random.Random
 import kotlin.time.Clock
+import top.iwesley.lyn.music.core.model.AppReleaseInfo
 import top.iwesley.lyn.music.core.model.AppStorageCategory
 import top.iwesley.lyn.music.core.model.AppStorageGateway
 import top.iwesley.lyn.music.core.model.AppStorageSnapshot
@@ -12,6 +14,7 @@ import top.iwesley.lyn.music.core.model.AppThemeId
 import top.iwesley.lyn.music.core.model.AppThemeTextPalette
 import top.iwesley.lyn.music.core.model.AppThemeTextPalettePreferences
 import top.iwesley.lyn.music.core.model.AppThemeTokens
+import top.iwesley.lyn.music.core.model.BuildMetadata
 import top.iwesley.lyn.music.core.model.DeviceInfoGateway
 import top.iwesley.lyn.music.core.model.DeviceInfoSnapshot
 import top.iwesley.lyn.music.core.model.DesktopLyricsPlatformService
@@ -33,10 +36,13 @@ import top.iwesley.lyn.music.core.model.VlcPathPickerPlatformService
 import top.iwesley.lyn.music.core.model.WorkflowLyricsSourceConfig
 import top.iwesley.lyn.music.core.model.defaultCustomThemeTokens
 import top.iwesley.lyn.music.core.model.defaultThemeTextPalettePreferences
+import top.iwesley.lyn.music.core.model.isAppReleaseNewer
 import top.iwesley.lyn.music.core.model.withThemePalette
 import top.iwesley.lyn.music.core.mvi.BaseStore
+import top.iwesley.lyn.music.data.repository.AppUpdateRepository
 import top.iwesley.lyn.music.data.repository.LRCLIB_JSON_MAP_EXTRACTOR
 import top.iwesley.lyn.music.data.repository.SettingsRepository
+import top.iwesley.lyn.music.data.repository.UnsupportedAppUpdateRepository
 import top.iwesley.lyn.music.domain.DEFAULT_LRCAPI_URL
 import top.iwesley.lyn.music.domain.MANAGED_LRCAPI_SOURCE_ID
 import top.iwesley.lyn.music.domain.MANAGED_MUSICMATCH_SOURCE_ID
@@ -99,6 +105,10 @@ data class SettingsState(
     val deviceInfoSnapshot: DeviceInfoSnapshot? = null,
     val deviceInfoLoading: Boolean = false,
     val deviceInfoLoaded: Boolean = false,
+    val appUpdateChecking: Boolean = false,
+    val appUpdateLatestRelease: AppReleaseInfo? = null,
+    val appUpdateHasNewVersion: Boolean? = null,
+    val appUpdateError: String? = null,
     val desktopVlcAutoDetectedPath: String? = null,
     val desktopVlcManualPath: String? = null,
     val desktopVlcEffectivePath: String? = null,
@@ -141,6 +151,8 @@ sealed interface SettingsIntent {
     data class LoadStorageUsage(val force: Boolean = false) : SettingsIntent
     data class ClearStorageCategory(val category: AppStorageCategory) : SettingsIntent
     data class LoadDeviceInfo(val force: Boolean = false) : SettingsIntent
+    data object CheckAppUpdate : SettingsIntent
+    data object CheckAppUpdateSilently : SettingsIntent
     data object LoadLyricsShareImportedFonts : SettingsIntent
     data object ImportLyricsShareFont : SettingsIntent
     data class DeleteLyricsShareImportedFont(val fontKey: String) : SettingsIntent
@@ -173,6 +185,8 @@ class SettingsStore(
     private val lyricsShareFontPreferencesStore: LyricsShareFontPreferencesStore =
         UnsupportedLyricsShareFontPreferencesStore,
     private val vlcPathPickerPlatformService: VlcPathPickerPlatformService = UnsupportedVlcPathPickerPlatformService,
+    private val appUpdateRepository: AppUpdateRepository = UnsupportedAppUpdateRepository,
+    private val currentAppVersionName: String = BuildMetadata.appVersionName,
     private val desktopLyricsPlatformService: DesktopLyricsPlatformService =
         UnsupportedDesktopLyricsPlatformService,
 ) : BaseStore<SettingsState, SettingsIntent, SettingsEffect>(
@@ -183,6 +197,8 @@ class SettingsStore(
     scope = scope,
 ) {
     private var desktopLyricsPermissionRequestPending = false
+    private val appUpdateCheckMutex = Mutex()
+    private var silentAppUpdateCheckStarted = false
 
     init {
         scope.launch {
@@ -371,6 +387,10 @@ class SettingsStore(
             is SettingsIntent.ClearStorageCategory -> clearStorageCategory(intent.category)
 
             is SettingsIntent.LoadDeviceInfo -> loadDeviceInfo(force = intent.force)
+
+            SettingsIntent.CheckAppUpdate -> checkAppUpdate(silent = false)
+
+            SettingsIntent.CheckAppUpdateSilently -> checkAppUpdate(silent = true)
 
             SettingsIntent.LoadLyricsShareImportedFonts -> loadLyricsShareImportedFonts()
 
@@ -917,6 +937,57 @@ class SettingsStore(
                     )
                 },
             )
+        }
+    }
+
+    private suspend fun checkAppUpdate(silent: Boolean) {
+        if (silent) {
+            if (silentAppUpdateCheckStarted) return
+            silentAppUpdateCheckStarted = true
+        }
+        if (!appUpdateCheckMutex.tryLock()) return
+        try {
+            updateState {
+                it.copy(
+                    appUpdateChecking = true,
+                    appUpdateError = if (silent) it.appUpdateError else null,
+                    message = if (silent) it.message else null,
+                )
+            }
+            val result = appUpdateRepository.latestRelease()
+            updateState { latest ->
+                result.fold(
+                    onSuccess = { release ->
+                        val hasNewVersion = isAppReleaseNewer(
+                            currentVersionName = currentAppVersionName,
+                            releaseTagName = release.tagName,
+                        )
+                        latest.copy(
+                            appUpdateChecking = false,
+                            appUpdateLatestRelease = release,
+                            appUpdateHasNewVersion = hasNewVersion,
+                            appUpdateError = null,
+                            message = when {
+                                silent -> latest.message
+                                hasNewVersion -> "发现新版本 ${release.tagName}。"
+                                else -> "当前已是最新版本。"
+                            },
+                        )
+                    },
+                    onFailure = { error ->
+                        val message = error.message ?: "检查更新失败。"
+                        latest.copy(
+                            appUpdateChecking = false,
+                            appUpdateLatestRelease = latest.appUpdateLatestRelease,
+                            appUpdateHasNewVersion = latest.appUpdateHasNewVersion,
+                            appUpdateError = if (silent) null else message,
+                            message = if (silent) latest.message else message,
+                        )
+                    },
+                )
+            }
+        } finally {
+            appUpdateCheckMutex.unlock()
         }
     }
 

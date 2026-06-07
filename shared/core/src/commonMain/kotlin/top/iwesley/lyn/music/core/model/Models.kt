@@ -484,6 +484,14 @@ data class LyricsHttpResponse(
     val headers: Map<String, String> = emptyMap(),
 )
 
+data class AppReleaseInfo(
+    val tagName: String,
+    val name: String,
+    val body: String,
+    val htmlUrl: String,
+    val publishedAt: String,
+)
+
 data class PlatformCapabilities(
     val supportsLocalFolderImport: Boolean,
     val supportsSambaImport: Boolean,

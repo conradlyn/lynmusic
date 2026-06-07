@@ -57,6 +57,7 @@ import top.iwesley.lyn.music.core.model.UnsupportedVlcPathPickerPlatformService
 import top.iwesley.lyn.music.core.model.VlcPathPickerPlatformService
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
 import top.iwesley.lyn.music.data.repository.DefaultDailyRecommendationDateChangeNotifier
+import top.iwesley.lyn.music.data.repository.DefaultAppUpdateRepository
 import top.iwesley.lyn.music.data.repository.DefaultLyricsRepository
 import top.iwesley.lyn.music.data.repository.DefaultSettingsRepository
 import top.iwesley.lyn.music.data.repository.DailyRecommendationDateChangeNotifier
@@ -205,6 +206,7 @@ fun buildSharedGraph(
         navidromeAudioQualityPreferencesStore = runtimeServices.navidromeAudioQualityPreferencesStore,
         playbackDecoderPreferencesStore = runtimeServices.playbackDecoderPreferencesStore,
     )
+    val appUpdateRepository = DefaultAppUpdateRepository(runtimeServices.lyricsHttpClient)
     NavidromeLocatorRuntime.install(
         object : top.iwesley.lyn.music.core.model.NavidromeLocatorResolver {
             override suspend fun resolveStreamUrl(
@@ -396,6 +398,7 @@ fun buildSharedGraph(
             lyricsShareFontLibraryPlatformService = runtimeServices.lyricsShareFontLibraryPlatformService,
             lyricsShareFontPreferencesStore = runtimeServices.lyricsShareFontPreferencesStore,
             vlcPathPickerPlatformService = runtimeServices.vlcPathPickerPlatformService,
+            appUpdateRepository = appUpdateRepository,
             desktopLyricsPlatformService = runtimeServices.desktopLyricsPlatformService,
         ),
         lyricsRepository = lyricsRepository,

@@ -88,6 +88,7 @@ import androidx.tv.material3.rememberDrawerState
 import coil3.compose.rememberAsyncImagePainter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import top.iwesley.lyn.music.BadgedIcon
 import top.iwesley.lyn.music.core.model.Album
 import top.iwesley.lyn.music.core.model.Artist
 import top.iwesley.lyn.music.core.model.ArtworkCacheStore
@@ -123,6 +124,7 @@ internal fun TvMainScreen(
     libraryState: LibraryState,
     favoritesState: FavoritesState,
     playerState: PlayerState,
+    showSettingsUpdateBadge: Boolean,
     artworkCacheStore: ArtworkCacheStore,
     onIntent: (TvMainIntent) -> Unit,
     onPlayerIntent: (PlayerIntent) -> Unit,
@@ -153,6 +155,7 @@ internal fun TvMainScreen(
                 favoritesFocusRequester = favoritesNavFocusRequester,
                 playerState = playerState,
                 artworkCacheStore = artworkCacheStore,
+                showSettingsUpdateBadge = showSettingsUpdateBadge,
                 onDestinationSelected = { onIntent(TvMainIntent.SelectDestination(it)) },
                 onPlayerIntent = onPlayerIntent,
                 onOpenPlayer = { context.startActivity(TvPlayerActivity.createIntent(context)) },
@@ -217,6 +220,7 @@ private fun NavigationDrawerScope.TvNavigationRail(
     favoritesFocusRequester: FocusRequester,
     playerState: PlayerState,
     artworkCacheStore: ArtworkCacheStore,
+    showSettingsUpdateBadge: Boolean,
     onDestinationSelected: (TvMainDestination) -> Unit,
     onPlayerIntent: (PlayerIntent) -> Unit,
     onOpenPlayer: () -> Unit,
@@ -265,7 +269,12 @@ private fun NavigationDrawerScope.TvNavigationRail(
                     onClick = onOpenSettings,
                     modifier = Modifier.size(44.dp),
                 ) {
-                    Icon(Icons.Rounded.Settings, contentDescription = "设置")
+                    BadgedIcon(
+                        imageVector = Icons.Rounded.Settings,
+                        contentDescription = "设置",
+                        showBadge = showSettingsUpdateBadge,
+                        modifier = Modifier.size(28.dp),
+                    )
                 }
             }
         } else {

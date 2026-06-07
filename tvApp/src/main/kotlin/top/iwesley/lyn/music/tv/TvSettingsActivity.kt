@@ -89,6 +89,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
@@ -116,6 +117,7 @@ import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import top.iwesley.lyn.music.BadgedIcon
 import top.iwesley.lyn.music.LynMusicAppComponent
 import top.iwesley.lyn.music.core.model.AppDisplayScalePreset
 import top.iwesley.lyn.music.core.model.AppStorageCategory
@@ -126,6 +128,7 @@ import top.iwesley.lyn.music.core.model.GlobalDiagnosticLogger
 import top.iwesley.lyn.music.core.model.ImportSource
 import top.iwesley.lyn.music.core.model.ImportSourceType
 import top.iwesley.lyn.music.core.model.LocalFolderSelection
+import top.iwesley.lyn.music.core.model.LynMusicUpdateLinks
 import top.iwesley.lyn.music.core.model.PlatformCapabilities
 import top.iwesley.lyn.music.core.model.SourceWithStatus
 import top.iwesley.lyn.music.core.model.SubsonicAuthMode
@@ -137,8 +140,10 @@ import top.iwesley.lyn.music.feature.importing.ImportScanOperation
 import top.iwesley.lyn.music.feature.importing.ImportState
 import top.iwesley.lyn.music.feature.importing.RemoteSourceEditorState
 import top.iwesley.lyn.music.feature.importing.formatImportScanSummary
+import top.iwesley.lyn.music.feature.settings.AppUpdateUiStatus
 import top.iwesley.lyn.music.feature.settings.SettingsIntent
 import top.iwesley.lyn.music.feature.settings.SettingsState
+import top.iwesley.lyn.music.feature.settings.toAppUpdateUiModel
 import top.iwesley.lyn.music.platform.AndroidLocalFolderPicker
 import top.iwesley.lyn.music.tv.ui.TvMainTheme
 
@@ -191,6 +196,10 @@ private fun TvSettingsApp(
     val importState by component.importStore.state.collectAsState()
     val settingsState by component.settingsStore.state.collectAsState()
 
+    LaunchedEffect(component) {
+        component.settingsStore.dispatch(SettingsIntent.CheckAppUpdateSilently)
+    }
+
     TvMainTheme {
         TvSettingsScreen(
             platformName = component.platform.name,
@@ -238,6 +247,7 @@ private fun TvSettingsScreen(
     ) {
         TvSettingsNavigationPane(
             selectedSection = selectedSection,
+            showAppUpdateBadge = settingsState.appUpdateHasNewVersion == true,
             sourcesFocusRequester = sourcesFocusRequester,
             storageFocusRequester = storageFocusRequester,
             aboutDeviceFocusRequester = aboutDeviceFocusRequester,
@@ -285,6 +295,8 @@ private fun TvSettingsScreen(
 
                 TvSettingsSection.AboutApp -> TvAboutAppSettingsPane(
                     platformName = platformName,
+                    state = settingsState,
+                    onIntent = onSettingsIntent,
                     initialFocusRequester = contentInitialFocusRequester,
                     leftFocusRequester = selectedSectionFocusRequester,
                     focusCoordinator = focusCoordinator,
@@ -298,6 +310,7 @@ private fun TvSettingsScreen(
 @Composable
 private fun TvSettingsNavigationPane(
     selectedSection: TvSettingsSection,
+    showAppUpdateBadge: Boolean,
     sourcesFocusRequester: FocusRequester,
     storageFocusRequester: FocusRequester,
     aboutDeviceFocusRequester: FocusRequester,
@@ -325,6 +338,7 @@ private fun TvSettingsNavigationPane(
             TvSettingsSectionCard(
                 section = section,
                 selected = selectedSection == section,
+                showUpdateBadge = showAppUpdateBadge && section == TvSettingsSection.AboutApp,
                 focusRequester = when (section) {
                     TvSettingsSection.Sources -> sourcesFocusRequester
                     TvSettingsSection.Storage -> storageFocusRequester
@@ -343,6 +357,7 @@ private fun TvSettingsNavigationPane(
 private fun TvSettingsSectionCard(
     section: TvSettingsSection,
     selected: Boolean,
+    showUpdateBadge: Boolean,
     focusRequester: FocusRequester,
     rightFocusRequester: FocusRequester,
     focusCoordinator: TvSettingsFocusCoordinator,
@@ -402,11 +417,12 @@ private fun TvSettingsSectionCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Icon(
-                section.icon,
+            BadgedIcon(
+                imageVector = section.icon,
                 contentDescription = null,
-                tint = if (focused) focusedContentColor else if (selected) Color.White else primaryContentColor,
+                showBadge = showUpdateBadge,
                 modifier = Modifier.size(24.dp),
+                tint = if (focused) focusedContentColor else if (selected) Color.White else primaryContentColor,
             )
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(
@@ -1882,14 +1898,23 @@ private fun TvAboutDeviceSettingsPane(
 @Composable
 private fun TvAboutAppSettingsPane(
     platformName: String,
+    state: SettingsState,
+    onIntent: (SettingsIntent) -> Unit,
     initialFocusRequester: FocusRequester,
     leftFocusRequester: FocusRequester,
     focusCoordinator: TvSettingsFocusCoordinator,
     modifier: Modifier = Modifier,
 ) {
+    val uriHandler = LocalUriHandler.current
+    val appUpdateUiModel = state.toAppUpdateUiModel()
+    val appUpdateChecking = appUpdateUiModel.status == AppUpdateUiStatus.Checking
     val listState = rememberLazyListState()
     val focusChain = rememberTvSettingsFocusChain(
-        focusRows = listOf(listOf("about-app:scroll")),
+        focusRows = listOf(
+            listOf("about-app:scroll"),
+            listOf("about-app:check-update"),
+            listOf("about-app:open-release"),
+        ),
         initialFocusRequester = initialFocusRequester,
         leftFocusRequester = leftFocusRequester,
         listState = listState,
@@ -1924,11 +1949,86 @@ private fun TvAboutAppSettingsPane(
             )
         }
         item {
+            TvSettingsInfoCard(title = "版本更新") {
+                when (appUpdateUiModel.status) {
+                    AppUpdateUiStatus.Checking -> {
+                        Text(
+                            text = appUpdateUiModel.message.orEmpty(),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+
+                    AppUpdateUiStatus.Error -> {
+                        Text(
+                            text = appUpdateUiModel.message.orEmpty(),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+
+                    AppUpdateUiStatus.UpdateAvailable -> {
+                        TvSettingsFieldRow(label = "最新版本", value = appUpdateUiModel.latestVersion.orEmpty())
+                        Text(
+                            text = appUpdateUiModel.message.orEmpty(),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+
+                    AppUpdateUiStatus.UpToDate -> {
+                        Text(
+                            text = appUpdateUiModel.message.orEmpty(),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+
+                    AppUpdateUiStatus.Idle -> Unit
+                }
+                appUpdateUiModel.errorMessage?.let { errorMessage ->
+                    Text(
+                        text = errorMessage,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                TvSettingsActionButton(
+                    onClick = { onIntent(SettingsIntent.CheckAppUpdate) },
+                    enabled = !appUpdateChecking,
+                    focusKey = "about-app:check-update",
+                    focusChain = focusChain,
+                ) { contentColor ->
+                    if (appUpdateChecking) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = contentColor,
+                        )
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text(if (appUpdateChecking) "检查中" else "检查更新", color = contentColor)
+                }
+                if (appUpdateUiModel.status == AppUpdateUiStatus.UpdateAvailable) {
+                    TvSettingsActionButton(
+                        onClick = {
+                            uriHandler.openUri(appUpdateUiModel.downloadUrl)
+                        },
+                        style = TvSettingsActionButtonStyle.Filled,
+                        focusKey = "about-app:open-release",
+                        focusChain = focusChain,
+                    ) { contentColor ->
+                        Text("打开下载页", color = contentColor)
+                    }
+                }
+            }
+        }
+        item {
             TvDeviceInfoGroup(
                 title = "开发者",
                 rows = listOf(
                     "名称" to "Wesley",
-                    "项目地址" to "https://github.com/wesley666/LynMusic",
+                    "项目地址" to LynMusicUpdateLinks.PROJECT_URL,
                 ),
             )
         }

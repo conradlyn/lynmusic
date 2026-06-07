@@ -379,6 +379,7 @@ fun App(
         LaunchedEffect(component) {
             withFrameNanos { }
             component.playerStore.startHydration()
+            component.settingsStore.dispatch(SettingsIntent.CheckAppUpdateSilently)
             activateStartupStores(
                 component = component,
                 selectedTab = selectedTab,

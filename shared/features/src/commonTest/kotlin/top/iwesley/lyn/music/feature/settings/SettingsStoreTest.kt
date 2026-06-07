@@ -1,6 +1,7 @@
 package top.iwesley.lyn.music.feature.settings
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -17,6 +18,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import top.iwesley.lyn.music.core.model.AppReleaseInfo
 import top.iwesley.lyn.music.core.model.AppStorageCategory
 import top.iwesley.lyn.music.core.model.AppStorageCategoryUsage
 import top.iwesley.lyn.music.core.model.AppStorageGateway
@@ -36,6 +38,7 @@ import top.iwesley.lyn.music.core.model.LyricsShareFontPreferencesStore
 import top.iwesley.lyn.music.core.model.LyricsResponseFormat
 import top.iwesley.lyn.music.core.model.LyricsSourceConfig
 import top.iwesley.lyn.music.core.model.LyricsSourceDefinition
+import top.iwesley.lyn.music.core.model.LynMusicUpdateLinks
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.RequestMethod
 import top.iwesley.lyn.music.core.model.VlcPathPickerPlatformService
@@ -47,8 +50,10 @@ import top.iwesley.lyn.music.core.model.WorkflowSearchConfig
 import top.iwesley.lyn.music.core.model.defaultCustomThemeTokens
 import top.iwesley.lyn.music.core.model.defaultThemeTextPalettePreferences
 import top.iwesley.lyn.music.core.model.deriveAppThemePalette
+import top.iwesley.lyn.music.core.model.isAppReleaseNewer
 import top.iwesley.lyn.music.core.model.resolveAppThemeTextPalette
 import top.iwesley.lyn.music.core.model.withThemePalette
+import top.iwesley.lyn.music.data.repository.AppUpdateRepository
 import top.iwesley.lyn.music.data.repository.SettingsRepository
 import top.iwesley.lyn.music.domain.DEFAULT_LRCAPI_URL
 import top.iwesley.lyn.music.domain.MANAGED_LRCAPI_SOURCE_ID
@@ -1347,6 +1352,294 @@ class SettingsStoreTest {
         assertEquals(2, storageGateway.loadCalls)
         scope.cancel()
     }
+
+    @Test
+    fun `checking app update marks newer release`() = runTest {
+        val repository = FakeSettingsRepository()
+        val appUpdateRepository = FakeAppUpdateRepository(
+            Result.success(sampleAppRelease(tagName = "v1.0.8.1")),
+        )
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(
+            repository = repository,
+            scope = scope,
+            appUpdateRepository = appUpdateRepository,
+            currentAppVersionName = "1.0.8",
+        )
+
+        advanceUntilIdle()
+        store.dispatch(SettingsIntent.CheckAppUpdate)
+        advanceUntilIdle()
+
+        val state = store.state.value
+        assertEquals(1, appUpdateRepository.calls)
+        assertFalse(state.appUpdateChecking)
+        assertEquals("v1.0.8.1", state.appUpdateLatestRelease?.tagName)
+        assertEquals(true, state.appUpdateHasNewVersion)
+        assertEquals(null, state.appUpdateError)
+        assertEquals("发现新版本 v1.0.8.1。", state.message)
+        scope.cancel()
+    }
+
+    @Test
+    fun `checking app update marks same release as latest`() = runTest {
+        val repository = FakeSettingsRepository()
+        val appUpdateRepository = FakeAppUpdateRepository(
+            Result.success(sampleAppRelease(tagName = "v1.0.8")),
+        )
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(
+            repository = repository,
+            scope = scope,
+            appUpdateRepository = appUpdateRepository,
+            currentAppVersionName = "1.0.8",
+        )
+
+        advanceUntilIdle()
+        store.dispatch(SettingsIntent.CheckAppUpdate)
+        advanceUntilIdle()
+
+        val state = store.state.value
+        assertFalse(state.appUpdateChecking)
+        assertEquals("v1.0.8", state.appUpdateLatestRelease?.tagName)
+        assertEquals(false, state.appUpdateHasNewVersion)
+        assertEquals(null, state.appUpdateError)
+        assertEquals("当前已是最新版本。", state.message)
+        scope.cancel()
+    }
+
+    @Test
+    fun `app release comparison treats prerelease lower than stable release`() {
+        assertFalse(isAppReleaseNewer(currentVersionName = "2.0.0", releaseTagName = "v2.0.0-rc1"))
+        assertTrue(isAppReleaseNewer(currentVersionName = "2.0.0-rc1", releaseTagName = "v2.0.0"))
+        assertTrue(isAppReleaseNewer(currentVersionName = "1.0.8", releaseTagName = "v1.0.8.1"))
+        assertFalse(isAppReleaseNewer(currentVersionName = "1.0.8", releaseTagName = "v1.0.8"))
+    }
+
+    @Test
+    fun `app update ui model maps checking error update latest and idle states`() {
+        val checking = SettingsState(appUpdateChecking = true).toAppUpdateUiModel()
+        assertEquals(AppUpdateUiStatus.Checking, checking.status)
+        assertEquals("正在检查最新版本...", checking.message)
+
+        val error = SettingsState(appUpdateError = "network down").toAppUpdateUiModel()
+        assertEquals(AppUpdateUiStatus.Error, error.status)
+        assertEquals("network down", error.message)
+
+        val update = SettingsState(
+            appUpdateLatestRelease = sampleAppRelease(tagName = "v1.0.8.1"),
+            appUpdateHasNewVersion = true,
+        ).toAppUpdateUiModel()
+        assertEquals(AppUpdateUiStatus.UpdateAvailable, update.status)
+        assertEquals("v1.0.8.1", update.latestVersion)
+        assertEquals("发现可用更新，可以到公众号获取云盘链接或者 GitHub 下载。", update.message)
+        assertEquals("https://github.com/wesley666/LynMusic/releases/tag/v1.0.8.1", update.downloadUrl)
+
+        val updateWithFallbackUrl = SettingsState(
+            appUpdateLatestRelease = sampleAppRelease(tagName = "v1.0.8.1").copy(htmlUrl = ""),
+            appUpdateHasNewVersion = true,
+        ).toAppUpdateUiModel()
+        assertEquals(LynMusicUpdateLinks.RELEASES_URL, updateWithFallbackUrl.downloadUrl)
+
+        val updateWithError = SettingsState(
+            appUpdateLatestRelease = sampleAppRelease(tagName = "v1.0.8.1"),
+            appUpdateHasNewVersion = true,
+            appUpdateError = "network down",
+        ).toAppUpdateUiModel()
+        assertEquals(AppUpdateUiStatus.UpdateAvailable, updateWithError.status)
+        assertEquals("v1.0.8.1", updateWithError.latestVersion)
+        assertEquals("network down", updateWithError.errorMessage)
+
+        val latest = SettingsState(
+            appUpdateLatestRelease = sampleAppRelease(tagName = "v1.0.8"),
+            appUpdateHasNewVersion = false,
+        ).toAppUpdateUiModel()
+        assertEquals(AppUpdateUiStatus.UpToDate, latest.status)
+        assertEquals("当前已是最新版本。", latest.message)
+
+        val idle = SettingsState().toAppUpdateUiModel()
+        assertEquals(AppUpdateUiStatus.Idle, idle.status)
+        assertEquals(null, idle.message)
+    }
+
+    @Test
+    fun `checking app update failure restores loading state and exposes error`() = runTest {
+        val repository = FakeSettingsRepository()
+        val appUpdateRepository = FakeAppUpdateRepository(
+            Result.failure(IllegalStateException("network down")),
+        )
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(
+            repository = repository,
+            scope = scope,
+            appUpdateRepository = appUpdateRepository,
+            currentAppVersionName = "1.0.8",
+        )
+
+        advanceUntilIdle()
+        store.dispatch(SettingsIntent.CheckAppUpdate)
+        advanceUntilIdle()
+
+        val state = store.state.value
+        assertFalse(state.appUpdateChecking)
+        assertEquals(null, state.appUpdateLatestRelease)
+        assertEquals(null, state.appUpdateHasNewVersion)
+        assertEquals("network down", state.appUpdateError)
+        assertEquals("network down", state.message)
+        scope.cancel()
+    }
+
+    @Test
+    fun `concurrent app update checks only request latest release once`() = runTest {
+        val repository = FakeSettingsRepository()
+        val appUpdateRepository = SuspendedAppUpdateRepository()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(
+            repository = repository,
+            scope = scope,
+            appUpdateRepository = appUpdateRepository,
+            currentAppVersionName = "1.0.8",
+        )
+
+        advanceUntilIdle()
+        store.dispatch(SettingsIntent.CheckAppUpdate)
+        store.dispatch(SettingsIntent.CheckAppUpdate)
+        advanceUntilIdle()
+
+        assertEquals(1, appUpdateRepository.calls)
+
+        appUpdateRepository.complete(Result.success(sampleAppRelease(tagName = "v1.0.8.1")))
+        advanceUntilIdle()
+
+        val state = store.state.value
+        assertFalse(state.appUpdateChecking)
+        assertEquals("v1.0.8.1", state.appUpdateLatestRelease?.tagName)
+        assertEquals(true, state.appUpdateHasNewVersion)
+        scope.cancel()
+    }
+
+    @Test
+    fun `silent app update check marks newer release without message`() = runTest {
+        val repository = FakeSettingsRepository()
+        val appUpdateRepository = FakeAppUpdateRepository(
+            Result.success(sampleAppRelease(tagName = "v1.0.8.1")),
+        )
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(
+            repository = repository,
+            scope = scope,
+            appUpdateRepository = appUpdateRepository,
+            currentAppVersionName = "1.0.8",
+        )
+
+        advanceUntilIdle()
+        store.dispatch(SettingsIntent.CheckAppUpdateSilently)
+        advanceUntilIdle()
+
+        val state = store.state.value
+        assertEquals(1, appUpdateRepository.calls)
+        assertFalse(state.appUpdateChecking)
+        assertEquals("v1.0.8.1", state.appUpdateLatestRelease?.tagName)
+        assertEquals(true, state.appUpdateHasNewVersion)
+        assertEquals(null, state.appUpdateError)
+        assertEquals(null, state.message)
+        scope.cancel()
+    }
+
+    @Test
+    fun `silent app update check failure does not expose message`() = runTest {
+        val repository = FakeSettingsRepository()
+        val appUpdateRepository = FakeAppUpdateRepository(
+            Result.failure(IllegalStateException("network down")),
+        )
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(
+            repository = repository,
+            scope = scope,
+            appUpdateRepository = appUpdateRepository,
+            currentAppVersionName = "1.0.8",
+        )
+
+        advanceUntilIdle()
+        store.dispatch(SettingsIntent.CheckAppUpdateSilently)
+        advanceUntilIdle()
+
+        val state = store.state.value
+        assertEquals(1, appUpdateRepository.calls)
+        assertFalse(state.appUpdateChecking)
+        assertEquals(null, state.appUpdateLatestRelease)
+        assertEquals(null, state.appUpdateHasNewVersion)
+        assertEquals(null, state.appUpdateError)
+        assertEquals(null, state.message)
+        scope.cancel()
+    }
+
+    @Test
+    fun `silent app update check only runs once and manual check can run again`() = runTest {
+        val repository = FakeSettingsRepository()
+        val appUpdateRepository = FakeAppUpdateRepository(
+            Result.success(sampleAppRelease(tagName = "v1.0.8.1")),
+        )
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(
+            repository = repository,
+            scope = scope,
+            appUpdateRepository = appUpdateRepository,
+            currentAppVersionName = "1.0.8",
+        )
+
+        advanceUntilIdle()
+        store.dispatch(SettingsIntent.CheckAppUpdateSilently)
+        advanceUntilIdle()
+        store.dispatch(SettingsIntent.CheckAppUpdateSilently)
+        advanceUntilIdle()
+
+        assertEquals(1, appUpdateRepository.calls)
+
+        appUpdateRepository.nextResult = Result.success(sampleAppRelease(tagName = "v1.0.9"))
+        store.dispatch(SettingsIntent.CheckAppUpdate)
+        advanceUntilIdle()
+
+        val state = store.state.value
+        assertEquals(2, appUpdateRepository.calls)
+        assertFalse(state.appUpdateChecking)
+        assertEquals("v1.0.9", state.appUpdateLatestRelease?.tagName)
+        assertEquals(true, state.appUpdateHasNewVersion)
+        assertEquals("发现新版本 v1.0.9。", state.message)
+        scope.cancel()
+    }
+
+    @Test
+    fun `manual app update failure preserves newer release found silently`() = runTest {
+        val repository = FakeSettingsRepository()
+        val appUpdateRepository = FakeAppUpdateRepository(
+            Result.success(sampleAppRelease(tagName = "v1.0.8.1")),
+        )
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(
+            repository = repository,
+            scope = scope,
+            appUpdateRepository = appUpdateRepository,
+            currentAppVersionName = "1.0.8",
+        )
+
+        advanceUntilIdle()
+        store.dispatch(SettingsIntent.CheckAppUpdateSilently)
+        advanceUntilIdle()
+
+        appUpdateRepository.nextResult = Result.failure(IllegalStateException("network down"))
+        store.dispatch(SettingsIntent.CheckAppUpdate)
+        advanceUntilIdle()
+
+        val state = store.state.value
+        assertEquals(2, appUpdateRepository.calls)
+        assertFalse(state.appUpdateChecking)
+        assertEquals("v1.0.8.1", state.appUpdateLatestRelease?.tagName)
+        assertEquals(true, state.appUpdateHasNewVersion)
+        assertEquals("network down", state.appUpdateError)
+        assertEquals("network down", state.message)
+        scope.cancel()
+    }
 }
 
 private class FakeSettingsRepository(
@@ -1511,6 +1804,33 @@ private class FakeSettingsRepository(
 
     override suspend fun deleteLyricsSource(configId: String) {
         mutableSources.value = mutableSources.value.filterNot { it.id == configId }
+    }
+}
+
+private class FakeAppUpdateRepository(
+    var nextResult: Result<AppReleaseInfo>,
+) : AppUpdateRepository {
+    var calls: Int = 0
+        private set
+
+    override suspend fun latestRelease(): Result<AppReleaseInfo> {
+        calls += 1
+        return nextResult
+    }
+}
+
+private class SuspendedAppUpdateRepository : AppUpdateRepository {
+    private val nextResult = CompletableDeferred<Result<AppReleaseInfo>>()
+    var calls: Int = 0
+        private set
+
+    override suspend fun latestRelease(): Result<AppReleaseInfo> {
+        calls += 1
+        return nextResult.await()
+    }
+
+    fun complete(result: Result<AppReleaseInfo>) {
+        nextResult.complete(result)
     }
 }
 
@@ -1720,6 +2040,18 @@ private fun sampleLrcApiSource(
     urlTemplate: String = "https://lyrics.example/jsonapi",
 ): LyricsSourceConfig {
     return buildManagedLrcApiConfig(urlTemplate)
+}
+
+private fun sampleAppRelease(
+    tagName: String,
+): AppReleaseInfo {
+    return AppReleaseInfo(
+        tagName = tagName,
+        name = "$tagName Release",
+        body = "Release body",
+        htmlUrl = "https://github.com/wesley666/LynMusic/releases/tag/$tagName",
+        publishedAt = "2026-05-17T10:45:00Z",
+    )
 }
 
 private fun workflowJson(

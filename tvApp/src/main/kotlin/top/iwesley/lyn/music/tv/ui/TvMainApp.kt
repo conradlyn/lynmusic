@@ -12,6 +12,7 @@ import top.iwesley.lyn.music.LynMusicAppComponent
 import top.iwesley.lyn.music.feature.favorites.FavoritesIntent
 import top.iwesley.lyn.music.feature.library.LibraryIntent
 import top.iwesley.lyn.music.feature.player.PlayerIntent
+import top.iwesley.lyn.music.feature.settings.SettingsIntent
 import top.iwesley.lyn.music.tv.ConfigureTvImageLoader
 import top.iwesley.lyn.music.tv.TvAppComponentHolder
 import top.iwesley.lyn.music.tv.TvPlayerActivity
@@ -37,10 +38,12 @@ internal fun TvMainApp(
     val libraryState by component.libraryStore.state.collectAsState()
     val favoritesState by component.favoritesStore.state.collectAsState()
     val playerState by component.playerStore.state.collectAsState()
+    val settingsState by component.settingsStore.state.collectAsState()
     val context = LocalContext.current
 
     LaunchedEffect(component, tvStore) {
         component.playerStore.startHydration()
+        component.settingsStore.dispatch(SettingsIntent.CheckAppUpdateSilently)
         tvStore.dispatch(TvMainIntent.ActivateDestination(TvMainDestination.Library))
     }
 
@@ -71,6 +74,7 @@ internal fun TvMainApp(
             libraryState = libraryState,
             favoritesState = favoritesState,
             playerState = playerState,
+            showSettingsUpdateBadge = settingsState.appUpdateHasNewVersion == true,
             artworkCacheStore = component.artworkCacheStore,
             onIntent = tvStore::dispatch,
             onPlayerIntent = component.playerStore::dispatch,
