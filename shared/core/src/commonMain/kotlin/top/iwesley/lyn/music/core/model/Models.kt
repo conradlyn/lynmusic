@@ -30,6 +30,11 @@ enum class ImportSourceType {
     EMBY,
 }
 
+enum class ImportSourceIndexMode {
+    LOCAL_INDEX,
+    ONLINE,
+}
+
 enum class SubsonicAuthMode {
     PASSWORD,
     API_KEY,
@@ -81,6 +86,8 @@ data class Track(
     val bitRate: Int? = null,
     val channelCount: Int? = null,
     val albumId: String? = null,
+    val artistId: String? = null,
+    val remoteFavoriteHint: Boolean? = null,
 )
 
 data class RecentTrack(
@@ -144,13 +151,20 @@ data class ImportSource(
     val lastScannedAt: Long? = null,
     val createdAt: Long = 0L,
     val wanRootReference: String? = null,
+    val indexMode: ImportSourceIndexMode = ImportSourceIndexMode.LOCAL_INDEX,
 )
 
 data class ImportIndexState(
     val sourceId: String,
     val trackCount: Int,
+    val remoteTrackCount: Int? = null,
     val lastScannedAt: Long? = null,
     val lastError: String? = null,
+)
+
+data class NavidromeLibraryProbe(
+    val totalTrackCount: Int?,
+    val supportsOnlineLibraryPaging: Boolean = totalTrackCount != null,
 )
 
 data class SourceWithStatus(
@@ -546,6 +560,10 @@ interface ImportSourceGateway {
         return scanWebDav(draft, sourceId)
     }
     suspend fun testNavidrome(draft: NavidromeSourceDraft)
+    suspend fun probeNavidrome(draft: NavidromeSourceDraft): NavidromeLibraryProbe {
+        testNavidrome(draft)
+        return NavidromeLibraryProbe(totalTrackCount = null)
+    }
     suspend fun scanNavidrome(draft: NavidromeSourceDraft, sourceId: String): ImportScanReport
     suspend fun scanNavidrome(
         draft: NavidromeSourceDraft,

@@ -56,10 +56,14 @@ class RoomPlaylistRepository(
         database.playlistTrackDao().observeAll(),
         database.trackDao().observeAll(),
         database.importSourceDao().observeAll(),
-        database.lyricsCacheDao().observeArtworkLocators(),
-    ) { playlists, playlistTracks, trackEntities, sources, artworkRows ->
+        combine(
+            database.lyricsCacheDao().observeArtworkLocators(),
+            database.playlistRemoteBindingDao().observeAll(),
+        ) { artworkRows, remoteBindings -> artworkRows to remoteBindings },
+    ) { playlists, playlistTracks, trackEntities, sources, artworkAndBindings ->
+        val (artworkRows, remoteBindings) = artworkAndBindings
         val enabledSourceIds = sources.asSequence()
-            .filter { it.enabled }
+            .filter { it.isLocalIndexedEnabled() }
             .map { it.id }
             .toSet()
         val artworkOverrides = effectiveArtworkOverridesByTrackId(artworkRows)
@@ -78,12 +82,15 @@ class RoomPlaylistRepository(
                 .map { it.trackId }
                 .toCollection(linkedSetOf())
             val artwork = visiblePlaylistTracks.latestPlaylistArtwork(trackById)
+            if (!playlist.isVisibleInLocalPlaylistBrowser(visiblePlaylistTracks, remoteBindings, enabledSourceIds)) {
+                return@map null
+            }
             playlist.toSummary(
                 memberTrackIds = memberTrackIds,
                 artworkLocator = artwork?.locator,
                 artworkCacheKey = artwork?.cacheKey,
             )
-        }
+        }.filterNotNull()
     }
 
     override fun observePlaylistDetail(playlistId: String): Flow<PlaylistDetail?> {
@@ -92,20 +99,28 @@ class RoomPlaylistRepository(
             database.playlistTrackDao().observeAll(),
             database.trackDao().observeAll(),
             database.importSourceDao().observeAll(),
-            database.lyricsCacheDao().observeArtworkLocators(),
-        ) { playlists, playlistTracks, trackEntities, sources, artworkRows ->
+            combine(
+                database.lyricsCacheDao().observeArtworkLocators(),
+                database.playlistRemoteBindingDao().observeAll(),
+            ) { artworkRows, remoteBindings -> artworkRows to remoteBindings },
+        ) { playlists, playlistTracks, trackEntities, sources, artworkAndBindings ->
+            val (artworkRows, remoteBindings) = artworkAndBindings
             val playlist = playlists.firstOrNull { it.id == playlistId } ?: return@combine null
             val artworkOverrides = effectiveArtworkOverridesByTrackId(artworkRows)
             val enabledSourceIds = sources.asSequence()
-                .filter { it.enabled }
+                .filter { it.isLocalIndexedEnabled() }
                 .map { it.id }
                 .toSet()
+            val visiblePlaylistTracks = playlistTracks.filter { it.sourceId in enabledSourceIds }
+            if (!playlist.isVisibleInLocalPlaylistBrowser(visiblePlaylistTracks, remoteBindings, enabledSourceIds)) {
+                return@combine null
+            }
             val trackById = trackEntities.associate { entity ->
                 entity.id to entity.toDomain(artworkOverrides[entity.id])
             }
             val sourceLabelById = sources.associate { it.id to it.label }
             playlist.toDetail(
-                tracks = playlistTracks.filter { it.sourceId in enabledSourceIds },
+                tracks = visiblePlaylistTracks,
                 trackById = trackById,
                 sourceLabelById = sourceLabelById,
             )
@@ -141,7 +156,8 @@ class RoomPlaylistRepository(
             require(duplicate == null || duplicate.id == playlistId) { "歌单已存在。" }
 
             val bindings = database.playlistRemoteBindingDao().getByPlaylistId(playlistId)
-            bindings.forEach { binding ->
+            val writableBindings = localPlaylistMutationRemoteBindings(playlist, bindings)
+            writableBindings.forEach { binding ->
                 if (database.importSourceDao().getById(binding.sourceId)?.isEmbySource() == true) {
                     val resolvedSource = resolveEmbySource(database, secureCredentialStore, binding.sourceId, addressSelector)
                         ?: error("Emby 来源不可用，无法重命名歌单。")
@@ -153,7 +169,10 @@ class RoomPlaylistRepository(
                         logger = logger,
                     )
                 } else {
-                    val resolvedSource = resolveSubsonicCompatibleSource(binding.sourceId)
+                    val resolvedSource = resolveSubsonicCompatibleSource(
+                        sourceId = binding.sourceId,
+                        requireLocalIndex = false,
+                    )
                         ?: error("Subsonic-compatible 来源不可用，无法重命名歌单。")
                     requestNavidromeJson(
                         httpClient = httpClient,
@@ -176,7 +195,7 @@ class RoomPlaylistRepository(
                 updatedAt = updatedAt,
             )
             database.playlistDao().upsert(updatedPlaylist)
-            bindings.forEach { binding ->
+            writableBindings.forEach { binding ->
                 database.playlistRemoteBindingDao().upsert(
                     binding.copy(
                         remoteName = displayName,
@@ -195,7 +214,10 @@ class RoomPlaylistRepository(
     override suspend fun deletePlaylist(playlistId: String): Result<Unit> {
         return runCatching {
             val playlist = database.playlistDao().getById(playlistId) ?: error("歌单不存在。")
-            val bindings = database.playlistRemoteBindingDao().getByPlaylistId(playlistId)
+            val bindings = localPlaylistMutationRemoteBindings(
+                playlist = playlist,
+                bindings = database.playlistRemoteBindingDao().getByPlaylistId(playlistId),
+            )
             bindings.forEach { binding ->
                 if (database.importSourceDao().getById(binding.sourceId)?.isEmbySource() == true) {
                     val resolvedSource = resolveEmbySource(database, secureCredentialStore, binding.sourceId, addressSelector)
@@ -207,7 +229,10 @@ class RoomPlaylistRepository(
                         logger = logger,
                     )
                 } else {
-                    val resolvedSource = resolveSubsonicCompatibleSource(binding.sourceId)
+                    val resolvedSource = resolveSubsonicCompatibleSource(
+                        sourceId = binding.sourceId,
+                        requireLocalIndex = false,
+                    )
                         ?: error("Subsonic-compatible 来源不可用，无法删除歌单。")
                     requestNavidromeJson(
                         httpClient = httpClient,
@@ -252,7 +277,7 @@ class RoomPlaylistRepository(
         return runCatching {
             database.playlistDao().getById(playlistId) ?: error("歌单不存在。")
             val enabledSourceIds = database.importSourceDao().getAll()
-                .filter { it.enabled }
+                .filter { it.isLocalIndexedEnabled() }
                 .mapTo(linkedSetOf()) { it.id }
             val malformedLines = mutableListOf<PlaylistImportLineIssue>()
             val parsedLines = mutableListOf<PlaylistTextImportLine>()
@@ -388,7 +413,7 @@ class RoomPlaylistRepository(
             val playlist = database.playlistDao().getById(playlistId) ?: error("歌单不存在。")
             val row = database.playlistTrackDao().getByPlaylistIdAndTrackId(playlistId, trackId) ?: return@runCatching
             val binding = database.playlistRemoteBindingDao().getByPlaylistIdAndSourceId(playlistId, row.sourceId)
-            if (binding != null && row.remoteOrdinal != null) {
+            if (binding != null && row.remoteOrdinal != null && isLocalIndexedSource(row.sourceId)) {
                 if (database.importSourceDao().getById(row.sourceId)?.isEmbySource() == true) {
                     removeEmbyTrackFromPlaylist(
                         playlist = playlist,
@@ -431,7 +456,7 @@ class RoomPlaylistRepository(
             cleanupRemovedRemoteSources(remoteSources.mapTo(linkedSetOf()) { it.id })
             val failures = mutableListOf<String>()
             remoteSources
-                .filter { it.enabled }
+                .filter { it.isLocalIndexedEnabled() }
                 .forEach { source ->
                 runCatching {
                     if (source.isEmbySource()) {
@@ -728,44 +753,42 @@ class RoomPlaylistRepository(
             resolvedSource = resolvedSource,
             remotePlaylistId = remotePlaylistId,
         )
-        val currentRemoteTrackOrder = database.playlistTrackDao().getByPlaylistIdAndSourceId(playlist.id, sourceId)
-            .sortedBy { it.remoteOrdinal ?: Int.MAX_VALUE }
-            .map { RemotePlaylistTrackSnapshot(trackId = it.trackId, remoteOrdinal = it.remoteOrdinal ?: -1) }
-        val nextRemoteTrackOrder = remoteEntries.mapIndexed { index, entry ->
-            RemotePlaylistTrackSnapshot(
+        val nextRows = remoteEntries.mapIndexed { index, entry ->
+            PlaylistTrackEntity(
+                playlistId = playlist.id,
                 trackId = subsonicCompatibleTrackIdFor(sourceId, entry.songId, resolvedSource.sourceType),
+                sourceId = sourceId,
+                addedAt = now(),
+                localOrdinal = null,
                 remoteOrdinal = index,
             )
         }
-        val tracksChanged = currentRemoteTrackOrder != nextRemoteTrackOrder
-        if (tracksChanged) {
-            database.playlistTrackDao().deleteByPlaylistIdAndSourceId(playlist.id, sourceId)
-            if (remoteEntries.isNotEmpty()) {
-                database.playlistTrackDao().upsertAll(
-                    remoteEntries.mapIndexed { index, entry ->
-                        PlaylistTrackEntity(
-                            playlistId = playlist.id,
-                            trackId = subsonicCompatibleTrackIdFor(sourceId, entry.songId, resolvedSource.sourceType),
-                            sourceId = sourceId,
-                            addedAt = now(),
-                            localOrdinal = null,
-                            remoteOrdinal = index,
-                        )
-                    },
-                )
+        database.immediateWriteTransaction {
+            val currentRemoteTrackOrder = database.playlistTrackDao().getByPlaylistIdAndSourceId(playlist.id, sourceId)
+                .sortedBy { it.remoteOrdinal ?: Int.MAX_VALUE }
+                .map { RemotePlaylistTrackSnapshot(trackId = it.trackId, remoteOrdinal = it.remoteOrdinal ?: -1) }
+            val nextRemoteTrackOrder = nextRows.map {
+                RemotePlaylistTrackSnapshot(trackId = it.trackId, remoteOrdinal = it.remoteOrdinal ?: -1)
             }
-        }
-        database.playlistRemoteBindingDao().upsert(
-            PlaylistRemoteBindingEntity(
-                playlistId = playlist.id,
-                sourceId = sourceId,
-                remotePlaylistId = remotePlaylistId,
-                remoteName = remoteName,
-                lastSyncedAt = now(),
-            ),
-        )
-        if (tracksChanged) {
-            touchPlaylist(playlist)
+            val tracksChanged = currentRemoteTrackOrder != nextRemoteTrackOrder
+            if (tracksChanged) {
+                database.playlistTrackDao().deleteByPlaylistIdAndSourceId(playlist.id, sourceId)
+                if (nextRows.isNotEmpty()) {
+                    database.playlistTrackDao().upsertAll(nextRows)
+                }
+            }
+            database.playlistRemoteBindingDao().upsert(
+                PlaylistRemoteBindingEntity(
+                    playlistId = playlist.id,
+                    sourceId = sourceId,
+                    remotePlaylistId = remotePlaylistId,
+                    remoteName = remoteName,
+                    lastSyncedAt = now(),
+                ),
+            )
+            if (tracksChanged) {
+                touchPlaylist(playlist)
+            }
         }
     }
 
@@ -783,44 +806,42 @@ class RoomPlaylistRepository(
             playlistId = remotePlaylistId,
             logger = logger,
         )
-        val currentRemoteTrackOrder = database.playlistTrackDao().getByPlaylistIdAndSourceId(playlist.id, sourceId)
-            .sortedBy { it.remoteOrdinal ?: Int.MAX_VALUE }
-            .map { RemotePlaylistTrackSnapshot(trackId = it.trackId, remoteOrdinal = it.remoteOrdinal ?: -1) }
-        val nextRemoteTrackOrder = remoteEntries.mapIndexed { index, entry ->
-            RemotePlaylistTrackSnapshot(
+        val nextRows = remoteEntries.mapIndexed { index, entry ->
+            PlaylistTrackEntity(
+                playlistId = playlist.id,
                 trackId = embyTrackIdFor(sourceId, entry.itemId),
+                sourceId = sourceId,
+                addedAt = now(),
+                localOrdinal = null,
                 remoteOrdinal = index,
             )
         }
-        val tracksChanged = currentRemoteTrackOrder != nextRemoteTrackOrder
-        if (tracksChanged) {
-            database.playlistTrackDao().deleteByPlaylistIdAndSourceId(playlist.id, sourceId)
-            if (remoteEntries.isNotEmpty()) {
-                database.playlistTrackDao().upsertAll(
-                    remoteEntries.mapIndexed { index, entry ->
-                        PlaylistTrackEntity(
-                            playlistId = playlist.id,
-                            trackId = embyTrackIdFor(sourceId, entry.itemId),
-                            sourceId = sourceId,
-                            addedAt = now(),
-                            localOrdinal = null,
-                            remoteOrdinal = index,
-                        )
-                    },
-                )
+        database.immediateWriteTransaction {
+            val currentRemoteTrackOrder = database.playlistTrackDao().getByPlaylistIdAndSourceId(playlist.id, sourceId)
+                .sortedBy { it.remoteOrdinal ?: Int.MAX_VALUE }
+                .map { RemotePlaylistTrackSnapshot(trackId = it.trackId, remoteOrdinal = it.remoteOrdinal ?: -1) }
+            val nextRemoteTrackOrder = nextRows.map {
+                RemotePlaylistTrackSnapshot(trackId = it.trackId, remoteOrdinal = it.remoteOrdinal ?: -1)
             }
-        }
-        database.playlistRemoteBindingDao().upsert(
-            PlaylistRemoteBindingEntity(
-                playlistId = playlist.id,
-                sourceId = sourceId,
-                remotePlaylistId = remotePlaylistId,
-                remoteName = remoteName,
-                lastSyncedAt = now(),
-            ),
-        )
-        if (tracksChanged) {
-            touchPlaylist(playlist)
+            val tracksChanged = currentRemoteTrackOrder != nextRemoteTrackOrder
+            if (tracksChanged) {
+                database.playlistTrackDao().deleteByPlaylistIdAndSourceId(playlist.id, sourceId)
+                if (nextRows.isNotEmpty()) {
+                    database.playlistTrackDao().upsertAll(nextRows)
+                }
+            }
+            database.playlistRemoteBindingDao().upsert(
+                PlaylistRemoteBindingEntity(
+                    playlistId = playlist.id,
+                    sourceId = sourceId,
+                    remotePlaylistId = remotePlaylistId,
+                    remoteName = remoteName,
+                    lastSyncedAt = now(),
+                ),
+            )
+            if (tracksChanged) {
+                touchPlaylist(playlist)
+            }
         }
     }
 
@@ -896,9 +917,34 @@ class RoomPlaylistRepository(
             }
     }
 
-    private suspend fun resolveSubsonicCompatibleSource(sourceId: String): NavidromeResolvedSource? {
+    private suspend fun localPlaylistMutationRemoteBindings(
+        playlist: PlaylistEntity,
+        bindings: List<PlaylistRemoteBindingEntity>,
+    ): List<PlaylistRemoteBindingEntity> {
+        if (bindings.isEmpty()) return emptyList()
+        val sourcesById = database.importSourceDao()
+            .getAll()
+            .associateBy { it.id }
+        return bindings.filter { binding ->
+            val source = sourcesById[binding.sourceId] ?: return@filter false
+            source.isLocalIndexedEnabled() ||
+                (playlist.createdLocally && source.enabled && source.supportsRemotePlaylistMutations())
+        }
+    }
+
+    private suspend fun isLocalIndexedSource(sourceId: String): Boolean {
+        return database.importSourceDao().getById(sourceId)?.isLocalIndexedEnabled() == true
+    }
+
+    private suspend fun resolveSubsonicCompatibleSource(
+        sourceId: String,
+        requireLocalIndex: Boolean = true,
+    ): NavidromeResolvedSource? {
         val source = database.importSourceDao().getById(sourceId)
-            ?.takeIf { it.subsonicCompatibleSourceType() != null && it.enabled }
+            ?.takeIf {
+                it.subsonicCompatibleSourceType() != null &&
+                    (!requireLocalIndex || it.isLocalIndexedEnabled())
+            }
             ?: return null
         return source.toSubsonicCompatibleResolvedSource()
     }
@@ -930,6 +976,10 @@ class RoomPlaylistRepository(
     private fun ImportSourceEntity.isEmbySource(): Boolean {
         return type == ImportSourceType.EMBY.name
     }
+
+    private fun ImportSourceEntity.supportsRemotePlaylistMutations(): Boolean {
+        return isEmbySource() || subsonicCompatibleSourceType() != null
+    }
 }
 
 private fun PlaylistEntity.toSummary(
@@ -947,6 +997,18 @@ private fun PlaylistEntity.toSummary(
         artworkLocator = artworkLocator,
         artworkCacheKey = artworkCacheKey,
     )
+}
+
+private fun PlaylistEntity.isVisibleInLocalPlaylistBrowser(
+    visiblePlaylistTracks: List<PlaylistTrackEntity>,
+    remoteBindings: List<PlaylistRemoteBindingEntity>,
+    localIndexedSourceIds: Set<String>,
+): Boolean {
+    if (createdLocally) return true
+    if (visiblePlaylistTracks.any { it.playlistId == id }) return true
+    return remoteBindings.any { binding ->
+        binding.playlistId == id && binding.sourceId in localIndexedSourceIds
+    }
 }
 
 private data class PlaylistSummaryArtwork(
@@ -1028,47 +1090,9 @@ private data class RemotePlaylistTrackSnapshot(
     val remoteOrdinal: Int,
 )
 
-private data class PlaylistTextImportLine(
-    val lineNumber: Int,
-    val rawText: String,
-    val key: PlaylistTextImportKey,
-)
-
-private data class PlaylistTextImportKey(
-    val title: String,
-    val artist: String,
-)
-
-private val PlaylistTextImportSpacedSeparator = Regex("""\s+-\s+""")
 private const val PlaylistTextImportSqlBindLimit = 900
 private const val PlaylistTextImportSourceChunkSize = 100
 private const val PlaylistTextImportBindingsPerKey = 2
-
-private fun parsePlaylistTextImportLine(lineNumber: Int, rawText: String): PlaylistTextImportLine? {
-    val spacedSeparator = PlaylistTextImportSpacedSeparator.findAll(rawText).lastOrNull()
-    val title: String
-    val artist: String
-    if (spacedSeparator != null) {
-        title = rawText.substring(0, spacedSeparator.range.first).trim()
-        artist = rawText.substring(spacedSeparator.range.last + 1).trim()
-    } else {
-        val separatorIndex = rawText.lastIndexOf('-')
-        if (separatorIndex < 0) return null
-        title = rawText.substring(0, separatorIndex).trim()
-        artist = rawText.substring(separatorIndex + 1).trim()
-    }
-    if (title.isBlank() || artist.isBlank()) return null
-    return PlaylistTextImportLine(
-        lineNumber = lineNumber,
-        rawText = rawText,
-        key = PlaylistTextImportKey(
-            title = normalizePlaylistTextImportPart(title),
-            artist = normalizePlaylistTextImportPart(artist),
-        ),
-    )
-}
-
-private fun normalizePlaylistTextImportPart(value: String): String = value.trim().lowercase()
 
 private fun JsonElement?.asJsonObjectOrNull(): JsonObject? = this as? JsonObject
 

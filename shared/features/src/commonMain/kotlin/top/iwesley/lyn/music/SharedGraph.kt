@@ -68,6 +68,7 @@ import top.iwesley.lyn.music.data.repository.EmbyPlaybackStatsReporter
 import top.iwesley.lyn.music.data.repository.LocalPlaybackStatsReporter
 import top.iwesley.lyn.music.data.repository.LyricsRepository
 import top.iwesley.lyn.music.data.repository.NavidromePlaybackStatsReporter
+import top.iwesley.lyn.music.data.repository.NavidromeOnlineRepository
 import top.iwesley.lyn.music.data.repository.DefaultOfflineDownloadRepository
 import top.iwesley.lyn.music.data.repository.RoomMyRepository
 import top.iwesley.lyn.music.data.repository.RoomMusicTagsRepository
@@ -94,6 +95,9 @@ import top.iwesley.lyn.music.feature.library.LibrarySourceFilterPreferencesStore
 import top.iwesley.lyn.music.feature.library.LibraryStore
 import top.iwesley.lyn.music.feature.my.MyStore
 import top.iwesley.lyn.music.feature.offline.OfflineDownloadStore
+import top.iwesley.lyn.music.feature.online.OnlineFavoritesStore
+import top.iwesley.lyn.music.feature.online.OnlineLibraryStore
+import top.iwesley.lyn.music.feature.online.OnlinePlaylistsStore
 import top.iwesley.lyn.music.feature.playlists.PlaylistsStore
 import top.iwesley.lyn.music.feature.settings.SettingsStore
 import top.iwesley.lyn.music.feature.tags.MusicTagsStore
@@ -152,8 +156,11 @@ class SharedGraph(
     val database: LynMusicDatabase,
     val myStore: MyStore,
     val libraryStore: LibraryStore,
+    val onlineLibraryStore: OnlineLibraryStore,
     val playlistsStore: PlaylistsStore,
+    val onlinePlaylistsStore: OnlinePlaylistsStore,
     val favoritesStore: FavoritesStore,
+    val onlineFavoritesStore: OnlineFavoritesStore,
     val musicTagsStore: MusicTagsStore,
     val importStore: ImportStore,
     val offlineDownloadStore: OfflineDownloadStore,
@@ -347,6 +354,13 @@ fun buildSharedGraph(
         dailyRecommendationDateChangeNotifier = runtimeServices.dailyRecommendationDateChangeNotifier,
         addressSelector = runtimeServices.remoteSourceAddressSelector,
     )
+    val navidromeOnlineRepository = NavidromeOnlineRepository(
+        database = database,
+        secureCredentialStore = runtimeServices.secureCredentialStore,
+        httpClient = runtimeServices.lyricsHttpClient,
+        logger = runtimeServices.logger,
+        addressSelector = runtimeServices.remoteSourceAddressSelector,
+    )
     scope.launch {
         settingsRepository.ensureDefaults()
     }
@@ -367,11 +381,25 @@ fun buildSharedGraph(
             offlineDownloadRepository = offlineDownloadRepository,
             startImmediately = false,
         ),
+        onlineLibraryStore = OnlineLibraryStore(
+            repository = navidromeOnlineRepository,
+            importSourceRepository = importSourceRepository,
+            preferencesStore = runtimeServices.librarySourceFilterPreferencesStore,
+            storeScope = scope,
+            startImmediately = false,
+        ),
         playlistsStore = PlaylistsStore(
             playlistRepository = playlistRepository,
             importSourceRepository = importSourceRepository,
             storeScope = scope,
             offlineDownloadRepository = offlineDownloadRepository,
+            startImmediately = false,
+        ),
+        onlinePlaylistsStore = OnlinePlaylistsStore(
+            repository = navidromeOnlineRepository,
+            importSourceRepository = importSourceRepository,
+            preferencesStore = runtimeServices.librarySourceFilterPreferencesStore,
+            storeScope = scope,
             startImmediately = false,
         ),
         favoritesStore = FavoritesStore(
@@ -381,6 +409,13 @@ fun buildSharedGraph(
             storeScope = scope,
             trackPlaybackStatsRepository = trackPlaybackStatsRepository,
             offlineDownloadRepository = offlineDownloadRepository,
+            startImmediately = false,
+        ),
+        onlineFavoritesStore = OnlineFavoritesStore(
+            repository = navidromeOnlineRepository,
+            importSourceRepository = importSourceRepository,
+            preferencesStore = runtimeServices.librarySourceFilterPreferencesStore,
+            storeScope = scope,
             startImmediately = false,
         ),
         musicTagsStore = MusicTagsStore(

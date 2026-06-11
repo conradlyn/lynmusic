@@ -31,6 +31,7 @@ import top.iwesley.lyn.music.core.model.LyricsHttpClient
 import top.iwesley.lyn.music.core.model.LyricsLine
 import top.iwesley.lyn.music.core.model.LyricsRequest
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
+import top.iwesley.lyn.music.core.model.NavidromeLibraryProbe
 import top.iwesley.lyn.music.core.model.NavidromeSourceDraft
 import top.iwesley.lyn.music.core.model.NonNavidromeAudioScanResult
 import top.iwesley.lyn.music.core.model.NoopDiagnosticLogger
@@ -104,7 +105,9 @@ private fun prepareSubsonicResolvedSource(
 data class NavidromeSongCandidate(
     val songId: String,
     val title: String,
+    val artistId: String?,
     val artistName: String?,
+    val albumId: String?,
     val albumTitle: String?,
     val durationMs: Long,
     val trackNumber: Int?,
@@ -117,6 +120,12 @@ data class NavidromeSongCandidate(
     val bitRate: Int?,
     val channelCount: Int?,
     val path: String? = null,
+    val remoteFavoriteHint: Boolean? = null,
+)
+
+data class NavidromeSongPage(
+    val songs: List<NavidromeSongCandidate>,
+    val totalTrackCount: Int?,
 )
 
 fun normalizeNavidromeBaseUrl(rawUrl: String?): String {
@@ -380,6 +389,90 @@ suspend fun scanNavidromeLibraryStreaming(
             timeoutMillis = timeoutMillis,
         )
     }
+}
+
+suspend fun probeNavidromeLibrary(
+    draft: NavidromeSourceDraft,
+    httpClient: LyricsHttpClient,
+    logger: DiagnosticLogger = NoopDiagnosticLogger,
+    timeoutMillis: Long? = null,
+): NavidromeLibraryProbe {
+    val source = prepareNavidromeResolvedSource(draft)
+    val serverInfo = requestNavidromeServerInfo(
+        httpClient = httpClient,
+        source = source,
+        logger = logger,
+        timeoutMillis = timeoutMillis,
+    )
+    if (serverInfo.requiresLegacyScan()) {
+        logger.log(
+            level = DiagnosticLogLevel.INFO,
+            tag = source.logTag,
+            message = "probe-native-skip baseUrl=${source.baseUrl} type=${serverInfo.type.orEmpty()} serverVersion=${serverInfo.rawServerVersion.orEmpty()}",
+        )
+        return NavidromeLibraryProbe(
+            totalTrackCount = null,
+            supportsOnlineLibraryPaging = false,
+        )
+    }
+    return try {
+        val token = requestNavidromeNativeToken(
+            httpClient = httpClient,
+            source = source,
+            logger = logger,
+            timeoutMillis = timeoutMillis,
+        )
+        val page = requestNavidromeNativeSongPage(
+            httpClient = httpClient,
+            source = source,
+            token = token,
+            start = 0,
+            pageSize = 1,
+            timeoutMillis = timeoutMillis,
+        )
+        NavidromeLibraryProbe(
+            totalTrackCount = page.totalTrackCount,
+            supportsOnlineLibraryPaging = true,
+        )
+    } catch (exception: NavidromeNativeApiIncompatibleException) {
+        logger.log(
+            level = DiagnosticLogLevel.INFO,
+            tag = source.logTag,
+            message = "probe-native-unavailable baseUrl=${source.baseUrl} reason=${exception.message.orEmpty()}",
+        )
+        NavidromeLibraryProbe(
+            totalTrackCount = null,
+            supportsOnlineLibraryPaging = false,
+        )
+    }
+}
+
+suspend fun requestNavidromeSongPage(
+    httpClient: LyricsHttpClient,
+    source: NavidromeResolvedSource,
+    start: Int,
+    pageSize: Int,
+    logger: DiagnosticLogger = NoopDiagnosticLogger,
+    timeoutMillis: Long? = null,
+): NavidromeSongPage {
+    val token = requestNavidromeNativeToken(
+        httpClient = httpClient,
+        source = source,
+        logger = logger,
+        timeoutMillis = timeoutMillis,
+    )
+    val page = requestNavidromeNativeSongPage(
+        httpClient = httpClient,
+        source = source,
+        token = token,
+        start = start.coerceAtLeast(0),
+        pageSize = pageSize.coerceAtLeast(1),
+        timeoutMillis = timeoutMillis,
+    )
+    return NavidromeSongPage(
+        songs = page.songs,
+        totalTrackCount = page.totalTrackCount,
+    )
 }
 
 private fun prepareNavidromeResolvedSource(draft: NavidromeSourceDraft): NavidromeResolvedSource {
@@ -1236,7 +1329,9 @@ private suspend fun requestNavidromeAlbumSongs(
             NavidromeSongCandidate(
                 songId = songId,
                 title = title,
+                artistId = song.string("artistId"),
                 artistName = artistName,
+                albumId = song.string("albumId") ?: albumId,
                 albumTitle = song.string("album") ?: albumTitle,
                 durationMs = (song.long("duration") ?: 0L) * 1_000L,
                 trackNumber = song.int("track"),
@@ -1248,6 +1343,7 @@ private suspend fun requestNavidromeAlbumSongs(
                 samplingRate = song.int("samplingRate"),
                 bitRate = song.int("bitRate"),
                 channelCount = song.int("channelCount"),
+                remoteFavoriteHint = song.remoteFavoriteHint(),
             )
         }
 }
@@ -1282,6 +1378,26 @@ internal suspend fun requestNavidromeJson(
     source: NavidromeResolvedSource,
     endpoint: String,
     parameters: Map<String, String> = emptyMap(),
+    logger: DiagnosticLogger = NoopDiagnosticLogger,
+    logContext: String? = null,
+    timeoutMillis: Long? = null,
+): JsonObject {
+    return requestNavidromeJsonWithRepeatedParameters(
+        httpClient = httpClient,
+        source = source,
+        endpoint = endpoint,
+        parameters = parameters.toList(),
+        logger = logger,
+        logContext = logContext,
+        timeoutMillis = timeoutMillis,
+    )
+}
+
+internal suspend fun requestNavidromeJsonWithRepeatedParameters(
+    httpClient: LyricsHttpClient,
+    source: NavidromeResolvedSource,
+    endpoint: String,
+    parameters: List<Pair<String, String>> = emptyList(),
     logger: DiagnosticLogger = NoopDiagnosticLogger,
     logContext: String? = null,
     timeoutMillis: Long? = null,
@@ -1326,14 +1442,14 @@ private suspend fun requestNavidromeJsonWithoutAddressFallback(
     httpClient: LyricsHttpClient,
     source: NavidromeResolvedSource,
     endpoint: String,
-    parameters: Map<String, String>,
+    parameters: List<Pair<String, String>>,
     logger: DiagnosticLogger,
     logContext: String?,
     timeoutMillis: Long? = null,
 ): JsonObject {
     val request = LyricsRequest(
         method = RequestMethod.GET,
-        url = buildSubsonicRestUrl(
+        url = buildSubsonicRestUrlWithRepeatedParameters(
             baseUrl = source.baseUrl,
             username = source.username,
             credential = source.password,
@@ -1477,6 +1593,26 @@ private fun buildSubsonicRestUrl(
     parameters: Map<String, String>,
     includeJsonFormat: Boolean,
 ): String {
+    return buildSubsonicRestUrlWithRepeatedParameters(
+        baseUrl = baseUrl,
+        username = username,
+        credential = credential,
+        authMode = authMode,
+        endpoint = endpoint,
+        parameters = parameters.toList(),
+        includeJsonFormat = includeJsonFormat,
+    )
+}
+
+private fun buildSubsonicRestUrlWithRepeatedParameters(
+    baseUrl: String,
+    username: String,
+    credential: String,
+    authMode: SubsonicAuthMode,
+    endpoint: String,
+    parameters: List<Pair<String, String>>,
+    includeJsonFormat: Boolean,
+): String {
     val normalizedBaseUrl = normalizeSubsonicBaseUrl(baseUrl)
     return URLBuilder(normalizedBaseUrl).apply {
         appendPathSegments("rest", endpoint)
@@ -1574,7 +1710,9 @@ private fun JsonObject.toNavidromeNativeSongCandidate(): NavidromeSongCandidate 
     return NavidromeSongCandidate(
         songId = string("id").orEmpty(),
         title = title.ifBlank { "未知曲目" },
+        artistId = string("artistId"),
         artistName = string("artist") ?: string("albumArtist"),
+        albumId = string("albumId"),
         albumTitle = string("album"),
         durationMs = ((double("duration") ?: 0.0) * 1_000.0).roundToLong(),
         trackNumber = int("trackNumber") ?: int("track"),
@@ -1587,6 +1725,7 @@ private fun JsonObject.toNavidromeNativeSongCandidate(): NavidromeSongCandidate 
         bitRate = int("bitRate"),
         channelCount = int("channels") ?: int("channelCount"),
         path = path,
+        remoteFavoriteHint = remoteFavoriteHint(),
     )
 }
 
@@ -1650,6 +1789,11 @@ private fun JsonObject.boolean(key: String): Boolean? {
             else -> null
         }
     }
+}
+
+private fun JsonObject.remoteFavoriteHint(): Boolean? {
+    val value = string("starred")?.trim()?.takeIf { it.isNotBlank() } ?: return null
+    return !(value.equals("false", ignoreCase = true) || value == "0")
 }
 
 private fun JsonObject.int(key: String): Int? = string(key)?.toIntOrNull()

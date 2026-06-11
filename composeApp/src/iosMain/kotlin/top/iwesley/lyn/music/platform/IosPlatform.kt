@@ -27,6 +27,7 @@ import top.iwesley.lyn.music.buildPlayerAppComponent
 import top.iwesley.lyn.music.buildSharedGraph
 import top.iwesley.lyn.music.core.model.ConsoleDiagnosticLogger
 import top.iwesley.lyn.music.core.model.CompactPlayerLyricsPreferencesStore
+import top.iwesley.lyn.music.core.model.DiagnosticLogger
 import top.iwesley.lyn.music.core.model.EmbyCredential
 import top.iwesley.lyn.music.core.model.EmbySourceDraft
 import top.iwesley.lyn.music.core.model.IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS
@@ -42,6 +43,7 @@ import top.iwesley.lyn.music.core.model.LyricsShareFontPreferencesStore
 import top.iwesley.lyn.music.core.model.LyricsRequest
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.NavidromeAudioQualityPreferencesStore
+import top.iwesley.lyn.music.core.model.NavidromeLibraryProbe
 import top.iwesley.lyn.music.core.model.NavidromeSourceDraft
 import top.iwesley.lyn.music.core.model.NetworkConnectionState
 import top.iwesley.lyn.music.core.model.NetworkConnectionType
@@ -81,6 +83,7 @@ import top.iwesley.lyn.music.domain.RemoteSourceAddressSelector
 import top.iwesley.lyn.music.domain.scanEmbyLibrary
 import top.iwesley.lyn.music.domain.scanNavidromeLibrary
 import top.iwesley.lyn.music.domain.scanNavidromeLibraryStreaming
+import top.iwesley.lyn.music.domain.probeNavidromeLibrary
 import top.iwesley.lyn.music.domain.scanSubsonicLibrary
 import top.iwesley.lyn.music.domain.testEmbyConnection
 import top.iwesley.lyn.music.domain.testNavidromeConnection
@@ -152,6 +155,7 @@ fun createIosAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
     val networkConnectionTypeProvider = IosNetworkConnectionTypeProvider()
     val remoteSourceAddressSelector = RemoteSourceAddressSelector(networkConnectionTypeProvider)
     val navidromeHttpClient = IosLyricsHttpClient()
+    val logger = ConsoleDiagnosticLogger(enabled = true, label = "iOS")
     val platform = PlatformDescriptor(
         name = "iPhone / iPad",
         capabilities = PlatformCapabilities(
@@ -166,7 +170,7 @@ fun createIosAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
         platform = platform,
         database = database,
         runtimeServices = SharedRuntimeServices(
-            importSourceGateway = IosImportSourceGateway(navidromeHttpClient),
+            importSourceGateway = IosImportSourceGateway(navidromeHttpClient, logger),
             secureCredentialStore = secureStore,
             sambaCachePreferencesStore = appPreferencesStore,
             themePreferencesStore = appPreferencesStore,
@@ -187,7 +191,7 @@ fun createIosAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
             dailyRecommendationDateChangeNotifier = IosDailyRecommendationDateChangeNotifier(
                 IosDailyRecommendationDateKeyProvider,
             ),
-            logger = ConsoleDiagnosticLogger(enabled = true, label = "iOS"),
+            logger = logger,
         ),
     )
     return buildPlayerAppComponent(
@@ -395,6 +399,9 @@ private class IosAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
     )
     private val mutableLibrarySourceFilter = MutableStateFlow(readLibrarySourceFilter(KEY_LIBRARY_SOURCE_FILTER))
     private val mutableFavoritesSourceFilter = MutableStateFlow(readLibrarySourceFilter(KEY_FAVORITES_SOURCE_FILTER))
+    private val mutableOnlineLibrarySourceId = MutableStateFlow(readNullablePreference(KEY_ONLINE_LIBRARY_SOURCE_ID))
+    private val mutableOnlineFavoritesSourceId = MutableStateFlow(readNullablePreference(KEY_ONLINE_FAVORITES_SOURCE_ID))
+    private val mutableOnlinePlaylistsSourceId = MutableStateFlow(readNullablePreference(KEY_ONLINE_PLAYLISTS_SOURCE_ID))
     private val mutableLibraryTrackSortMode = MutableStateFlow(
         readTrackSortMode(KEY_LIBRARY_TRACK_SORT_MODE, TrackSortMode.TITLE),
     )
@@ -422,6 +429,9 @@ private class IosAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
     override val selectedLyricsShareFontKey: StateFlow<String?> = mutableSelectedLyricsShareFontKey.asStateFlow()
     override val librarySourceFilter: StateFlow<LibrarySourceFilter> = mutableLibrarySourceFilter.asStateFlow()
     override val favoritesSourceFilter: StateFlow<LibrarySourceFilter> = mutableFavoritesSourceFilter.asStateFlow()
+    override val onlineLibrarySourceId: StateFlow<String?> = mutableOnlineLibrarySourceId.asStateFlow()
+    override val onlineFavoritesSourceId: StateFlow<String?> = mutableOnlineFavoritesSourceId.asStateFlow()
+    override val onlinePlaylistsSourceId: StateFlow<String?> = mutableOnlinePlaylistsSourceId.asStateFlow()
     override val libraryTrackSortMode: StateFlow<TrackSortMode> = mutableLibraryTrackSortMode.asStateFlow()
     override val favoritesTrackSortMode: StateFlow<TrackSortMode> = mutableFavoritesTrackSortMode.asStateFlow()
 
@@ -481,6 +491,21 @@ private class IosAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
         mutableFavoritesSourceFilter.value = filter
     }
 
+    override suspend fun setOnlineLibrarySourceId(sourceId: String?) {
+        setNullablePreference(KEY_ONLINE_LIBRARY_SOURCE_ID, sourceId)
+        mutableOnlineLibrarySourceId.value = normalizeNullablePreference(sourceId)
+    }
+
+    override suspend fun setOnlineFavoritesSourceId(sourceId: String?) {
+        setNullablePreference(KEY_ONLINE_FAVORITES_SOURCE_ID, sourceId)
+        mutableOnlineFavoritesSourceId.value = normalizeNullablePreference(sourceId)
+    }
+
+    override suspend fun setOnlinePlaylistsSourceId(sourceId: String?) {
+        setNullablePreference(KEY_ONLINE_PLAYLISTS_SOURCE_ID, sourceId)
+        mutableOnlinePlaylistsSourceId.value = normalizeNullablePreference(sourceId)
+    }
+
     override suspend fun setLibraryTrackSortMode(mode: TrackSortMode) {
         defaults.setObject(mode.name, KEY_LIBRARY_TRACK_SORT_MODE)
         mutableLibraryTrackSortMode.value = mode
@@ -511,6 +536,23 @@ private class IosAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
     private fun readLibrarySourceFilter(key: String): LibrarySourceFilter {
         val name = defaults.stringForKey(key)
         return LibrarySourceFilter.entries.firstOrNull { it.name == name } ?: LibrarySourceFilter.ALL
+    }
+
+    private fun readNullablePreference(key: String): String? {
+        return normalizeNullablePreference(defaults.stringForKey(key))
+    }
+
+    private fun normalizeNullablePreference(value: String?): String? {
+        return value?.trim()?.takeIf { it.isNotBlank() }
+    }
+
+    private fun setNullablePreference(key: String, value: String?) {
+        val normalizedValue = normalizeNullablePreference(value)
+        if (normalizedValue == null) {
+            defaults.removeObjectForKey(key)
+        } else {
+            defaults.setObject(normalizedValue, key)
+        }
     }
 
     private fun readTrackSortMode(key: String, defaultMode: TrackSortMode): TrackSortMode {
@@ -618,6 +660,7 @@ private class IosNetworkConnectionTypeProvider : NetworkConnectionTypeProvider {
 
 private class IosImportSourceGateway(
     private val navidromeHttpClient: LyricsHttpClient,
+    private val logger: DiagnosticLogger,
 ) : ImportSourceGateway {
     override suspend fun pickLocalFolder(): LocalFolderSelection? = null
 
@@ -645,6 +688,16 @@ private class IosImportSourceGateway(
         testNavidromeConnection(
             draft = draft,
             httpClient = navidromeHttpClient,
+            logger = logger,
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
+        )
+    }
+
+    override suspend fun probeNavidrome(draft: NavidromeSourceDraft): NavidromeLibraryProbe {
+        return probeNavidromeLibrary(
+            draft = draft,
+            httpClient = navidromeHttpClient,
+            logger = logger,
             timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
         )
     }
@@ -663,6 +716,7 @@ private class IosImportSourceGateway(
             sourceId = sourceId,
             httpClient = navidromeHttpClient,
             supportedImportExtensions = IOS_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
+            logger = logger,
             progressSink = progressSink,
             timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
         )
@@ -679,6 +733,7 @@ private class IosImportSourceGateway(
             sourceId = sourceId,
             httpClient = navidromeHttpClient,
             supportedImportExtensions = IOS_SUPPORTED_IMPORT_AUDIO_EXTENSIONS,
+            logger = logger,
             progressSink = progressSink,
             trackBatchSink = trackBatchSink,
             timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
@@ -817,6 +872,9 @@ private const val KEY_NAVIDROME_WIFI_AUDIO_QUALITY = "navidrome_wifi_audio_quali
 private const val KEY_NAVIDROME_MOBILE_AUDIO_QUALITY = "navidrome_mobile_audio_quality"
 private const val KEY_LIBRARY_SOURCE_FILTER = "library_source_filter"
 private const val KEY_FAVORITES_SOURCE_FILTER = "favorites_source_filter"
+private const val KEY_ONLINE_LIBRARY_SOURCE_ID = "online_library_source_id"
+private const val KEY_ONLINE_FAVORITES_SOURCE_ID = "online_favorites_source_id"
+private const val KEY_ONLINE_PLAYLISTS_SOURCE_ID = "online_playlists_source_id"
 private const val KEY_LIBRARY_TRACK_SORT_MODE = "library_track_sort_mode"
 private const val KEY_FAVORITES_TRACK_SORT_MODE = "favorites_track_sort_mode"
 private const val KEY_SELECTED_THEME = "selected_theme"

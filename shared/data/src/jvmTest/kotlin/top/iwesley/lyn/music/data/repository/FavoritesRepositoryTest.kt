@@ -288,6 +288,26 @@ class FavoritesRepositoryTest {
     }
 
     @Test
+    fun `online navidrome toggle favorite does not write local favorite rows`() = runTest {
+        val database = createTestDatabase()
+        seedNavidromeSource(database, indexMode = "ONLINE")
+        val httpClient = RecordingFavoritesHttpClient()
+        val repository = RoomFavoritesRepository(
+            database = database,
+            secureCredentialStore = MapSecureCredentialStore(mutableMapOf("nav-cred" to "plain-pass")),
+            httpClient = httpClient,
+            logger = NoopDiagnosticLogger,
+        )
+        val track = navidromeTrack(songId = "song-online")
+
+        val result = repository.toggleFavorite(track)
+
+        assertEquals(true, result.isFailure)
+        assertEquals(emptyList(), httpClient.requestedEndpoints)
+        assertNull(database.favoriteTrackDao().getByTrackId(track.id))
+    }
+
+    @Test
     fun `set favorite true is idempotent and keeps liked song liked`() = runTest {
         val database = createTestDatabase()
         val repository = RoomFavoritesRepository(
@@ -432,7 +452,10 @@ private fun createTestDatabase(): LynMusicDatabase {
     )
 }
 
-private suspend fun seedNavidromeSource(database: LynMusicDatabase) {
+private suspend fun seedNavidromeSource(
+    database: LynMusicDatabase,
+    indexMode: String = "LOCAL_INDEX",
+) {
     database.importSourceDao().upsert(
         ImportSourceEntity(
             id = "nav-source",
@@ -447,6 +470,7 @@ private suspend fun seedNavidromeSource(database: LynMusicDatabase) {
             allowInsecureTls = false,
             lastScannedAt = null,
             createdAt = 1L,
+            indexMode = indexMode,
         ),
     )
 }

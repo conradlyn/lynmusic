@@ -121,6 +121,7 @@ internal fun PlayerLyricsPane(
     track: Track,
     onPlayerIntent: (PlayerIntent) -> Unit,
     onOpenLibraryNavigationTarget: ((LibraryNavigationTarget) -> Unit)? = null,
+    onlineNavigationSourceId: String? = null,
     modifier: Modifier = Modifier,
     compact: Boolean = false,
     pure: Boolean = false,
@@ -236,6 +237,7 @@ internal fun PlayerLyricsPane(
                             track = track,
                             secondaryTextColor = lyricsSecondaryTextColor,
                             onOpenLibraryNavigationTarget = onOpenLibraryNavigationTarget,
+                            onlineNavigationSourceId = onlineNavigationSourceId,
                             showTrackInfo = true,
                             onShowTrackInfo = { showTrackInfoDialog = true },
                         )
@@ -529,6 +531,7 @@ private fun PlayerLyricsMetadataRow(
     track: Track,
     secondaryTextColor: Color,
     onOpenLibraryNavigationTarget: (LibraryNavigationTarget) -> Unit,
+    onlineNavigationSourceId: String?,
     showTrackInfo: Boolean,
     onShowTrackInfo: () -> Unit,
 ) {
@@ -537,8 +540,20 @@ private fun PlayerLyricsMetadataRow(
         snapshot.currentDisplayArtistName,
         track.albumTitle,
         track.artistName,
+        track.albumId,
+        track.artistId,
+        track.artworkLocator,
+        onlineNavigationSourceId,
     ) {
-        derivePlaybackLibraryNavigationTargets(snapshot, track)
+        if (onlineNavigationSourceId != null) {
+            deriveOnlinePlaybackLibraryNavigationTargets(
+                snapshot = snapshot,
+                track = track,
+                sourceId = onlineNavigationSourceId,
+            )
+        } else {
+            derivePlaybackLibraryNavigationTargets(snapshot, track)
+        }
     }
     Row(
         modifier = Modifier.fillMaxWidth(),

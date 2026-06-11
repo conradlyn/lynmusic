@@ -7,6 +7,9 @@ interface LibrarySourceFilterPreferencesStore {
     val favoritesSourceFilter: StateFlow<LibrarySourceFilter>
     val libraryTrackSortMode: StateFlow<TrackSortMode>
     val favoritesTrackSortMode: StateFlow<TrackSortMode>
+    val onlineLibrarySourceId: StateFlow<String?>
+    val onlineFavoritesSourceId: StateFlow<String?>
+    val onlinePlaylistsSourceId: StateFlow<String?>
 
     suspend fun setLibrarySourceFilter(filter: LibrarySourceFilter)
 
@@ -15,4 +18,10 @@ interface LibrarySourceFilterPreferencesStore {
     suspend fun setLibraryTrackSortMode(mode: TrackSortMode)
 
     suspend fun setFavoritesTrackSortMode(mode: TrackSortMode)
+
+    suspend fun setOnlineLibrarySourceId(sourceId: String?)
+
+    suspend fun setOnlineFavoritesSourceId(sourceId: String?)
+
+    suspend fun setOnlinePlaylistsSourceId(sourceId: String?)
 }

@@ -5,10 +5,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import top.iwesley.lyn.music.core.model.ImportScanFailure
 import top.iwesley.lyn.music.core.model.ImportScanPhase
 import top.iwesley.lyn.music.core.model.ImportScanProgress
-import top.iwesley.lyn.music.core.model.ImportScanFailure
 import top.iwesley.lyn.music.core.model.ImportScanSummary
+import top.iwesley.lyn.music.core.model.ImportSourceIndexMode
 
 class SourceCardLogicTest {
     @Test
@@ -120,12 +121,98 @@ class SourceCardLogicTest {
     }
 
     @Test
+    fun `source track count label uses local count for indexed source`() {
+        assertEquals(
+            "12 首歌曲",
+            importSourceTrackCountLabel(
+                indexMode = ImportSourceIndexMode.LOCAL_INDEX,
+                localTrackCount = 12,
+                remoteTrackCount = null,
+            ),
+        )
+    }
+
+    @Test
+    fun `source track count label falls back to zero for missing indexed count`() {
+        assertEquals(
+            "0 首歌曲",
+            importSourceTrackCountLabel(
+                indexMode = ImportSourceIndexMode.LOCAL_INDEX,
+                localTrackCount = null,
+                remoteTrackCount = null,
+            ),
+        )
+    }
+
+    @Test
+    fun `source track count label uses remote count for online source`() {
+        assertEquals(
+            "77 首远端歌曲",
+            importSourceTrackCountLabel(
+                indexMode = ImportSourceIndexMode.ONLINE,
+                localTrackCount = 12,
+                remoteTrackCount = 77,
+            ),
+        )
+    }
+
+    @Test
+    fun `source track count label does not treat unknown online count as empty`() {
+        assertEquals(
+            "远端歌曲数未知",
+            importSourceTrackCountLabel(
+                indexMode = ImportSourceIndexMode.ONLINE,
+                localTrackCount = 12,
+                remoteTrackCount = null,
+            ),
+        )
+    }
+
+    @Test
     fun `remote source editor shows current imported track count`() {
-        assertEquals("当前已导入 32 首歌曲", remoteSourceEditorTrackCountLabel(32))
+        assertEquals(
+            "当前已导入 32 首歌曲",
+            remoteSourceEditorTrackCountLabel(
+                indexMode = ImportSourceIndexMode.LOCAL_INDEX,
+                currentTrackCount = 32,
+                remoteTrackCount = null,
+            ),
+        )
     }
 
     @Test
     fun `remote source editor shows empty imported track count state`() {
-        assertEquals("当前还没有导入歌曲", remoteSourceEditorTrackCountLabel(null))
+        assertEquals(
+            "当前还没有导入歌曲",
+            remoteSourceEditorTrackCountLabel(
+                indexMode = ImportSourceIndexMode.LOCAL_INDEX,
+                currentTrackCount = null,
+                remoteTrackCount = null,
+            ),
+        )
+    }
+
+    @Test
+    fun `remote source editor shows online remote track count`() {
+        assertEquals(
+            "当前远端共有 77 首歌曲",
+            remoteSourceEditorTrackCountLabel(
+                indexMode = ImportSourceIndexMode.ONLINE,
+                currentTrackCount = 32,
+                remoteTrackCount = 77,
+            ),
+        )
+    }
+
+    @Test
+    fun `remote source editor does not show stale local count for unknown online remote count`() {
+        assertEquals(
+            "当前远端歌曲数未知",
+            remoteSourceEditorTrackCountLabel(
+                indexMode = ImportSourceIndexMode.ONLINE,
+                currentTrackCount = 32,
+                remoteTrackCount = null,
+            ),
+        )
     }
 }

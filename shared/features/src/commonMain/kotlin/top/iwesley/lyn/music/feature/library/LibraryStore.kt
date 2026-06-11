@@ -6,6 +6,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import top.iwesley.lyn.music.core.model.Album
 import top.iwesley.lyn.music.core.model.Artist
+import top.iwesley.lyn.music.core.model.ImportSource
+import top.iwesley.lyn.music.core.model.ImportSourceIndexMode
 import top.iwesley.lyn.music.core.model.ImportSourceType
 import top.iwesley.lyn.music.core.model.OfflineDownload
 import top.iwesley.lyn.music.core.model.OfflineDownloadStatus
@@ -117,7 +119,7 @@ class LibraryStore(
                 trackPlaybackStatsRepository.trackStats,
                 offlineDownloadRepository.downloads,
             ) { content, preferences, trackPlaybackStats, offlineDownloads ->
-                val enabledSources = content.sources.map { it.source }.filter { it.enabled }
+                val enabledSources = content.sources.map { it.source }.filter { it.isLocalIndexedEnabled() }
                 LibrarySnapshot(
                     tracks = content.tracks,
                     albums = content.albums,
@@ -250,6 +252,10 @@ class LibraryStore(
             LibrarySourceFilter.EMBY,
         )
     }
+}
+
+internal fun ImportSource.isLocalIndexedEnabled(): Boolean {
+    return enabled && indexMode == ImportSourceIndexMode.LOCAL_INDEX
 }
 
 fun matchesLibrarySourceFilter(

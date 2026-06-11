@@ -2,8 +2,10 @@ package top.iwesley.lyn.music
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import top.iwesley.lyn.music.core.model.Album
 import top.iwesley.lyn.music.core.model.Artist
 import top.iwesley.lyn.music.core.model.PlaybackSnapshot
@@ -182,6 +184,13 @@ class LibraryNavigationTest {
             ),
             result,
         )
+    }
+
+    @Test
+    fun `navigation query clear guard requires command flag and nonblank query`() {
+        assertTrue(shouldClearNavigationQuery(clearQuery = true, query = "cold"))
+        assertFalse(shouldClearNavigationQuery(clearQuery = true, query = " "))
+        assertFalse(shouldClearNavigationQuery(clearQuery = false, query = "cold"))
     }
 
     @Test
@@ -380,17 +389,220 @@ class LibraryNavigationTest {
         assertEquals(LibraryBrowserRootView.Artists, navigate.resolution.rootView)
         assertNull(navigate.resolution.selectedArtistId)
     }
+
+    @Test
+    fun `derive online playback targets uses remote album and artist ids`() {
+        val track = testTrack(
+            albumTitle = "Parachutes",
+            artistName = "Coldplay",
+            albumId = "album-remote",
+            artistId = "artist-remote",
+            artworkLocator = "lynmusic-navidrome-cover://source-1/cover-1",
+        )
+
+        val result = deriveOnlinePlaybackLibraryNavigationTargets(
+            snapshot = PlaybackSnapshot(
+                metadataAlbumTitle = "Parachutes",
+                metadataArtistName = "Coldplay",
+            ),
+            track = track,
+            sourceId = "source-1",
+        )
+
+        assertEquals(
+            LibraryNavigationTarget.OnlineAlbum(
+                sourceId = "source-1",
+                albumId = "album-remote",
+                albumTitle = "Parachutes",
+                artistName = "Coldplay",
+                artworkLocator = "lynmusic-navidrome-cover://source-1/cover-1",
+            ),
+            result.albumTarget,
+        )
+        assertEquals(
+            LibraryNavigationTarget.OnlineArtist(
+                sourceId = "source-1",
+                artistId = "artist-remote",
+                artistName = "Coldplay",
+            ),
+            result.artistTarget,
+        )
+    }
+
+    @Test
+    fun `derive online playback targets does not fall back to names when remote ids are missing`() {
+        val result = deriveOnlinePlaybackLibraryNavigationTargets(
+            snapshot = PlaybackSnapshot(
+                metadataAlbumTitle = "Parachutes",
+                metadataArtistName = "Coldplay",
+            ),
+            track = testTrack(albumTitle = "Parachutes", artistName = "Coldplay"),
+            sourceId = "source-1",
+        )
+
+        assertNull(result.albumTarget)
+        assertNull(result.artistTarget)
+    }
+
+    @Test
+    fun `online navigation context guard allows first online album apply`() {
+        val target = LibraryNavigationTarget.OnlineAlbum(
+            sourceId = "source-online",
+            albumId = "album-remote",
+        )
+
+        assertTrue(shouldApplyOnlineNavigationContext(target, lastAppliedOnlineContextTarget = null))
+    }
+
+    @Test
+    fun `online navigation context guard skips repeated online target apply`() {
+        val target = LibraryNavigationTarget.OnlineArtist(
+            sourceId = "source-online",
+            artistId = "artist-remote",
+        )
+
+        assertFalse(shouldApplyOnlineNavigationContext(target, lastAppliedOnlineContextTarget = target))
+    }
+
+    @Test
+    fun `online navigation context guard allows changed online target apply`() {
+        val previousTarget = LibraryNavigationTarget.OnlineAlbum(
+            sourceId = "source-online",
+            albumId = "album-previous",
+        )
+        val nextTarget = LibraryNavigationTarget.OnlineAlbum(
+            sourceId = "source-online",
+            albumId = "album-next",
+        )
+
+        assertTrue(shouldApplyOnlineNavigationContext(nextTarget, lastAppliedOnlineContextTarget = previousTarget))
+    }
+
+    @Test
+    fun `online navigation context guard ignores local targets`() {
+        val previousTarget = LibraryNavigationTarget.OnlineAlbum(
+            sourceId = "source-online",
+            albumId = "album-remote",
+        )
+
+        assertFalse(
+            shouldApplyOnlineNavigationContext(
+                LibraryNavigationTarget.Album(libraryAlbumId("Coldplay", "Parachutes")),
+                lastAppliedOnlineContextTarget = previousTarget,
+            ),
+        )
+        assertFalse(
+            shouldApplyOnlineNavigationContext(
+                LibraryNavigationTarget.Artist(libraryArtistId("Coldplay")),
+                lastAppliedOnlineContextTarget = null,
+            ),
+        )
+    }
+
+    @Test
+    fun `resolve command applies online source before opening online album`() {
+        val result = resolveLibraryNavigationCommand(
+            target = LibraryNavigationTarget.OnlineAlbum(
+                sourceId = "source-online",
+                albumId = "album-remote",
+            ),
+            query = "",
+            isOnline = false,
+            onlineSourceId = null,
+            selectedSourceFilter = LibrarySourceFilter.ALL,
+            availableSourceFilters = listOf(LibrarySourceFilter.ALL),
+            filteredAlbums = emptyList(),
+            filteredArtists = emptyList(),
+        )
+
+        assertEquals(
+            LibraryNavigationCommand.ApplyOnlineContext(
+                sourceId = "source-online",
+                clearQuery = false,
+            ),
+            result,
+        )
+    }
+
+    @Test
+    fun `resolve command clears query before opening online album`() {
+        val result = resolveLibraryNavigationCommand(
+            target = LibraryNavigationTarget.OnlineAlbum(
+                sourceId = "source-online",
+                albumId = "album-remote",
+            ),
+            query = "cold",
+            isOnline = true,
+            onlineSourceId = "source-online",
+            selectedSourceFilter = LibrarySourceFilter.ALL,
+            availableSourceFilters = listOf(LibrarySourceFilter.ALL),
+            filteredAlbums = emptyList(),
+            filteredArtists = emptyList(),
+        )
+
+        assertEquals(
+            LibraryNavigationCommand.ApplyOnlineContext(
+                sourceId = "source-online",
+                clearQuery = true,
+            ),
+            result,
+        )
+    }
+
+    @Test
+    fun `resolve command opens online targets without requiring visible list items`() {
+        val albumResult = resolveLibraryNavigationCommand(
+            target = LibraryNavigationTarget.OnlineAlbum(
+                sourceId = "source-online",
+                albumId = "album-remote",
+            ),
+            query = "",
+            isOnline = true,
+            onlineSourceId = "source-online",
+            selectedSourceFilter = LibrarySourceFilter.ALL,
+            availableSourceFilters = listOf(LibrarySourceFilter.ALL),
+            filteredAlbums = emptyList(),
+            filteredArtists = emptyList(),
+        )
+        val artistResult = resolveLibraryNavigationCommand(
+            target = LibraryNavigationTarget.OnlineArtist(
+                sourceId = "source-online",
+                artistId = "artist-remote",
+            ),
+            query = "",
+            isOnline = true,
+            onlineSourceId = "source-online",
+            selectedSourceFilter = LibrarySourceFilter.ALL,
+            availableSourceFilters = listOf(LibrarySourceFilter.ALL),
+            filteredAlbums = emptyList(),
+            filteredArtists = emptyList(),
+        )
+
+        val albumNavigate = assertIs<LibraryNavigationCommand.Navigate>(albumResult)
+        assertEquals(LibraryBrowserRootView.Albums, albumNavigate.resolution.rootView)
+        assertEquals("album-remote", albumNavigate.resolution.selectedAlbumId)
+
+        val artistNavigate = assertIs<LibraryNavigationCommand.Navigate>(artistResult)
+        assertEquals(LibraryBrowserRootView.Artists, artistNavigate.resolution.rootView)
+        assertEquals("artist-remote", artistNavigate.resolution.selectedArtistId)
+    }
 }
 
 private fun testTrack(
     albumTitle: String?,
     artistName: String?,
+    albumId: String? = null,
+    artistId: String? = null,
+    artworkLocator: String? = null,
 ): Track = Track(
     id = "track-1",
     sourceId = "source-1",
     title = "Yellow",
     artistName = artistName,
     albumTitle = albumTitle,
+    artworkLocator = artworkLocator,
+    albumId = albumId,
+    artistId = artistId,
     mediaLocator = "file:///music/yellow.mp3",
     relativePath = "Yellow.mp3",
 )

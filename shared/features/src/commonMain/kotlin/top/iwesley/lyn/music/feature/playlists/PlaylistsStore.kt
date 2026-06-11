@@ -17,6 +17,7 @@ import top.iwesley.lyn.music.data.repository.OfflineDownloadRepository
 import top.iwesley.lyn.music.data.repository.PlaylistImportReport
 import top.iwesley.lyn.music.data.repository.PlaylistRepository
 import top.iwesley.lyn.music.feature.library.LibrarySourceFilter
+import top.iwesley.lyn.music.feature.library.isLocalIndexedEnabled
 import top.iwesley.lyn.music.feature.library.toLibrarySourceFilter
 
 data class PlaylistsState(
@@ -90,6 +91,7 @@ class PlaylistsStore(
                     offlineDownloadsByTrackId = offlineDownloads,
                     navidromeSourceIds = sources
                         .map(SourceWithStatus::source)
+                        .filter { it.isLocalIndexedEnabled() }
                         .filter {
                             it.type == ImportSourceType.NAVIDROME ||
                                 it.type == ImportSourceType.SUBSONIC ||
@@ -116,7 +118,9 @@ class PlaylistsStore(
                         selectedPlaylistId = nextSelectedId,
                         selectedSourceFilter = selectedSourceFilter,
                         availableSourceFilters = availableSourceFilters,
-                        sourceTypesById = snapshot.sources.associate { sourceWithStatus ->
+                        sourceTypesById = snapshot.sources
+                            .filter { it.source.isLocalIndexedEnabled() }
+                            .associate { sourceWithStatus ->
                             sourceWithStatus.source.id to sourceWithStatus.source.type
                         },
                         offlineDownloadsByTrackId = snapshot.offlineDownloadsByTrackId,
@@ -307,7 +311,10 @@ class PlaylistsStore(
     )
 
     private fun buildAvailableSourceFilters(sources: List<SourceWithStatus>): List<LibrarySourceFilter> {
-        val presentFilters = sources.map { it.source.type.toLibrarySourceFilter() }.toSet()
+        val presentFilters = sources
+            .filter { it.source.isLocalIndexedEnabled() }
+            .map { it.source.type.toLibrarySourceFilter() }
+            .toSet()
         return buildList {
             add(LibrarySourceFilter.ALL)
             FILTER_ORDER.filter { it in presentFilters }.forEach(::add)

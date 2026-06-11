@@ -1,5 +1,6 @@
 package top.iwesley.lyn.music
 
+import top.iwesley.lyn.music.feature.library.LibraryBrowserCount
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -82,9 +83,9 @@ class DesktopLibraryToolbarTest {
     fun `default library root selector keeps four peer entries`() {
         val model = buildLibraryRootSelectorModel(
             style = LibraryRootSelectorStyle.Default,
-            trackCount = 12,
-            albumCount = 3,
-            artistCount = 2,
+            trackCount = LibraryBrowserCount.exact(12),
+            albumCount = LibraryBrowserCount.exact(3),
+            artistCount = LibraryBrowserCount.exact(2),
             folderCount = 5,
             showFolderBrowser = true,
         )
@@ -108,9 +109,9 @@ class DesktopLibraryToolbarTest {
     fun `compact library root selector uses song hero and three secondary entries`() {
         val model = buildLibraryRootSelectorModel(
             style = LibraryRootSelectorStyle.CompactHero,
-            trackCount = 5458,
-            albumCount = 744,
-            artistCount = 293,
+            trackCount = LibraryBrowserCount.exact(5458),
+            albumCount = LibraryBrowserCount.exact(744),
+            artistCount = LibraryBrowserCount.exact(293),
             folderCount = 704,
             showFolderBrowser = true,
         )
@@ -139,14 +140,64 @@ class DesktopLibraryToolbarTest {
     fun `compact library root selector disables play all without tracks`() {
         val model = buildLibraryRootSelectorModel(
             style = LibraryRootSelectorStyle.CompactHero,
-            trackCount = 0,
-            albumCount = 0,
-            artistCount = 0,
+            trackCount = LibraryBrowserCount.exact(0),
+            albumCount = LibraryBrowserCount.exact(0),
+            artistCount = LibraryBrowserCount.exact(0),
             folderCount = 0,
             showFolderBrowser = true,
         )
 
         assertFalse(model.playAllEnabled)
         assertEquals("0", model.heroItem?.value)
+    }
+
+    @Test
+    fun `library root selector uses remote total when available`() {
+        val model = buildLibraryRootSelectorModel(
+            style = LibraryRootSelectorStyle.CompactHero,
+            trackCount = LibraryBrowserCount(loaded = 100, total = 450000, hasMore = true),
+            albumCount = LibraryBrowserCount(loaded = 100, total = null, hasMore = true),
+            artistCount = LibraryBrowserCount(loaded = 87, total = null, hasMore = false),
+            folderCount = 0,
+            showFolderBrowser = false,
+            playAllEnabled = true,
+        )
+
+        assertEquals("450000", model.heroItem?.value)
+        assertEquals("100+", model.secondaryItems.first { it.rootView == LibraryBrowserRootView.Albums }.value)
+        assertEquals("87", model.secondaryItems.first { it.rootView == LibraryBrowserRootView.Artists }.value)
+        assertTrue(model.playAllEnabled)
+    }
+
+    @Test
+    fun `library root selector play all uses loaded tracks not remote total`() {
+        val model = buildLibraryRootSelectorModel(
+            style = LibraryRootSelectorStyle.CompactHero,
+            trackCount = LibraryBrowserCount(loaded = 0, total = 450000, hasMore = true),
+            albumCount = LibraryBrowserCount.exact(0),
+            artistCount = LibraryBrowserCount.exact(0),
+            folderCount = 0,
+            showFolderBrowser = false,
+            playAllEnabled = false,
+        )
+
+        assertEquals("450000", model.heroItem?.value)
+        assertFalse(model.playAllEnabled)
+    }
+
+    @Test
+    fun `library load more status describes exact and unknown totals`() {
+        assertEquals(
+            "已显示 100 / 共 450000",
+            libraryLoadMoreStatusLabel(LibraryBrowserCount(loaded = 100, total = 450000, hasMore = true)),
+        )
+        assertEquals(
+            "已显示 100+",
+            libraryLoadMoreStatusLabel(LibraryBrowserCount(loaded = 100, total = null, hasMore = true)),
+        )
+        assertEquals(
+            "已显示 87",
+            libraryLoadMoreStatusLabel(LibraryBrowserCount(loaded = 87, total = null, hasMore = false)),
+        )
     }
 }

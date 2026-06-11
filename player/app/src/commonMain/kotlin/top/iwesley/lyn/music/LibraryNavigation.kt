@@ -18,11 +18,25 @@ internal sealed interface LibraryNavigationTarget {
         val artistId: String,
         val preferredSourceFilter: LibrarySourceFilter = LibrarySourceFilter.ALL,
     ) : LibraryNavigationTarget
+
+    data class OnlineAlbum(
+        val sourceId: String,
+        val albumId: String,
+        val albumTitle: String? = null,
+        val artistName: String? = null,
+        val artworkLocator: String? = null,
+    ) : LibraryNavigationTarget
+
+    data class OnlineArtist(
+        val sourceId: String,
+        val artistId: String,
+        val artistName: String? = null,
+    ) : LibraryNavigationTarget
 }
 
 internal data class PlaybackLibraryNavigationTargets(
-    val albumTarget: LibraryNavigationTarget.Album?,
-    val artistTarget: LibraryNavigationTarget.Artist?,
+    val albumTarget: LibraryNavigationTarget?,
+    val artistTarget: LibraryNavigationTarget?,
 )
 
 internal data class LibraryNavigationResolution(
@@ -37,7 +51,31 @@ internal sealed interface LibraryNavigationCommand {
         val clearQuery: Boolean,
     ) : LibraryNavigationCommand
 
+    data class ApplyOnlineContext(
+        val sourceId: String,
+        val clearQuery: Boolean,
+    ) : LibraryNavigationCommand
+
     data class Navigate(val resolution: LibraryNavigationResolution) : LibraryNavigationCommand
+}
+
+internal fun shouldClearNavigationQuery(clearQuery: Boolean, query: String): Boolean {
+    return clearQuery && query.isNotBlank()
+}
+
+internal fun shouldApplyOnlineNavigationContext(
+    target: LibraryNavigationTarget,
+    lastAppliedOnlineContextTarget: LibraryNavigationTarget?,
+): Boolean {
+    return when (target) {
+        is LibraryNavigationTarget.OnlineAlbum,
+        is LibraryNavigationTarget.OnlineArtist,
+        -> target != lastAppliedOnlineContextTarget
+
+        is LibraryNavigationTarget.Album,
+        is LibraryNavigationTarget.Artist,
+        -> false
+    }
 }
 
 internal fun derivePlaybackLibraryNavigationTargets(
@@ -72,6 +110,61 @@ internal fun deriveTrackLibraryNavigationTargets(
     )
 }
 
+internal fun deriveOnlinePlaybackLibraryNavigationTargets(
+    snapshot: PlaybackSnapshot,
+    track: Track,
+    sourceId: String,
+): PlaybackLibraryNavigationTargets {
+    val artistName = normalizedLibraryNavigationValue(snapshot.currentDisplayArtistName)
+        ?: normalizedLibraryNavigationValue(track.artistName)
+    val albumTitle = normalizedLibraryNavigationValue(snapshot.currentDisplayAlbumTitle)
+        ?: normalizedLibraryNavigationValue(track.albumTitle)
+    return deriveOnlineLibraryNavigationTargets(
+        track = track,
+        sourceId = sourceId,
+        artistName = artistName,
+        albumTitle = albumTitle,
+    )
+}
+
+internal fun deriveOnlineTrackLibraryNavigationTargets(
+    track: Track,
+    sourceId: String,
+): PlaybackLibraryNavigationTargets {
+    return deriveOnlineLibraryNavigationTargets(
+        track = track,
+        sourceId = sourceId,
+        artistName = normalizedLibraryNavigationValue(track.artistName),
+        albumTitle = normalizedLibraryNavigationValue(track.albumTitle),
+    )
+}
+
+private fun deriveOnlineLibraryNavigationTargets(
+    track: Track,
+    sourceId: String,
+    artistName: String?,
+    albumTitle: String?,
+): PlaybackLibraryNavigationTargets {
+    return PlaybackLibraryNavigationTargets(
+        albumTarget = track.albumId.normalizedLibraryNavigationValueOrNull()?.let { albumId ->
+            LibraryNavigationTarget.OnlineAlbum(
+                sourceId = sourceId,
+                albumId = albumId,
+                albumTitle = albumTitle,
+                artistName = artistName,
+                artworkLocator = track.artworkLocator,
+            )
+        },
+        artistTarget = track.artistId.normalizedLibraryNavigationValueOrNull()?.let { artistId ->
+            LibraryNavigationTarget.OnlineArtist(
+                sourceId = sourceId,
+                artistId = artistId,
+                artistName = artistName,
+            )
+        },
+    )
+}
+
 private fun deriveLibraryNavigationTargets(
     artistName: String?,
     albumTitle: String?,
@@ -96,11 +189,48 @@ private fun deriveLibraryNavigationTargets(
 internal fun resolveLibraryNavigationCommand(
     target: LibraryNavigationTarget,
     query: String,
+    isOnline: Boolean = false,
+    onlineSourceId: String? = null,
     selectedSourceFilter: LibrarySourceFilter,
     availableSourceFilters: List<LibrarySourceFilter>,
     filteredAlbums: List<Album>,
     filteredArtists: List<Artist>,
 ): LibraryNavigationCommand {
+    when (target) {
+        is LibraryNavigationTarget.OnlineAlbum -> {
+            if (!isOnline || onlineSourceId != target.sourceId || query.isNotBlank()) {
+                return LibraryNavigationCommand.ApplyOnlineContext(
+                    sourceId = target.sourceId,
+                    clearQuery = query.isNotBlank(),
+                )
+            }
+            return LibraryNavigationCommand.Navigate(
+                LibraryNavigationResolution(
+                    rootView = LibraryBrowserRootView.Albums,
+                    selectedAlbumId = target.albumId,
+                ),
+            )
+        }
+
+        is LibraryNavigationTarget.OnlineArtist -> {
+            if (!isOnline || onlineSourceId != target.sourceId || query.isNotBlank()) {
+                return LibraryNavigationCommand.ApplyOnlineContext(
+                    sourceId = target.sourceId,
+                    clearQuery = query.isNotBlank(),
+                )
+            }
+            return LibraryNavigationCommand.Navigate(
+                LibraryNavigationResolution(
+                    rootView = LibraryBrowserRootView.Artists,
+                    selectedArtistId = target.artistId,
+                ),
+            )
+        }
+
+        is LibraryNavigationTarget.Album,
+        is LibraryNavigationTarget.Artist,
+        -> Unit
+    }
     val targetSourceFilter = target.navigationSourceFilter
         .takeIf { it == LibrarySourceFilter.ALL || it in availableSourceFilters }
         ?: LibrarySourceFilter.ALL
@@ -129,6 +259,10 @@ internal fun resolveLibraryNavigationCommand(
                     },
                 )
             }
+
+            is LibraryNavigationTarget.OnlineAlbum,
+            is LibraryNavigationTarget.OnlineArtist,
+            -> error("在线导航目标应在本地导航解析前处理。")
         },
     )
 }
@@ -137,8 +271,15 @@ private val LibraryNavigationTarget.navigationSourceFilter: LibrarySourceFilter
     get() = when (this) {
         is LibraryNavigationTarget.Album -> preferredSourceFilter
         is LibraryNavigationTarget.Artist -> preferredSourceFilter
+        is LibraryNavigationTarget.OnlineAlbum,
+        is LibraryNavigationTarget.OnlineArtist,
+        -> LibrarySourceFilter.ALL
     }
 
 private fun normalizedLibraryNavigationValue(value: String?): String? {
     return value?.trim()?.takeIf { it.isNotBlank() }
+}
+
+private fun String?.normalizedLibraryNavigationValueOrNull(): String? {
+    return normalizedLibraryNavigationValue(this)
 }

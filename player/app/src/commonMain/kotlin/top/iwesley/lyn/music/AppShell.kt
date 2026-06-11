@@ -70,6 +70,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -95,6 +96,12 @@ import top.iwesley.lyn.music.feature.library.TrackSortMode
 import top.iwesley.lyn.music.feature.library.matchesLibrarySourceFilter
 import top.iwesley.lyn.music.feature.my.MyIntent
 import top.iwesley.lyn.music.feature.my.MyState
+import top.iwesley.lyn.music.feature.online.OnlineFavoritesIntent
+import top.iwesley.lyn.music.feature.online.OnlineFavoritesState
+import top.iwesley.lyn.music.feature.online.OnlineLibraryIntent
+import top.iwesley.lyn.music.feature.online.OnlineLibraryState
+import top.iwesley.lyn.music.feature.online.OnlinePlaylistsIntent
+import top.iwesley.lyn.music.feature.online.OnlinePlaylistsState
 import top.iwesley.lyn.music.feature.player.PlayerIntent
 import top.iwesley.lyn.music.feature.player.PlayerState
 import top.iwesley.lyn.music.feature.playlists.PlaylistsIntent
@@ -255,8 +262,11 @@ internal fun MobileShell(
     platform: PlatformDescriptor,
     myState: MyState,
     libraryState: LibraryState,
+    onlineLibraryState: OnlineLibraryState,
     playlistsState: PlaylistsState,
+    onlinePlaylistsState: OnlinePlaylistsState,
     favoritesState: FavoritesState,
+    onlineFavoritesState: OnlineFavoritesState,
     musicTagsState: MusicTagsState,
     musicTagsEffects: Flow<MusicTagsEffect>,
     importState: ImportState,
@@ -264,8 +274,11 @@ internal fun MobileShell(
     settingsState: SettingsState,
     onMyIntent: (MyIntent) -> Unit,
     onLibraryIntent: (LibraryIntent) -> Unit,
+    onOnlineLibraryIntent: (OnlineLibraryIntent) -> Unit,
     onPlaylistsIntent: (PlaylistsIntent) -> Unit,
+    onOnlinePlaylistsIntent: (OnlinePlaylistsIntent) -> Unit,
     onFavoritesIntent: (FavoritesIntent) -> Unit,
+    onOnlineFavoritesIntent: (OnlineFavoritesIntent) -> Unit,
     onMusicTagsIntent: (MusicTagsIntent) -> Unit,
     onImportIntent: (ImportIntent) -> Unit,
     onPlayerIntent: (PlayerIntent) -> Unit,
@@ -288,6 +301,12 @@ internal fun MobileShell(
     val keyboardController = LocalSoftwareKeyboardController.current
     var isMoreSheetVisible by rememberSaveable { mutableStateOf(false) }
     val moreSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val playerFavoriteBinding = playerFavoriteBinding(
+        track = effectivePlayerSnapshot.currentTrack,
+        localFavoriteTrackIds = favoritesState.favoriteTrackIds,
+        onlineFavoritesState = onlineFavoritesState,
+        importState = importState,
+    )
 
     fun selectMobileTab(tab: AppTab) {
         if (isMobileLibraryHubTab(selectedTab) && !isMobileLibraryHubTab(tab)) {
@@ -312,10 +331,24 @@ internal fun MobileShell(
                                 !hideMiniPlayerBar,
                         state = playerState,
                         onPlayerIntent = onPlayerIntent,
-                        isFavorite = effectivePlayerSnapshot.currentTrack?.id in favoritesState.favoriteTrackIds,
+                        isFavorite = playerFavoriteBinding.isFavorite,
+                        canToggleFavorite = playerFavoriteBinding.canToggleFavorite,
                         onToggleFavorite = {
-                            effectivePlayerSnapshot.currentTrack?.let { track ->
-                                onFavoritesIntent(FavoritesIntent.ToggleFavorite(track))
+                            if (playerFavoriteBinding.canToggleFavorite) {
+                                effectivePlayerSnapshot.currentTrack?.let { track ->
+                                    val onlineSourceId = playerFavoriteBinding.onlineSourceId
+                                    if (onlineSourceId != null) {
+                                        onOnlineFavoritesIntent(
+                                            OnlineFavoritesIntent.SetFavorite(
+                                                sourceId = onlineSourceId,
+                                                track = track,
+                                                favorite = !playerFavoriteBinding.isFavorite,
+                                            )
+                                        )
+                                    } else {
+                                        onFavoritesIntent(FavoritesIntent.ToggleFavorite(track))
+                                    }
+                                }
                             }
                         },
                         onOpenAddToPlaylist = onOpenAddToPlaylist,
@@ -386,16 +419,22 @@ internal fun MobileShell(
                 platform = platform,
                 myState = myState,
                 libraryState = libraryState,
+                onlineLibraryState = onlineLibraryState,
                 playlistsState = playlistsState,
+                onlinePlaylistsState = onlinePlaylistsState,
                 favoritesState = favoritesState,
+                onlineFavoritesState = onlineFavoritesState,
                 musicTagsState = musicTagsState,
                 musicTagsEffects = musicTagsEffects,
                 importState = importState,
                 settingsState = settingsState,
                 onMyIntent = onMyIntent,
                 onLibraryIntent = onLibraryIntent,
+                onOnlineLibraryIntent = onOnlineLibraryIntent,
                 onPlaylistsIntent = onPlaylistsIntent,
+                onOnlinePlaylistsIntent = onOnlinePlaylistsIntent,
                 onFavoritesIntent = onFavoritesIntent,
+                onOnlineFavoritesIntent = onOnlineFavoritesIntent,
                 onMusicTagsIntent = onMusicTagsIntent,
                 onImportIntent = onImportIntent,
                 onPlayerIntent = onPlayerIntent,
@@ -407,6 +446,7 @@ internal fun MobileShell(
                 onMobileEditorVisibilityChanged = onMobileEditorVisibilityChanged,
                 compact = true,
                 mobileLibraryHub = true,
+                playerExpanded = playerState.isExpanded,
                 onTabSelected = ::selectMobileTab,
                 modifier = Modifier.weight(1f),
             )
@@ -513,8 +553,11 @@ internal fun DesktopShell(
     platform: PlatformDescriptor,
     myState: MyState,
     libraryState: LibraryState,
+    onlineLibraryState: OnlineLibraryState,
     playlistsState: PlaylistsState,
+    onlinePlaylistsState: OnlinePlaylistsState,
     favoritesState: FavoritesState,
+    onlineFavoritesState: OnlineFavoritesState,
     musicTagsState: MusicTagsState,
     musicTagsEffects: Flow<MusicTagsEffect>,
     importState: ImportState,
@@ -522,8 +565,11 @@ internal fun DesktopShell(
     settingsState: SettingsState,
     onMyIntent: (MyIntent) -> Unit,
     onLibraryIntent: (LibraryIntent) -> Unit,
+    onOnlineLibraryIntent: (OnlineLibraryIntent) -> Unit,
     onPlaylistsIntent: (PlaylistsIntent) -> Unit,
+    onOnlinePlaylistsIntent: (OnlinePlaylistsIntent) -> Unit,
     onFavoritesIntent: (FavoritesIntent) -> Unit,
+    onOnlineFavoritesIntent: (OnlineFavoritesIntent) -> Unit,
     onMusicTagsIntent: (MusicTagsIntent) -> Unit,
     onImportIntent: (ImportIntent) -> Unit,
     onPlayerIntent: (PlayerIntent) -> Unit,
@@ -536,6 +582,12 @@ internal fun DesktopShell(
 ) {
     val shellColors = mainShellColors
     val effectivePlayerSnapshot = playerState.effectiveSnapshot
+    val playerFavoriteBinding = playerFavoriteBinding(
+        track = effectivePlayerSnapshot.currentTrack,
+        localFavoriteTrackIds = favoritesState.favoriteTrackIds,
+        onlineFavoritesState = onlineFavoritesState,
+        importState = importState,
+    )
     Row(
         modifier = Modifier.fillMaxSize(),
     ) {
@@ -578,16 +630,22 @@ internal fun DesktopShell(
                 platform = platform,
                 myState = myState,
                 libraryState = libraryState,
+                onlineLibraryState = onlineLibraryState,
                 playlistsState = playlistsState,
+                onlinePlaylistsState = onlinePlaylistsState,
                 favoritesState = favoritesState,
+                onlineFavoritesState = onlineFavoritesState,
                 musicTagsState = musicTagsState,
                 musicTagsEffects = musicTagsEffects,
                 importState = importState,
                 settingsState = settingsState,
                 onMyIntent = onMyIntent,
                 onLibraryIntent = onLibraryIntent,
+                onOnlineLibraryIntent = onOnlineLibraryIntent,
                 onPlaylistsIntent = onPlaylistsIntent,
+                onOnlinePlaylistsIntent = onOnlinePlaylistsIntent,
                 onFavoritesIntent = onFavoritesIntent,
+                onOnlineFavoritesIntent = onOnlineFavoritesIntent,
                 onMusicTagsIntent = onMusicTagsIntent,
                 onImportIntent = onImportIntent,
                 onPlayerIntent = onPlayerIntent,
@@ -611,10 +669,24 @@ internal fun DesktopShell(
                             !playerState.isExpanded,
                     state = playerState,
                     onPlayerIntent = onPlayerIntent,
-                    isFavorite = effectivePlayerSnapshot.currentTrack?.id in favoritesState.favoriteTrackIds,
+                    isFavorite = playerFavoriteBinding.isFavorite,
+                    canToggleFavorite = playerFavoriteBinding.canToggleFavorite,
                     onToggleFavorite = {
-                        effectivePlayerSnapshot.currentTrack?.let { track ->
-                            onFavoritesIntent(FavoritesIntent.ToggleFavorite(track))
+                        if (playerFavoriteBinding.canToggleFavorite) {
+                            effectivePlayerSnapshot.currentTrack?.let { track ->
+                                val onlineSourceId = playerFavoriteBinding.onlineSourceId
+                                if (onlineSourceId != null) {
+                                    onOnlineFavoritesIntent(
+                                        OnlineFavoritesIntent.SetFavorite(
+                                            sourceId = onlineSourceId,
+                                            track = track,
+                                            favorite = !playerFavoriteBinding.isFavorite,
+                                        )
+                                    )
+                                } else {
+                                    onFavoritesIntent(FavoritesIntent.ToggleFavorite(track))
+                                }
+                            }
                         }
                     },
                     onOpenAddToPlaylist = onOpenAddToPlaylist,
@@ -713,16 +785,22 @@ private fun TabContent(
     platform: PlatformDescriptor,
     myState: MyState,
     libraryState: LibraryState,
+    onlineLibraryState: OnlineLibraryState,
     playlistsState: PlaylistsState,
+    onlinePlaylistsState: OnlinePlaylistsState,
     favoritesState: FavoritesState,
+    onlineFavoritesState: OnlineFavoritesState,
     musicTagsState: MusicTagsState,
     musicTagsEffects: Flow<MusicTagsEffect>,
     importState: ImportState,
     settingsState: SettingsState,
     onMyIntent: (MyIntent) -> Unit,
     onLibraryIntent: (LibraryIntent) -> Unit,
+    onOnlineLibraryIntent: (OnlineLibraryIntent) -> Unit,
     onPlaylistsIntent: (PlaylistsIntent) -> Unit,
+    onOnlinePlaylistsIntent: (OnlinePlaylistsIntent) -> Unit,
     onFavoritesIntent: (FavoritesIntent) -> Unit,
+    onOnlineFavoritesIntent: (OnlineFavoritesIntent) -> Unit,
     onMusicTagsIntent: (MusicTagsIntent) -> Unit,
     onImportIntent: (ImportIntent) -> Unit,
     onPlayerIntent: (PlayerIntent) -> Unit,
@@ -734,6 +812,7 @@ private fun TabContent(
     onMobileEditorVisibilityChanged: (Boolean) -> Unit = {},
     compact: Boolean,
     mobileLibraryHub: Boolean,
+    playerExpanded: Boolean = false,
     onTabSelected: (AppTab) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -747,14 +826,22 @@ private fun TabContent(
         MobileLibraryHubTab(
             selectedTab = resolvedSelectedTab,
             libraryState = libraryState,
+            onlineLibraryState = onlineLibraryState,
             playlistsState = playlistsState,
+            onlinePlaylistsState = onlinePlaylistsState,
             favoritesState = favoritesState,
+            onlineFavoritesState = onlineFavoritesState,
+            importState = importState,
             onLibraryIntent = onLibraryIntent,
+            onOnlineLibraryIntent = onOnlineLibraryIntent,
             onPlaylistsIntent = onPlaylistsIntent,
+            onOnlinePlaylistsIntent = onOnlinePlaylistsIntent,
             onFavoritesIntent = onFavoritesIntent,
+            onOnlineFavoritesIntent = onOnlineFavoritesIntent,
             onPlayerIntent = onPlayerIntent,
             libraryNavigationTarget = libraryNavigationTarget,
             onLibraryNavigationHandled = onLibraryNavigationHandled,
+            playerExpanded = playerExpanded,
             onTabSelected = onTabSelected,
             modifier = modifier,
         )
@@ -776,8 +863,11 @@ private fun TabContent(
         AppTab.Library -> LibraryTab(
             state = libraryState,
             favoritesState = favoritesState,
+            importState = importState,
+            onlineState = onlineLibraryState,
             onLibraryIntent = onLibraryIntent,
             onFavoritesIntent = onFavoritesIntent,
+            onOnlineIntent = onOnlineLibraryIntent,
             onPlayerIntent = onPlayerIntent,
             showDuration = !platform.isMobilePlatform(),
             navigationTarget = libraryNavigationTarget,
@@ -793,14 +883,20 @@ private fun TabContent(
 
         AppTab.Playlists -> PlaylistsTab(
             state = playlistsState,
+            importState = importState,
+            onlineState = onlinePlaylistsState,
             onPlaylistsIntent = onPlaylistsIntent,
+            onOnlineIntent = onOnlinePlaylistsIntent,
             onPlayerIntent = onPlayerIntent,
             modifier = modifier,
         )
 
         AppTab.Favorites -> FavoritesTab(
             state = favoritesState,
+            importState = importState,
+            onlineState = onlineFavoritesState,
             onFavoritesIntent = onFavoritesIntent,
+            onOnlineIntent = onOnlineFavoritesIntent,
             onPlayerIntent = onPlayerIntent,
             showDuration = !platform.isMobilePlatform(),
             onOpenLibraryNavigationTarget = onOpenLibraryNavigationTarget,
@@ -840,20 +936,30 @@ private fun TabContent(
 private fun MobileLibraryHubTab(
     selectedTab: AppTab,
     libraryState: LibraryState,
+    onlineLibraryState: OnlineLibraryState,
     playlistsState: PlaylistsState,
+    onlinePlaylistsState: OnlinePlaylistsState,
     favoritesState: FavoritesState,
+    onlineFavoritesState: OnlineFavoritesState,
+    importState: ImportState,
     onLibraryIntent: (LibraryIntent) -> Unit,
+    onOnlineLibraryIntent: (OnlineLibraryIntent) -> Unit,
     onPlaylistsIntent: (PlaylistsIntent) -> Unit,
+    onOnlinePlaylistsIntent: (OnlinePlaylistsIntent) -> Unit,
     onFavoritesIntent: (FavoritesIntent) -> Unit,
+    onOnlineFavoritesIntent: (OnlineFavoritesIntent) -> Unit,
     onPlayerIntent: (PlayerIntent) -> Unit,
     libraryNavigationTarget: LibraryNavigationTarget?,
     onLibraryNavigationHandled: () -> Unit,
+    playerExpanded: Boolean,
     onTabSelected: (AppTab) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val initialPage = mobileLibraryHubPageForTab(selectedTab)
     val pagerState = rememberPagerState(initialPage = initialPage) { mobileLibraryHubTabs.size }
     val coroutineScope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     var isSearchMode by rememberSaveable { mutableStateOf(false) }
     var searchBarAutoFocus by remember { mutableStateOf(false) }
     var playlistSearchQuery by rememberSaveable { mutableStateOf("") }
@@ -868,14 +974,14 @@ private fun MobileLibraryHubTab(
     val playlistsPullRefreshState = rememberPullToRefreshState()
     val activeSearchTab = mobileLibraryHubTabForPage(pagerState.currentPage)
     val activeSearchQuery = when (activeSearchTab) {
-        AppTab.Library -> libraryState.query
-        AppTab.Favorites -> favoritesState.query
+        AppTab.Library -> onlineLibraryState.sourceId?.let { onlineLibraryState.query } ?: libraryState.query
+        AppTab.Favorites -> onlineFavoritesState.sourceId?.let { onlineFavoritesState.query } ?: favoritesState.query
         AppTab.Playlists -> playlistSearchQuery
         else -> ""
     }
     val selectedTabSearchQuery = when (selectedTab) {
-        AppTab.Library -> libraryState.query
-        AppTab.Favorites -> favoritesState.query
+        AppTab.Library -> onlineLibraryState.sourceId?.let { onlineLibraryState.query } ?: libraryState.query
+        AppTab.Favorites -> onlineFavoritesState.sourceId?.let { onlineFavoritesState.query } ?: favoritesState.query
         AppTab.Playlists -> playlistSearchQuery
         else -> ""
     }
@@ -899,7 +1005,13 @@ private fun MobileLibraryHubTab(
                 )
             }
     }
-    val batchOperationAvailable = mobileLibraryHubCanBatchOperate(
+    val activeTabOnline = when (activeSearchTab) {
+        AppTab.Library -> onlineLibraryState.sourceId != null
+        AppTab.Favorites -> onlineFavoritesState.sourceId != null
+        AppTab.Playlists -> onlinePlaylistsState.sourceId != null
+        else -> false
+    }
+    val batchOperationAvailable = !activeTabOnline && mobileLibraryHubCanBatchOperate(
         tab = activeSearchTab,
         libraryVisibleTrackCount = libraryState.filteredTracks.size,
         favoritesVisibleTrackCount = favoritesState.filteredTracks.size,
@@ -909,8 +1021,20 @@ private fun MobileLibraryHubTab(
 
     fun updateActiveSearchQuery(query: String) {
         when (activeSearchTab) {
-            AppTab.Library -> onLibraryIntent(LibraryIntent.SearchChanged(query))
-            AppTab.Favorites -> onFavoritesIntent(FavoritesIntent.SearchChanged(query))
+            AppTab.Library -> {
+                if (onlineLibraryState.sourceId != null) {
+                    onOnlineLibraryIntent(OnlineLibraryIntent.SearchChanged(query))
+                } else {
+                    onLibraryIntent(LibraryIntent.SearchChanged(query))
+                }
+            }
+            AppTab.Favorites -> {
+                if (onlineFavoritesState.sourceId != null) {
+                    onOnlineFavoritesIntent(OnlineFavoritesIntent.SearchChanged(query))
+                } else {
+                    onFavoritesIntent(FavoritesIntent.SearchChanged(query))
+                }
+            }
             AppTab.Playlists -> playlistSearchQuery = query
             else -> Unit
         }
@@ -956,6 +1080,13 @@ private fun MobileLibraryHubTab(
             pagerState.scrollToPage(targetPage)
         }
     }
+    LaunchedEffect(playerExpanded) {
+        if (playerExpanded) {
+            focusManager.clearFocus(force = true)
+            keyboardController?.hide()
+            searchBarAutoFocus = false
+        }
+    }
     LaunchedEffect(selectedTab, selectedTabSearchQuery) {
         if (isMobileLibraryHubTab(selectedTab) && !isSearchMode && selectedTabSearchQuery.isNotBlank()) {
             enterSearchMode(autoFocus = false)
@@ -978,6 +1109,11 @@ private fun MobileLibraryHubTab(
             startFavoritesRefreshHold()
         }
     }
+    LaunchedEffect(onlineFavoritesState.isLoading) {
+        if (onlineFavoritesState.isLoading) {
+            startFavoritesRefreshHold()
+        }
+    }
     LaunchedEffect(playlistsRefreshHoldKey) {
         if (playlistsRefreshHoldKey <= 0) return@LaunchedEffect
         delay(2_000)
@@ -985,6 +1121,11 @@ private fun MobileLibraryHubTab(
     }
     LaunchedEffect(playlistsState.isRefreshing) {
         if (playlistsState.isRefreshing) {
+            startPlaylistsRefreshHold()
+        }
+    }
+    LaunchedEffect(onlinePlaylistsState.isLoading, onlinePlaylistsState.isMutating) {
+        if (onlinePlaylistsState.isLoading || onlinePlaylistsState.isMutating) {
             startPlaylistsRefreshHold()
         }
     }
@@ -1016,49 +1157,71 @@ private fun MobileLibraryHubTab(
                     AppTab.Library -> MobileLibraryHubSourceMenu(
                         selectedSourceFilter = libraryState.selectedSourceFilter,
                         availableSourceFilters = libraryState.availableSourceFilters,
+                        onlineSourceOptions = importState.onlineNavidromeSourceOptions(),
+                        selectedOnlineSourceId = onlineLibraryState.sourceId,
                         onSourceFilterChanged = { filter ->
+                            onOnlineLibraryIntent(OnlineLibraryIntent.SelectSource(sourceId = null))
                             onLibraryIntent(LibraryIntent.SourceFilterChanged(filter))
+                        },
+                        onOnlineSourceSelected = { sourceId ->
+                            onOnlineLibraryIntent(OnlineLibraryIntent.SelectSource(sourceId))
                         },
                     )
 
                     AppTab.Favorites -> MobileLibraryHubSourceMenu(
                         selectedSourceFilter = favoritesState.selectedSourceFilter,
                         availableSourceFilters = favoritesState.availableSourceFilters,
+                        onlineSourceOptions = importState.onlineNavidromeSourceOptions(),
+                        selectedOnlineSourceId = onlineFavoritesState.sourceId,
                         onSourceFilterChanged = { filter ->
+                            onOnlineFavoritesIntent(OnlineFavoritesIntent.SelectSource(sourceId = null))
                             onFavoritesIntent(FavoritesIntent.SourceFilterChanged(filter))
+                        },
+                        onOnlineSourceSelected = { sourceId ->
+                            onOnlineFavoritesIntent(OnlineFavoritesIntent.SelectSource(sourceId))
                         },
                     )
 
                     AppTab.Playlists -> MobileLibraryHubSourceMenu(
                         selectedSourceFilter = playlistsState.selectedSourceFilter,
                         availableSourceFilters = playlistsState.availableSourceFilters,
+                        onlineSourceOptions = importState.onlineNavidromeSourceOptions(),
+                        selectedOnlineSourceId = onlinePlaylistsState.sourceId,
                         onSourceFilterChanged = { filter ->
+                            onOnlinePlaylistsIntent(OnlinePlaylistsIntent.SelectSource(sourceId = null))
                             onPlaylistsIntent(PlaylistsIntent.SourceFilterChanged(filter))
+                        },
+                        onOnlineSourceSelected = { sourceId ->
+                            onOnlinePlaylistsIntent(OnlinePlaylistsIntent.SelectSource(sourceId))
                         },
                     )
 
                     else -> null
                 },
                 sortMenu = when (activeSearchTab) {
-                    AppTab.Library -> MobileLibraryHubSortMenu(
+                    AppTab.Library -> if (onlineLibraryState.sourceId == null) MobileLibraryHubSortMenu(
                         selectedTrackSortMode = libraryState.selectedTrackSortMode,
                         onTrackSortChanged = { mode ->
                             onLibraryIntent(LibraryIntent.TrackSortChanged(mode))
                         },
-                    )
+                    ) else null
 
-                    AppTab.Favorites -> MobileLibraryHubSortMenu(
+                    AppTab.Favorites -> if (onlineFavoritesState.sourceId == null) MobileLibraryHubSortMenu(
                         selectedTrackSortMode = favoritesState.selectedTrackSortMode,
                         onTrackSortChanged = { mode ->
                             onFavoritesIntent(FavoritesIntent.TrackSortChanged(mode))
                         },
-                    )
+                    ) else null
 
                     else -> null
                 },
                 onSearchClick = {
                     if (activeSearchTab == AppTab.Playlists) {
-                        onPlaylistsIntent(PlaylistsIntent.BackToList)
+                        if (onlinePlaylistsState.sourceId != null) {
+                            onOnlinePlaylistsIntent(OnlinePlaylistsIntent.SelectPlaylist(null))
+                        } else {
+                            onPlaylistsIntent(PlaylistsIntent.BackToList)
+                        }
                     }
                     enterSearchMode(autoFocus = true)
                 },
@@ -1080,8 +1243,11 @@ private fun MobileLibraryHubTab(
                 AppTab.Library -> LibraryTab(
                     state = libraryState,
                     favoritesState = favoritesState,
+                    importState = importState,
+                    onlineState = onlineLibraryState,
                     onLibraryIntent = onLibraryIntent,
                     onFavoritesIntent = onFavoritesIntent,
+                    onOnlineIntent = onOnlineLibraryIntent,
                     onPlayerIntent = onPlayerIntent,
                     showDuration = false,
                     showSearchField = false,
@@ -1094,17 +1260,26 @@ private fun MobileLibraryHubTab(
                 )
 
                 AppTab.Favorites -> {
+                    val isOnlineFavoritesMode = onlineFavoritesState.sourceId != null
                     val isFavoritesRefreshing = mobileLibraryHubRefreshIndicatorVisible(
-                        isRefreshing = favoritesState.isRefreshing,
+                        isRefreshing = if (isOnlineFavoritesMode) onlineFavoritesState.isLoading else favoritesState.isRefreshing,
                         isMinimumHoldActive = favoritesRefreshHoldActive,
                     )
                     PullToRefreshBox(
                         isRefreshing = isFavoritesRefreshing,
                         onRefresh = {
                             startFavoritesRefreshHold()
-                            onFavoritesIntent(FavoritesIntent.Refresh)
+                            if (isOnlineFavoritesMode) {
+                                onOnlineFavoritesIntent(OnlineFavoritesIntent.Refresh)
+                            } else {
+                                onFavoritesIntent(FavoritesIntent.Refresh)
+                            }
                         },
-                        enabled = favoritesState.canRefreshRemote,
+                        enabled = if (isOnlineFavoritesMode) {
+                            onlineFavoritesState.sourceId != null
+                        } else {
+                            favoritesState.canRefreshRemote
+                        },
                         modifier = Modifier.fillMaxSize(),
                         state = favoritesPullRefreshState,
                         indicator = {
@@ -1119,7 +1294,10 @@ private fun MobileLibraryHubTab(
                     ) {
                         FavoritesTab(
                             state = favoritesState,
+                            importState = importState,
+                            onlineState = onlineFavoritesState,
                             onFavoritesIntent = onFavoritesIntent,
+                            onOnlineIntent = onOnlineFavoritesIntent,
                             onPlayerIntent = onPlayerIntent,
                             showDuration = false,
                             showSearchField = false,
@@ -1132,16 +1310,26 @@ private fun MobileLibraryHubTab(
                 }
 
                 AppTab.Playlists -> {
+                    val isOnlinePlaylistsMode = onlinePlaylistsState.sourceId != null
                     val isPlaylistsRefreshing = mobileLibraryHubRefreshIndicatorVisible(
-                        isRefreshing = playlistsState.isRefreshing,
+                        isRefreshing = if (isOnlinePlaylistsMode) {
+                            onlinePlaylistsState.isLoading || onlinePlaylistsState.isMutating
+                        } else {
+                            playlistsState.isRefreshing
+                        },
                         isMinimumHoldActive = playlistsRefreshHoldActive,
                     )
                     PullToRefreshBox(
                         isRefreshing = isPlaylistsRefreshing,
                         onRefresh = {
                             startPlaylistsRefreshHold()
-                            onPlaylistsIntent(PlaylistsIntent.Refresh)
+                            if (isOnlinePlaylistsMode) {
+                                onOnlinePlaylistsIntent(OnlinePlaylistsIntent.Refresh)
+                            } else {
+                                onPlaylistsIntent(PlaylistsIntent.Refresh)
+                            }
                         },
+                        enabled = if (isOnlinePlaylistsMode) onlinePlaylistsState.sourceId != null else true,
                         modifier = Modifier.fillMaxSize(),
                         state = playlistsPullRefreshState,
                         indicator = {
@@ -1156,7 +1344,10 @@ private fun MobileLibraryHubTab(
                     ) {
                         PlaylistsTab(
                             state = playlistsState,
+                            importState = importState,
+                            onlineState = onlinePlaylistsState,
                             onPlaylistsIntent = onPlaylistsIntent,
+                            onOnlineIntent = onOnlinePlaylistsIntent,
                             onPlayerIntent = onPlayerIntent,
                             playlistSearchQuery = playlistSearchQuery,
                             showRefreshActionButton = false,
@@ -1177,7 +1368,10 @@ private fun MobileLibraryHubTab(
 private data class MobileLibraryHubSourceMenu(
     val selectedSourceFilter: LibrarySourceFilter,
     val availableSourceFilters: List<LibrarySourceFilter>,
+    val onlineSourceOptions: List<OnlineSourceOption> = emptyList(),
+    val selectedOnlineSourceId: String? = null,
     val onSourceFilterChanged: (LibrarySourceFilter) -> Unit,
+    val onOnlineSourceSelected: (String) -> Unit = {},
 )
 
 private data class MobileLibraryHubSortMenu(
@@ -1248,6 +1442,10 @@ private fun MobileLibraryHubTabStrip(
                         menuExpanded = false
                         sourceMenu?.onSourceFilterChanged(filter)
                     },
+                    onOnlineSourceSelected = { sourceId ->
+                        menuExpanded = false
+                        sourceMenu?.onOnlineSourceSelected(sourceId)
+                    },
                     onTrackSortChanged = { mode ->
                         menuExpanded = false
                         sortMenu?.onTrackSortChanged(mode)
@@ -1274,6 +1472,7 @@ private fun MobileLibraryHubActionsDropdownMenu(
     onLayerChanged: (MobileLibraryHubMenuLayer) -> Unit,
     onDismiss: () -> Unit,
     onSourceFilterChanged: (LibrarySourceFilter) -> Unit,
+    onOnlineSourceSelected: (String) -> Unit,
     onTrackSortChanged: (TrackSortMode) -> Unit,
 ) {
     DropdownMenu(
@@ -1336,7 +1535,8 @@ private fun MobileLibraryHubActionsDropdownMenu(
                     onClick = { onLayerChanged(MobileLibraryHubMenuLayer.Root) },
                 )
                 sourceMenu?.availableSourceFilters.orEmpty().forEach { filter ->
-                    val isSelected = filter == sourceMenu?.selectedSourceFilter
+                    val isSelected = sourceMenu?.selectedOnlineSourceId == null &&
+                        filter == sourceMenu?.selectedSourceFilter
                     DropdownMenuItem(
                         text = { Text(mobileLibraryHubSourceFilterMenuLabel(filter)) },
                         trailingIcon = if (isSelected) {
@@ -1350,6 +1550,23 @@ private fun MobileLibraryHubActionsDropdownMenu(
                             null
                         },
                         onClick = { onSourceFilterChanged(filter) },
+                    )
+                }
+                sourceMenu?.onlineSourceOptions.orEmpty().forEach { option ->
+                    val isSelected = option.sourceId == sourceMenu?.selectedOnlineSourceId
+                    DropdownMenuItem(
+                        text = { Text(option.label) },
+                        trailingIcon = if (isSelected) {
+                            {
+                                Icon(
+                                    imageVector = Icons.Rounded.Check,
+                                    contentDescription = null,
+                                )
+                            }
+                        } else {
+                            null
+                        },
+                        onClick = { onOnlineSourceSelected(option.sourceId) },
                     )
                 }
             }

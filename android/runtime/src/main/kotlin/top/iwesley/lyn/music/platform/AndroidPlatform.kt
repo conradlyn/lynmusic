@@ -94,6 +94,7 @@ import top.iwesley.lyn.music.core.model.LyricsHttpResponse
 import top.iwesley.lyn.music.core.model.LyricsRequest
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.NavidromeAudioQualityPreferencesStore
+import top.iwesley.lyn.music.core.model.NavidromeLibraryProbe
 import top.iwesley.lyn.music.core.model.NavidromeSourceDraft
 import top.iwesley.lyn.music.core.model.NetworkConnectionState
 import top.iwesley.lyn.music.core.model.NetworkConnectionType
@@ -165,6 +166,7 @@ import top.iwesley.lyn.music.domain.resolveNavidromeStreamUrlCandidates
 import top.iwesley.lyn.music.domain.scanEmbyLibrary
 import top.iwesley.lyn.music.domain.scanNavidromeLibrary
 import top.iwesley.lyn.music.domain.scanNavidromeLibraryStreaming
+import top.iwesley.lyn.music.domain.probeNavidromeLibrary
 import top.iwesley.lyn.music.domain.scanSubsonicLibrary
 import top.iwesley.lyn.music.domain.testEmbyConnection
 import top.iwesley.lyn.music.domain.testNavidromeConnection
@@ -586,6 +588,9 @@ internal class AndroidAppPreferencesStore(
     private val mutableFavoritesSourceFilter = MutableStateFlow(
         readLibrarySourceFilter(KEY_FAVORITES_SOURCE_FILTER),
     )
+    private val mutableOnlineLibrarySourceId = MutableStateFlow(readNullablePreference(KEY_ONLINE_LIBRARY_SOURCE_ID))
+    private val mutableOnlineFavoritesSourceId = MutableStateFlow(readNullablePreference(KEY_ONLINE_FAVORITES_SOURCE_ID))
+    private val mutableOnlinePlaylistsSourceId = MutableStateFlow(readNullablePreference(KEY_ONLINE_PLAYLISTS_SOURCE_ID))
     private val mutableLibraryTrackSortMode = MutableStateFlow(
         readTrackSortMode(KEY_LIBRARY_TRACK_SORT_MODE, TrackSortMode.TITLE),
     )
@@ -669,6 +674,9 @@ internal class AndroidAppPreferencesStore(
     override val selectedLyricsShareFontKey: StateFlow<String?> = mutableSelectedLyricsShareFontKey.asStateFlow()
     override val librarySourceFilter: StateFlow<LibrarySourceFilter> = mutableLibrarySourceFilter.asStateFlow()
     override val favoritesSourceFilter: StateFlow<LibrarySourceFilter> = mutableFavoritesSourceFilter.asStateFlow()
+    override val onlineLibrarySourceId: StateFlow<String?> = mutableOnlineLibrarySourceId.asStateFlow()
+    override val onlineFavoritesSourceId: StateFlow<String?> = mutableOnlineFavoritesSourceId.asStateFlow()
+    override val onlinePlaylistsSourceId: StateFlow<String?> = mutableOnlinePlaylistsSourceId.asStateFlow()
     override val libraryTrackSortMode: StateFlow<TrackSortMode> = mutableLibraryTrackSortMode.asStateFlow()
     override val favoritesTrackSortMode: StateFlow<TrackSortMode> = mutableFavoritesTrackSortMode.asStateFlow()
 
@@ -760,6 +768,21 @@ internal class AndroidAppPreferencesStore(
         mutableFavoritesSourceFilter.value = filter
     }
 
+    override suspend fun setOnlineLibrarySourceId(sourceId: String?) {
+        setNullablePreference(KEY_ONLINE_LIBRARY_SOURCE_ID, sourceId)
+        mutableOnlineLibrarySourceId.value = normalizeNullablePreference(sourceId)
+    }
+
+    override suspend fun setOnlineFavoritesSourceId(sourceId: String?) {
+        setNullablePreference(KEY_ONLINE_FAVORITES_SOURCE_ID, sourceId)
+        mutableOnlineFavoritesSourceId.value = normalizeNullablePreference(sourceId)
+    }
+
+    override suspend fun setOnlinePlaylistsSourceId(sourceId: String?) {
+        setNullablePreference(KEY_ONLINE_PLAYLISTS_SOURCE_ID, sourceId)
+        mutableOnlinePlaylistsSourceId.value = normalizeNullablePreference(sourceId)
+    }
+
     override suspend fun setLibraryTrackSortMode(mode: TrackSortMode) {
         preferences.edit().putString(KEY_LIBRARY_TRACK_SORT_MODE, mode.name).apply()
         mutableLibraryTrackSortMode.value = mode
@@ -792,6 +815,25 @@ internal class AndroidAppPreferencesStore(
     private fun readLibrarySourceFilter(key: String): LibrarySourceFilter {
         val name = preferences.getString(key, null)
         return LibrarySourceFilter.entries.firstOrNull { it.name == name } ?: LibrarySourceFilter.ALL
+    }
+
+    private fun readNullablePreference(key: String): String? {
+        return normalizeNullablePreference(preferences.getString(key, null))
+    }
+
+    private fun normalizeNullablePreference(value: String?): String? {
+        return value?.trim()?.takeIf { it.isNotBlank() }
+    }
+
+    private fun setNullablePreference(key: String, value: String?) {
+        val normalizedValue = normalizeNullablePreference(value)
+        val editor = preferences.edit()
+        if (normalizedValue == null) {
+            editor.remove(key)
+        } else {
+            editor.putString(key, normalizedValue)
+        }
+        editor.apply()
     }
 
     private fun readTrackSortMode(key: String, defaultMode: TrackSortMode): TrackSortMode {
@@ -1556,6 +1598,15 @@ private class AndroidImportSourceGateway(
 
     override suspend fun testNavidrome(draft: NavidromeSourceDraft) {
         testNavidromeConnection(
+            draft = draft,
+            httpClient = navidromeHttpClient,
+            logger = logger,
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
+        )
+    }
+
+    override suspend fun probeNavidrome(draft: NavidromeSourceDraft): NavidromeLibraryProbe {
+        return probeNavidromeLibrary(
             draft = draft,
             httpClient = navidromeHttpClient,
             logger = logger,
@@ -3070,6 +3121,9 @@ private const val KEY_NAVIDROME_MOBILE_AUDIO_QUALITY = "navidrome_mobile_audio_q
 private const val KEY_LYRICS_SHARE_FONT_KEY = "lyrics_share_font_key"
 private const val KEY_LIBRARY_SOURCE_FILTER = "library_source_filter"
 private const val KEY_FAVORITES_SOURCE_FILTER = "favorites_source_filter"
+private const val KEY_ONLINE_LIBRARY_SOURCE_ID = "online_library_source_id"
+private const val KEY_ONLINE_FAVORITES_SOURCE_ID = "online_favorites_source_id"
+private const val KEY_ONLINE_PLAYLISTS_SOURCE_ID = "online_playlists_source_id"
 private const val KEY_LIBRARY_TRACK_SORT_MODE = "library_track_sort_mode"
 private const val KEY_FAVORITES_TRACK_SORT_MODE = "favorites_track_sort_mode"
 private const val ANDROID_KEYSTORE = "AndroidKeyStore"

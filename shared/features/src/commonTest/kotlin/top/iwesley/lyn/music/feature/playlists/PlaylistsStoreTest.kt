@@ -18,6 +18,7 @@ import kotlin.test.assertTrue
 import top.iwesley.lyn.music.core.model.ImportScanSummary
 import top.iwesley.lyn.music.core.model.ImportSource
 import top.iwesley.lyn.music.core.model.ImportSourceType
+import top.iwesley.lyn.music.core.model.NavidromeLibraryProbe
 import top.iwesley.lyn.music.core.model.NavidromeSourceDraft
 import top.iwesley.lyn.music.core.model.OfflineDownloadStatus
 import top.iwesley.lyn.music.core.model.PlaylistDetail
@@ -463,6 +464,10 @@ private class FakePlaylistsImportSourceRepository(
 
     override suspend fun testNavidromeSource(draft: NavidromeSourceDraft): Result<Unit> = Result.success(Unit)
 
+    override suspend fun probeNavidromeSource(draft: NavidromeSourceDraft): Result<NavidromeLibraryProbe> {
+        return Result.success(NavidromeLibraryProbe(totalTrackCount = null))
+    }
+
     override suspend fun testUpdatedNavidromeSource(
         sourceId: String,
         draft: NavidromeSourceDraft,
@@ -470,6 +475,20 @@ private class FakePlaylistsImportSourceRepository(
     ): Result<Unit> = Result.success(Unit)
 
     override suspend fun addNavidromeSource(draft: NavidromeSourceDraft): Result<ImportScanSummary> = Result.success(testScanSummary())
+
+    override suspend fun addNavidromeSourceOnline(
+        draft: NavidromeSourceDraft,
+        remoteTrackCount: Int?,
+    ): Result<ImportScanSummary> = Result.success(testScanSummary())
+
+    override suspend fun probeExistingNavidromeSource(sourceId: String): Result<NavidromeLibraryProbe> {
+        return Result.success(NavidromeLibraryProbe(totalTrackCount = null))
+    }
+
+    override suspend fun switchNavidromeSourceToOnline(
+        sourceId: String,
+        remoteTrackCount: Int?,
+    ): Result<ImportScanSummary> = Result.success(testScanSummary(sourceId))
 
     override suspend fun updateNavidromeSource(
         sourceId: String,

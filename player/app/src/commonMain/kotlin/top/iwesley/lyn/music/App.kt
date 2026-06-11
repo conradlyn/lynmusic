@@ -59,6 +59,12 @@ import top.iwesley.lyn.music.feature.library.LibraryStore
 import top.iwesley.lyn.music.feature.my.MyStore
 import top.iwesley.lyn.music.feature.offline.OfflineDownloadIntent
 import top.iwesley.lyn.music.feature.offline.OfflineDownloadStore
+import top.iwesley.lyn.music.feature.online.OnlineFavoritesIntent
+import top.iwesley.lyn.music.feature.online.OnlineFavoritesStore
+import top.iwesley.lyn.music.feature.online.OnlineLibraryIntent
+import top.iwesley.lyn.music.feature.online.OnlineLibraryStore
+import top.iwesley.lyn.music.feature.online.OnlinePlaylistsIntent
+import top.iwesley.lyn.music.feature.online.OnlinePlaylistsStore
 import top.iwesley.lyn.music.feature.player.PlayerIntent
 import top.iwesley.lyn.music.feature.player.PlayerState
 import top.iwesley.lyn.music.feature.player.PlayerStore
@@ -80,8 +86,11 @@ class LynMusicAppComponent(
     val logger: DiagnosticLogger,
     val myStore: MyStore,
     val libraryStore: LibraryStore,
+    val onlineLibraryStore: OnlineLibraryStore,
     val playlistsStore: PlaylistsStore,
+    val onlinePlaylistsStore: OnlinePlaylistsStore,
     val favoritesStore: FavoritesStore,
+    val onlineFavoritesStore: OnlineFavoritesStore,
     val musicTagsStore: MusicTagsStore,
     val importStore: ImportStore,
     val offlineDownloadStore: OfflineDownloadStore,
@@ -159,8 +168,11 @@ fun buildPlayerAppComponent(
         logger = sharedGraph.logger,
         myStore = sharedGraph.myStore,
         libraryStore = sharedGraph.libraryStore,
+        onlineLibraryStore = sharedGraph.onlineLibraryStore,
         playlistsStore = sharedGraph.playlistsStore,
+        onlinePlaylistsStore = sharedGraph.onlinePlaylistsStore,
         favoritesStore = sharedGraph.favoritesStore,
+        onlineFavoritesStore = sharedGraph.onlineFavoritesStore,
         musicTagsStore = sharedGraph.musicTagsStore,
         importStore = sharedGraph.importStore,
         offlineDownloadStore = sharedGraph.offlineDownloadStore,
@@ -302,9 +314,12 @@ fun App(
     }
 
     val libraryState by component.libraryStore.state.collectAsState()
+    val onlineLibraryState by component.onlineLibraryStore.state.collectAsState()
     val myState by component.myStore.state.collectAsState()
     val playlistsState by component.playlistsStore.state.collectAsState()
+    val onlinePlaylistsState by component.onlinePlaylistsStore.state.collectAsState()
     val favoritesState by component.favoritesStore.state.collectAsState()
+    val onlineFavoritesState by component.onlineFavoritesStore.state.collectAsState()
     val musicTagsState by component.musicTagsStore.state.collectAsState()
     val importState by component.importStore.state.collectAsState()
     val offlineDownloadState by component.offlineDownloadStore.state.collectAsState()
@@ -312,12 +327,129 @@ fun App(
     val settingsState by component.settingsStore.state.collectAsState()
     var selectedTab by rememberSaveable { mutableStateOf(defaultSelectedAppTab) }
     var pendingPlaylistTrack by remember { mutableStateOf<Track?>(null) }
+    var shouldRestoreOnlinePlaylistSource by remember { mutableStateOf(false) }
+    var onlinePlaylistSourceRestoreTarget by remember { mutableStateOf<String?>(null) }
+    var onlinePlaylistSourceRestoreObservedChange by remember { mutableStateOf(false) }
     var pendingLibraryNavigationTarget by remember { mutableStateOf<LibraryNavigationTarget?>(null) }
     var isMusicTagsMobileEditorVisible by rememberSaveable { mutableStateOf(false) }
     var startupHydrationStarted by remember(component) { mutableStateOf(false) }
+    val pendingOnlinePlaylistSourceId = remember(pendingPlaylistTrack, importState.sources) {
+        pendingPlaylistTrack?.onlineNavidromeSourceIdOrNull(importState)
+    }
+    val playerFavoriteBinding = playerFavoriteBinding(
+        track = playerState.effectiveSnapshot.currentTrack,
+        localFavoriteTrackIds = favoritesState.favoriteTrackIds,
+        onlineFavoritesState = onlineFavoritesState,
+        importState = importState,
+    )
+    val onOnlineLibraryIntent: (OnlineLibraryIntent) -> Unit = remember(component) {
+        { intent ->
+            if (
+                intent.shouldClearRememberedOnlineLibrarySource(
+                    currentOnlineSourceId = component.onlineLibraryStore.state.value.sourceId,
+                    rememberedOnlineSourceId = component.onlineLibraryStore.rememberedSourceId,
+                )
+            ) {
+                component.onlineLibraryStore.clearRememberedSource()
+            } else {
+                if (intent.shouldStartOnlineLibraryStore()) {
+                    component.onlineLibraryStore.ensureStarted()
+                }
+                component.onlineLibraryStore.dispatch(intent)
+            }
+        }
+    }
+    val onOnlineFavoritesIntent: (OnlineFavoritesIntent) -> Unit = remember(component) {
+        { intent ->
+            if (
+                intent.shouldClearRememberedOnlineFavoritesSource(
+                    currentOnlineSourceId = component.onlineFavoritesStore.state.value.sourceId,
+                    rememberedOnlineSourceId = component.onlineFavoritesStore.rememberedSourceId,
+                )
+            ) {
+                component.onlineFavoritesStore.clearRememberedSource()
+            } else {
+                if (intent.shouldStartOnlineFavoritesStore()) {
+                    component.onlineFavoritesStore.ensureStarted()
+                }
+                component.onlineFavoritesStore.dispatch(intent)
+            }
+        }
+    }
+    val onOnlinePlaylistsIntent: (OnlinePlaylistsIntent) -> Unit = remember(component) {
+        { intent ->
+            if (
+                intent.shouldClearRememberedOnlinePlaylistsSource(
+                    currentOnlineSourceId = component.onlinePlaylistsStore.state.value.sourceId,
+                    rememberedOnlineSourceId = component.onlinePlaylistsStore.rememberedSourceId,
+                )
+            ) {
+                component.onlinePlaylistsStore.clearRememberedSource()
+            } else {
+                if (intent.shouldStartOnlinePlaylistsStore()) {
+                    component.onlinePlaylistsStore.ensureStarted()
+                }
+                component.onlinePlaylistsStore.dispatch(intent)
+            }
+        }
+    }
+    LaunchedEffect(
+        pendingPlaylistTrack,
+        shouldRestoreOnlinePlaylistSource,
+        onlinePlaylistSourceRestoreTarget,
+        onlinePlaylistsState.sourceId,
+    ) {
+        if (
+            shouldRestoreOnlinePlaylistSource &&
+            onlinePlaylistsState.sourceId != onlinePlaylistSourceRestoreTarget
+        ) {
+            onlinePlaylistSourceRestoreObservedChange = true
+        }
+        if (pendingPlaylistTrack != null || !shouldRestoreOnlinePlaylistSource) {
+            return@LaunchedEffect
+        }
+        if (onlinePlaylistsState.sourceId != onlinePlaylistSourceRestoreTarget) {
+            onOnlinePlaylistsIntent(
+                OnlinePlaylistsIntent.SelectSource(
+                    sourceId = onlinePlaylistSourceRestoreTarget,
+                    persist = false,
+                ),
+            )
+        } else if (onlinePlaylistSourceRestoreObservedChange) {
+            shouldRestoreOnlinePlaylistSource = false
+            onlinePlaylistSourceRestoreTarget = null
+            onlinePlaylistSourceRestoreObservedChange = false
+        }
+    }
     var pendingCastNotificationPermissionDeviceId by rememberSaveable(component) { mutableStateOf<String?>(null) }
     var castNotificationPermissionWarningShown by rememberSaveable(component) { mutableStateOf(false) }
     val appCoroutineScope = rememberCoroutineScope()
+    fun openAddToPlaylist(track: Track?) {
+        val onlineSourceId = track?.onlineNavidromeSourceIdOrNull(importState)
+        if (onlineSourceId != null) {
+            onlinePlaylistSourceRestoreTarget = onlinePlaylistsState.sourceId
+            shouldRestoreOnlinePlaylistSource = true
+            onlinePlaylistSourceRestoreObservedChange = onlinePlaylistsState.sourceId == onlineSourceId
+            if (onlinePlaylistsState.sourceId != onlineSourceId) {
+                onOnlinePlaylistsIntent(
+                    OnlinePlaylistsIntent.SelectSource(
+                        sourceId = onlineSourceId,
+                        persist = false,
+                    ),
+                )
+            }
+        } else {
+            shouldRestoreOnlinePlaylistSource = false
+            onlinePlaylistSourceRestoreTarget = null
+            onlinePlaylistSourceRestoreObservedChange = false
+        }
+        pendingPlaylistTrack = track
+    }
+
+    fun closeAddToPlaylist() {
+        pendingPlaylistTrack = null
+    }
+
     fun showCastNotificationPermissionWarningOnce() {
         if (!castNotificationPermissionWarningShown) {
             castNotificationPermissionWarningShown = true
@@ -423,6 +555,30 @@ fun App(
                         component.playlistsStore.dispatch(PlaylistsIntent.ClearMessage)
                     }
                 }
+                onlinePlaylistsState.message?.let { message ->
+                    LaunchedEffect(message) {
+                        kotlinx.coroutines.delay(2_500)
+                        onOnlinePlaylistsIntent(OnlinePlaylistsIntent.ClearMessage)
+                    }
+                }
+                onlinePlaylistsState.errorMessage?.let { message ->
+                    LaunchedEffect(message) {
+                        kotlinx.coroutines.delay(2_500)
+                        onOnlinePlaylistsIntent(OnlinePlaylistsIntent.ClearMessage)
+                    }
+                }
+                onlineFavoritesState.message?.let { message ->
+                    LaunchedEffect(message) {
+                        kotlinx.coroutines.delay(2_500)
+                        onOnlineFavoritesIntent(OnlineFavoritesIntent.ClearMessage)
+                    }
+                }
+                onlineFavoritesState.errorMessage?.let { message ->
+                    LaunchedEffect(message) {
+                        kotlinx.coroutines.delay(2_500)
+                        onOnlineFavoritesIntent(OnlineFavoritesIntent.ClearMessage)
+                    }
+                }
                 offlineDownloadState.message?.let { message ->
                     LaunchedEffect(message) {
                         kotlinx.coroutines.delay(2_500)
@@ -451,8 +607,11 @@ fun App(
                             platform = component.platform,
                             myState = myState,
                             libraryState = libraryState,
+                            onlineLibraryState = onlineLibraryState,
                             playlistsState = playlistsState,
+                            onlinePlaylistsState = onlinePlaylistsState,
                             favoritesState = favoritesState,
+                            onlineFavoritesState = onlineFavoritesState,
                             musicTagsState = musicTagsState,
                             musicTagsEffects = component.musicTagsStore.effects,
                             importState = importState,
@@ -460,8 +619,11 @@ fun App(
                             settingsState = settingsState,
                             onMyIntent = component.myStore::dispatch,
                             onLibraryIntent = component.libraryStore::dispatch,
+                            onOnlineLibraryIntent = onOnlineLibraryIntent,
                             onPlaylistsIntent = component.playlistsStore::dispatch,
+                            onOnlinePlaylistsIntent = onOnlinePlaylistsIntent,
                             onFavoritesIntent = component.favoritesStore::dispatch,
+                            onOnlineFavoritesIntent = onOnlineFavoritesIntent,
                             onMusicTagsIntent = component.musicTagsStore::dispatch,
                             onImportIntent = component.importStore::dispatch,
                             onPlayerIntent = onPlayerIntent,
@@ -479,7 +641,7 @@ fun App(
                                 isMusicTagsMobileEditorVisible = it
                             },
                             onOpenAddToPlaylist = {
-                                pendingPlaylistTrack = effectivePlayerSnapshot.currentTrack
+                                openAddToPlaylist(effectivePlayerSnapshot.currentTrack)
                             },
                         )
                     } else {
@@ -489,8 +651,11 @@ fun App(
                             platform = component.platform,
                             myState = myState,
                             libraryState = libraryState,
+                            onlineLibraryState = onlineLibraryState,
                             playlistsState = playlistsState,
+                            onlinePlaylistsState = onlinePlaylistsState,
                             favoritesState = favoritesState,
+                            onlineFavoritesState = onlineFavoritesState,
                             musicTagsState = musicTagsState,
                             musicTagsEffects = component.musicTagsStore.effects,
                             importState = importState,
@@ -498,8 +663,11 @@ fun App(
                             settingsState = settingsState,
                             onMyIntent = component.myStore::dispatch,
                             onLibraryIntent = component.libraryStore::dispatch,
+                            onOnlineLibraryIntent = onOnlineLibraryIntent,
                             onPlaylistsIntent = component.playlistsStore::dispatch,
+                            onOnlinePlaylistsIntent = onOnlinePlaylistsIntent,
                             onFavoritesIntent = component.favoritesStore::dispatch,
+                            onOnlineFavoritesIntent = onOnlineFavoritesIntent,
                             onMusicTagsIntent = component.musicTagsStore::dispatch,
                             onImportIntent = component.importStore::dispatch,
                             onPlayerIntent = onPlayerIntent,
@@ -512,7 +680,7 @@ fun App(
                                 selectedTab = AppTab.Library
                             },
                             onOpenAddToPlaylist = {
-                                pendingPlaylistTrack = effectivePlayerSnapshot.currentTrack
+                                openAddToPlaylist(effectivePlayerSnapshot.currentTrack)
                             },
                         )
                     }
@@ -534,18 +702,28 @@ fun App(
                             lyricsShareThemeTokens = shellThemeTokens,
                             lyricsShareTextPalette = shellTextPalette,
                             onPlayerIntent = onPlayerIntent,
-                            isFavorite = effectivePlayerSnapshot.currentTrack?.id in favoritesState.favoriteTrackIds,
+                            isFavorite = playerFavoriteBinding.isFavorite,
+                            canToggleFavorite = playerFavoriteBinding.canToggleFavorite,
                             onToggleFavorite = {
-                                effectivePlayerSnapshot.currentTrack?.let { track ->
-                                    component.favoritesStore.dispatch(
-                                        FavoritesIntent.ToggleFavorite(
-                                            track
-                                        )
-                                    )
+                                if (playerFavoriteBinding.canToggleFavorite) {
+                                    effectivePlayerSnapshot.currentTrack?.let { track ->
+                                        val onlineSourceId = playerFavoriteBinding.onlineSourceId
+                                        if (onlineSourceId != null) {
+                                            onOnlineFavoritesIntent(
+                                                OnlineFavoritesIntent.SetFavorite(
+                                                    sourceId = onlineSourceId,
+                                                    track = track,
+                                                    favorite = !playerFavoriteBinding.isFavorite,
+                                                )
+                                            )
+                                        } else {
+                                            component.favoritesStore.dispatch(FavoritesIntent.ToggleFavorite(track))
+                                        }
+                                    }
                                 }
                             },
                             onOpenAddToPlaylist = {
-                                pendingPlaylistTrack = effectivePlayerSnapshot.currentTrack
+                                openAddToPlaylist(effectivePlayerSnapshot.currentTrack)
                             },
                             onOpenQueue = {
                                 component.playerStore.dispatch(
@@ -554,6 +732,7 @@ fun App(
                                     )
                                 )
                             },
+                            onlineNavigationSourceId = playerFavoriteBinding.onlineSourceId,
                             onOpenLibraryNavigationTarget = { target ->
                                 component.playerStore.dispatch(PlayerIntent.ExpandedChanged(false))
                                 pendingLibraryNavigationTarget = target
@@ -630,39 +809,86 @@ fun App(
                         )
                     }
                     pendingPlaylistTrack?.let { track ->
+                        val onlinePlaylistSourceId = pendingOnlinePlaylistSourceId
+                        val useOnlinePlaylistTargets = onlinePlaylistSourceId != null
+                        val onlinePlaylistTargets = if (
+                            useOnlinePlaylistTargets &&
+                            onlinePlaylistsState.sourceId == onlinePlaylistSourceId
+                        ) {
+                            onlinePlaylistsState.playlists
+                        } else {
+                            emptyList()
+                        }
                         PlaylistAddDialog(
                             track = track,
-                            isLoadingTargets = playlistsState.isLoadingContent,
-                            targets = buildPlaylistAddTargets(
-                                playlists = playlistsState.playlists,
-                                favoriteTrackIds = favoritesState.favoriteTrackIds,
-                                trackId = track.id,
-                            ),
+                            isLoadingTargets = if (useOnlinePlaylistTargets) {
+                                onlinePlaylistsState.sourceId != onlinePlaylistSourceId ||
+                                    onlinePlaylistsState.isLoading ||
+                                    onlinePlaylistsState.isMutating
+                            } else {
+                                playlistsState.isLoadingContent
+                            },
+                            targets = if (useOnlinePlaylistTargets) {
+                                buildPlaylistAddTargets(
+                                    playlists = onlinePlaylistTargets,
+                                    favoriteTrackIds = emptySet(),
+                                    trackId = track.id,
+                                    includeLiked = false,
+                                )
+                            } else {
+                                buildPlaylistAddTargets(
+                                    playlists = playlistsState.playlists,
+                                    favoriteTrackIds = favoritesState.favoriteTrackIds,
+                                    trackId = track.id,
+                                )
+                            },
                             compact = compact,
-                            onDismiss = { pendingPlaylistTrack = null },
+                            onDismiss = ::closeAddToPlaylist,
                             onAddTarget = { target ->
-                                pendingPlaylistTrack = null
-                                when (target.kind) {
-                                    PlaylistKind.SYSTEM_LIKED -> {
-                                        component.favoritesStore.dispatch(
-                                            FavoritesIntent.EnsureFavorite(
-                                                track
-                                            )
+                                closeAddToPlaylist()
+                                if (useOnlinePlaylistTargets) {
+                                    if (target.kind == PlaylistKind.USER) {
+                                        onOnlinePlaylistsIntent(
+                                            OnlinePlaylistsIntent.AddTrack(
+                                                playlistId = target.id,
+                                                track = track,
+                                                sourceId = onlinePlaylistSourceId,
+                                            ),
                                         )
                                     }
+                                } else {
+                                    when (target.kind) {
+                                        PlaylistKind.SYSTEM_LIKED -> {
+                                            component.favoritesStore.dispatch(
+                                                FavoritesIntent.EnsureFavorite(
+                                                    track
+                                                )
+                                            )
+                                        }
 
-                                    PlaylistKind.USER -> {
-                                        component.playlistsStore.dispatch(
-                                            PlaylistsIntent.AddTrackToPlaylist(target.id, track),
-                                        )
+                                        PlaylistKind.USER -> {
+                                            component.playlistsStore.dispatch(
+                                                PlaylistsIntent.AddTrackToPlaylist(target.id, track),
+                                            )
+                                        }
                                     }
                                 }
                             },
                             onCreatePlaylistAndAdd = { name ->
-                                pendingPlaylistTrack = null
-                                component.playlistsStore.dispatch(
-                                    PlaylistsIntent.CreatePlaylistAndAddTrack(name, track),
-                                )
+                                closeAddToPlaylist()
+                                if (useOnlinePlaylistTargets) {
+                                    onOnlinePlaylistsIntent(
+                                        OnlinePlaylistsIntent.CreatePlaylistAndAddTrack(
+                                            name = name,
+                                            track = track,
+                                            sourceId = onlinePlaylistSourceId,
+                                        ),
+                                    )
+                                } else {
+                                    component.playlistsStore.dispatch(
+                                        PlaylistsIntent.CreatePlaylistAndAddTrack(name, track),
+                                    )
+                                }
                             },
                         )
                     }
@@ -675,7 +901,14 @@ fun App(
                                 .navigationBarsPadding(),
                         )
                     }
-                    playlistsState.message?.let { message ->
+                    val secondaryNotice = secondaryToastMessage(
+                        onlineFavoritesErrorMessage = onlineFavoritesState.errorMessage,
+                        onlinePlaylistsErrorMessage = onlinePlaylistsState.errorMessage,
+                        playlistsMessage = playlistsState.message,
+                        onlineFavoritesMessage = onlineFavoritesState.message,
+                        onlinePlaylistsMessage = onlinePlaylistsState.message,
+                    )
+                    secondaryNotice?.let { message ->
                         ToastCard(
                             message = message,
                             modifier = Modifier
@@ -699,6 +932,85 @@ fun App(
     }
 }
 
+internal fun secondaryToastMessage(
+    onlineFavoritesErrorMessage: String?,
+    onlinePlaylistsErrorMessage: String?,
+    playlistsMessage: String?,
+    onlineFavoritesMessage: String?,
+    onlinePlaylistsMessage: String?,
+): String? {
+    return onlineFavoritesErrorMessage
+        ?: onlinePlaylistsErrorMessage
+        ?: playlistsMessage
+        ?: onlineFavoritesMessage
+        ?: onlinePlaylistsMessage
+}
+
+internal fun OnlineLibraryIntent.isPassiveLibrarySourceClear(): Boolean {
+    return this is OnlineLibraryIntent.SelectSource && persist && sourceId.isNullOrBlank()
+}
+
+internal fun OnlineLibraryIntent.shouldClearRememberedOnlineLibrarySource(
+    currentOnlineSourceId: String?,
+    rememberedOnlineSourceId: String?,
+): Boolean {
+    return isPassiveLibrarySourceClear() &&
+        currentOnlineSourceId == null &&
+        !rememberedOnlineSourceId.isNullOrBlank()
+}
+
+internal fun OnlineLibraryIntent.shouldStartOnlineLibraryStore(): Boolean {
+    return when (this) {
+        is OnlineLibraryIntent.SelectSource -> !sourceId.isNullOrBlank()
+        OnlineLibraryIntent.ClearError -> false
+        else -> true
+    }
+}
+
+internal fun OnlineFavoritesIntent.isPassiveFavoritesSourceClear(): Boolean {
+    return this is OnlineFavoritesIntent.SelectSource && persist && sourceId.isNullOrBlank()
+}
+
+internal fun OnlineFavoritesIntent.shouldClearRememberedOnlineFavoritesSource(
+    currentOnlineSourceId: String?,
+    rememberedOnlineSourceId: String?,
+): Boolean {
+    return isPassiveFavoritesSourceClear() &&
+        currentOnlineSourceId == null &&
+        !rememberedOnlineSourceId.isNullOrBlank()
+}
+
+internal fun OnlineFavoritesIntent.shouldStartOnlineFavoritesStore(): Boolean {
+    return when (this) {
+        is OnlineFavoritesIntent.SelectSource -> !sourceId.isNullOrBlank()
+        OnlineFavoritesIntent.ClearMessage -> false
+        else -> true
+    }
+}
+
+internal fun OnlinePlaylistsIntent.isPassivePlaylistsSourceClear(): Boolean {
+    return this is OnlinePlaylistsIntent.SelectSource && persist && sourceId.isNullOrBlank()
+}
+
+internal fun OnlinePlaylistsIntent.shouldClearRememberedOnlinePlaylistsSource(
+    currentOnlineSourceId: String?,
+    rememberedOnlineSourceId: String?,
+): Boolean {
+    return isPassivePlaylistsSourceClear() &&
+        currentOnlineSourceId == null &&
+        !rememberedOnlineSourceId.isNullOrBlank()
+}
+
+internal fun OnlinePlaylistsIntent.shouldStartOnlinePlaylistsStore(): Boolean {
+    return when (this) {
+        is OnlinePlaylistsIntent.SelectSource -> !sourceId.isNullOrBlank()
+        is OnlinePlaylistsIntent.SelectPlaylist -> playlistId != null
+        OnlinePlaylistsIntent.ClearMessage,
+        OnlinePlaylistsIntent.ClearPlaylistImportReport -> false
+        else -> true
+    }
+}
+
 private fun activateStartupStores(
     component: LynMusicAppComponent,
     selectedTab: AppTab,
@@ -706,9 +1018,18 @@ private fun activateStartupStores(
 ) {
     when (resolveAppTabForPlatform(selectedTab, component.platform)) {
         AppTab.My -> component.myStore.ensureStarted()
-        AppTab.Library -> component.libraryStore.ensureStarted()
-        AppTab.Favorites -> component.favoritesStore.ensureContentStarted()
-        AppTab.Playlists -> component.playlistsStore.ensureContentStarted()
+        AppTab.Library -> {
+            component.libraryStore.ensureStarted()
+            component.onlineLibraryStore.ensureStartedIfRememberedSource()
+        }
+        AppTab.Favorites -> {
+            component.favoritesStore.ensureContentStarted()
+            component.onlineFavoritesStore.ensureStartedIfRememberedSource()
+        }
+        AppTab.Playlists -> {
+            component.playlistsStore.ensureContentStarted()
+            component.onlinePlaylistsStore.ensureStartedIfRememberedSource()
+        }
         AppTab.Tags -> component.musicTagsStore.ensureStarted()
         AppTab.Sources, AppTab.Settings -> Unit
     }

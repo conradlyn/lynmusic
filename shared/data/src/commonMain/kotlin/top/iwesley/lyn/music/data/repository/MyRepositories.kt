@@ -168,7 +168,7 @@ class RoomMyRepository(
         return runCatching {
             val failures = mutableListOf<Throwable>()
             database.importSourceDao().getAll()
-                .filter { (it.subsonicCompatibleSourceType() != null || it.isEmbySource()) && it.enabled }
+                .filter { (it.subsonicCompatibleSourceType() != null || it.isEmbySource()) && it.isLocalIndexedEnabled() }
                 .forEach { source ->
                     runCatching {
                         if (source.isEmbySource()) {
@@ -513,7 +513,7 @@ class RoomMyRepository(
 
 private fun List<ImportSourceEntity>.enabledSourceIds(): Set<String> {
     return asSequence()
-        .filter { it.enabled }
+        .filter { it.isLocalIndexedEnabled() }
         .map { it.id }
         .toSet()
 }

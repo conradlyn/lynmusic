@@ -22,6 +22,7 @@ import top.iwesley.lyn.music.feature.library.LibrarySourceFilterPreferencesStore
 import top.iwesley.lyn.music.feature.library.TrackSortMode
 import top.iwesley.lyn.music.feature.library.deriveVisibleAlbums
 import top.iwesley.lyn.music.feature.library.deriveVisibleArtists
+import top.iwesley.lyn.music.feature.library.isLocalIndexedEnabled
 import top.iwesley.lyn.music.feature.library.matchesLibrarySourceFilter
 import top.iwesley.lyn.music.feature.library.sortTracks
 import top.iwesley.lyn.music.feature.library.toLibrarySourceFilter
@@ -105,13 +106,13 @@ class FavoritesStore(
                 importSourceRepository.observeSources(),
                 offlineDownloadRepository.downloads,
             ) { tracks, favoriteTrackMetadata, sources, offlineDownloads ->
-                val enabledSources = sources.map { it.source }.filter { it.enabled }
+                val enabledSources = sources.map { it.source }.filter { it.isLocalIndexedEnabled() }
                 FavoritesContentSnapshot(
                     tracks = tracks,
                     favoriteTrackMetadata = favoriteTrackMetadata,
                     offlineDownloadsByTrackId = offlineDownloads,
                     sourceTypesById = enabledSources.associate { it.id to it.type },
-                    availableSourceFilters = buildAvailableSourceFilters(sources.filter { it.source.enabled }),
+                    availableSourceFilters = buildAvailableSourceFilters(sources.filter { it.source.isLocalIndexedEnabled() }),
                     navidromeSourceIds = enabledSources
                         .filter {
                             it.type == ImportSourceType.NAVIDROME ||

@@ -99,12 +99,15 @@ import top.iwesley.lyn.music.core.model.SYSTEM_LIKED_PLAYLIST_ID
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.trackArtworkCacheKey
 import top.iwesley.lyn.music.data.repository.PlaylistImportReport
+import top.iwesley.lyn.music.feature.importing.ImportState
 import top.iwesley.lyn.music.feature.library.LibrarySourceFilter
 import top.iwesley.lyn.music.feature.library.matchesLibrarySourceFilter
 import top.iwesley.lyn.music.feature.offline.OfflineDownloadIntent
 import top.iwesley.lyn.music.feature.offline.batchDownloadInsufficientSpaceMessage
 import top.iwesley.lyn.music.feature.offline.batchDownloadSizeEstimateLabel
 import top.iwesley.lyn.music.feature.offline.estimateBatchDownloadSize
+import top.iwesley.lyn.music.feature.online.OnlinePlaylistsIntent
+import top.iwesley.lyn.music.feature.online.OnlinePlaylistsState
 import top.iwesley.lyn.music.feature.player.PlayerIntent
 import top.iwesley.lyn.music.feature.playlists.PlaylistsIntent
 import top.iwesley.lyn.music.feature.playlists.PlaylistsState
@@ -115,6 +118,7 @@ fun buildPlaylistAddTargets(
     playlists: List<PlaylistSummary>,
     favoriteTrackIds: Set<String>,
     trackId: String?,
+    includeLiked: Boolean = true,
 ): List<PlaylistAddTarget> {
     val likedTarget = PlaylistAddTarget(
         id = SYSTEM_LIKED_PLAYLIST_ID,
@@ -123,7 +127,8 @@ fun buildPlaylistAddTargets(
         updatedAt = Long.MAX_VALUE,
         alreadyContainsTrack = trackId != null && trackId in favoriteTrackIds,
     )
-    return listOf(likedTarget) + playlists
+    val systemTargets = if (includeLiked) listOf(likedTarget) else emptyList()
+    return systemTargets + playlists
         .sortedWith(compareByDescending<PlaylistSummary> { it.updatedAt }.thenBy { it.name.lowercase() })
         .map { playlist ->
             PlaylistAddTarget(
@@ -623,7 +628,10 @@ private fun playlistAddTrackLabel(track: Track): String {
 @Composable
 internal fun PlaylistsTab(
     state: PlaylistsState,
+    importState: ImportState,
+    onlineState: OnlinePlaylistsState,
     onPlaylistsIntent: (PlaylistsIntent) -> Unit,
+    onOnlineIntent: (OnlinePlaylistsIntent) -> Unit,
     onPlayerIntent: (PlayerIntent) -> Unit,
     playlistSearchQuery: String = "",
     showRefreshActionButton: Boolean = true,
@@ -634,46 +642,77 @@ internal fun PlaylistsTab(
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
     var showImportDialog by rememberSaveable { mutableStateOf(false) }
-    val detail = state.selectedPlaylist
-    val requestedPlaylistId = state.selectedPlaylistId
-    val filteredPlaylists = remember(state.playlists, playlistSearchQuery) {
-        filterMobileLibraryHubPlaylists(state.playlists, playlistSearchQuery)
+    val onlineSourceOptions = remember(importState.sources) {
+        importState.onlineNavidromeSourceOptions()
     }
-    val isFilteringPlaylists = playlistSearchQuery.isNotBlank() && state.playlists.isNotEmpty()
+    val isOnlineMode = onlineState.sourceId != null
+    val playlists = if (isOnlineMode) onlineState.playlists else state.playlists
+    val detail = if (isOnlineMode) onlineState.selectedPlaylist else state.selectedPlaylist
+    val requestedPlaylistId = if (isOnlineMode) onlineState.selectedPlaylistId else state.selectedPlaylistId
+    val isListLoading = if (isOnlineMode) {
+        onlineState.isLoading || onlineState.isMutating
+    } else {
+        state.isLoadingContent
+    }
+    val isDetailLoading = if (isOnlineMode) {
+        onlineState.isLoadingDetail || onlineState.isMutating
+    } else {
+        state.isLoadingContent
+    }
+    val isRefreshing = if (isOnlineMode) {
+        onlineState.isLoading || onlineState.isMutating
+    } else {
+        state.isRefreshing
+    }
+    val filteredPlaylists = remember(playlists, playlistSearchQuery) {
+        filterMobileLibraryHubPlaylists(playlists, playlistSearchQuery)
+    }
+    val isFilteringPlaylists = playlistSearchQuery.isNotBlank() && playlists.isNotEmpty()
     PlatformBackHandler(
         enabled = canNavigateBackFromPlaylistDetail(requestedPlaylistId),
-        onBack = { onPlaylistsIntent(PlaylistsIntent.BackToList) },
+        onBack = {
+            if (isOnlineMode) {
+                onOnlineIntent(OnlinePlaylistsIntent.SelectPlaylist(null))
+            } else {
+                onPlaylistsIntent(PlaylistsIntent.BackToList)
+            }
+        },
     )
     val filteredDetail = remember(
+        isOnlineMode,
         detail,
         state.selectedSourceFilter,
         state.sourceTypesById,
         state.offlineDownloadsByTrackId,
     ) {
-        detail?.let { playlistDetail ->
-            val filteredTracks = playlistDetail.tracks.filter { entry ->
-                matchesPlaylistSourceFilter(
-                    track = entry.track,
-                    selectedSourceFilter = state.selectedSourceFilter,
-                    sourceTypesById = state.sourceTypesById,
-                    offlineDownloadsByTrackId = state.offlineDownloadsByTrackId,
-                )
+        if (isOnlineMode) {
+            detail
+        } else {
+            detail?.let { playlistDetail ->
+                val filteredTracks = playlistDetail.tracks.filter { entry ->
+                    matchesPlaylistSourceFilter(
+                        track = entry.track,
+                        selectedSourceFilter = state.selectedSourceFilter,
+                        sourceTypesById = state.sourceTypesById,
+                        offlineDownloadsByTrackId = state.offlineDownloadsByTrackId,
+                    )
+                }
+                playlistDetail.copy(tracks = filteredTracks)
             }
-            playlistDetail.copy(tracks = filteredTracks)
         }
     }
-    val rawDetailPresentation = remember(requestedPlaylistId, detail, state.playlists) {
+    val rawDetailPresentation = remember(requestedPlaylistId, detail, playlists) {
         buildPlaylistDetailPresentationState(
             selectedPlaylistId = requestedPlaylistId,
             detail = detail,
-            playlists = state.playlists,
+            playlists = playlists,
         )
     }
-    val filteredDetailPresentation = remember(requestedPlaylistId, filteredDetail, state.playlists) {
+    val filteredDetailPresentation = remember(requestedPlaylistId, filteredDetail, playlists) {
         buildPlaylistDetailPresentationState(
             selectedPlaylistId = requestedPlaylistId,
             detail = filteredDetail,
-            playlists = state.playlists,
+            playlists = playlists,
         )
     }
     val resolvedDetail = filteredDetailPresentation.resolvedDetail
@@ -698,7 +737,11 @@ internal fun PlaylistsTab(
                 onDismiss = { showCreateDialog = false },
                 onConfirm = { name ->
                     showCreateDialog = false
-                    onPlaylistsIntent(PlaylistsIntent.CreatePlaylist(name))
+                    if (isOnlineMode) {
+                        onOnlineIntent(OnlinePlaylistsIntent.CreatePlaylist(name))
+                    } else {
+                        onPlaylistsIntent(PlaylistsIntent.CreatePlaylist(name))
+                    }
                 },
             )
         }
@@ -706,14 +749,23 @@ internal fun PlaylistsTab(
             resolvedRawDetail?.let { importTarget ->
                 PlaylistTextImportDialog(
                     playlistName = importTarget.name,
-                    isImporting = state.isImporting,
-                    report = state.playlistImportReport,
+                    isOnlineMode = isOnlineMode,
+                    isImporting = if (isOnlineMode) onlineState.isImporting else state.isImporting,
+                    report = if (isOnlineMode) onlineState.playlistImportReport else state.playlistImportReport,
                     onDismiss = {
                         showImportDialog = false
-                        onPlaylistsIntent(PlaylistsIntent.ClearPlaylistImportReport)
+                        if (isOnlineMode) {
+                            onOnlineIntent(OnlinePlaylistsIntent.ClearPlaylistImportReport)
+                        } else {
+                            onPlaylistsIntent(PlaylistsIntent.ClearPlaylistImportReport)
+                        }
                     },
                     onImport = { text ->
-                        onPlaylistsIntent(PlaylistsIntent.ImportPlaylistText(importTarget.id, text))
+                        if (isOnlineMode) {
+                            onOnlineIntent(OnlinePlaylistsIntent.ImportPlaylistText(importTarget.id, text))
+                        } else {
+                            onPlaylistsIntent(PlaylistsIntent.ImportPlaylistText(importTarget.id, text))
+                        }
                     },
                 )
             }
@@ -725,32 +777,68 @@ internal fun PlaylistsTab(
             ) {
                 PlaylistListPane(
                     playlists = filteredPlaylists,
-                    isLoadingContent = state.isLoadingContent,
+                    isLoadingContent = isListLoading,
                     selectedPlaylistId = requestedPlaylistId,
-                    isRefreshing = state.isRefreshing,
+                    isRefreshing = isRefreshing,
                     selectedSourceFilter = state.selectedSourceFilter,
                     availableSourceFilters = state.availableSourceFilters,
+                    onlineSourceOptions = onlineSourceOptions,
+                    selectedOnlineSourceId = onlineState.sourceId,
+                    isOnlineMode = isOnlineMode,
                     isFilteringByQuery = isFilteringPlaylists,
                     showRefreshActionButton = showRefreshActionButton,
                     showSourceFilterActionButton = showSourceFilterActionButton,
-                    onRefresh = { onPlaylistsIntent(PlaylistsIntent.Refresh) },
-                    onSourceFilterChanged = { onPlaylistsIntent(PlaylistsIntent.SourceFilterChanged(it)) },
+                    onRefresh = {
+                        if (isOnlineMode) {
+                            onOnlineIntent(OnlinePlaylistsIntent.Refresh)
+                        } else {
+                            onPlaylistsIntent(PlaylistsIntent.Refresh)
+                        }
+                    },
+                    onSourceFilterChanged = {
+                        onOnlineIntent(OnlinePlaylistsIntent.SelectSource(sourceId = null))
+                        onPlaylistsIntent(PlaylistsIntent.SourceFilterChanged(it))
+                    },
+                    onOnlineSourceSelected = { onOnlineIntent(OnlinePlaylistsIntent.SelectSource(it)) },
                     onCreate = { showCreateDialog = true },
                     onRename = { playlistId, name ->
-                        onPlaylistsIntent(PlaylistsIntent.RenamePlaylist(playlistId, name))
+                        if (isOnlineMode) {
+                            onOnlineIntent(OnlinePlaylistsIntent.RenamePlaylist(playlistId, name))
+                        } else {
+                            onPlaylistsIntent(PlaylistsIntent.RenamePlaylist(playlistId, name))
+                        }
                     },
-                    onDelete = { onPlaylistsIntent(PlaylistsIntent.DeletePlaylist(it)) },
-                    onSelect = { onPlaylistsIntent(PlaylistsIntent.SelectPlaylist(it)) },
+                    onDelete = {
+                        if (isOnlineMode) {
+                            onOnlineIntent(OnlinePlaylistsIntent.DeletePlaylist(it))
+                        } else {
+                            onPlaylistsIntent(PlaylistsIntent.DeletePlaylist(it))
+                        }
+                    },
+                    onSelect = {
+                        if (isOnlineMode) {
+                            onOnlineIntent(OnlinePlaylistsIntent.SelectPlaylist(it))
+                        } else {
+                            onPlaylistsIntent(PlaylistsIntent.SelectPlaylist(it))
+                        }
+                    },
                     modifier = Modifier.weight(0.36f).fillMaxHeight(),
                 )
                 PlaylistDetailPane(
                     detail = resolvedDetail,
-                    isLoadingContent = state.isLoadingContent,
+                    isLoadingContent = isDetailLoading,
                     isDetailSwitchLoading = filteredDetailPresentation.isDetailSwitchLoading,
                     requestedPlaylistName = filteredDetailPresentation.requestedPlaylistName,
-                    hasTracksOutsideFilter = resolvedRawDetail?.tracks?.isNotEmpty() == true &&
+                    hasTracksOutsideFilter = !isOnlineMode &&
+                        resolvedRawDetail?.tracks?.isNotEmpty() == true &&
                         resolvedDetail?.tracks?.isEmpty() == true,
-                    onBack = { onPlaylistsIntent(PlaylistsIntent.BackToList) },
+                    onBack = {
+                        if (isOnlineMode) {
+                            onOnlineIntent(OnlinePlaylistsIntent.SelectPlaylist(null))
+                        } else {
+                            onPlaylistsIntent(PlaylistsIntent.BackToList)
+                        }
+                    },
                     onPlayAll = { tracks ->
                         if (tracks.isNotEmpty()) {
                             onPlayerIntent(PlayerIntent.PlayTracks(tracks, 0))
@@ -759,14 +847,20 @@ internal fun PlaylistsTab(
                     onPlayTrack = { tracks, index ->
                         onPlayerIntent(PlayerIntent.PlayTracks(tracks, index))
                     },
-                    isImportingPlaylist = state.isImporting,
+                    isImportingPlaylist = if (isOnlineMode) onlineState.isImporting else state.isImporting,
                     onImportPlaylist = { showImportDialog = true },
-                    onRemoveTrack = { trackId ->
+                    showImportPlaylistAction = true,
+                    onRemoveTrack = { trackId, index ->
                         resolvedRawDetail?.id?.let { playlistId ->
-                            onPlaylistsIntent(PlaylistsIntent.RemoveTrackFromPlaylist(playlistId, trackId))
+                            if (isOnlineMode) {
+                                onOnlineIntent(OnlinePlaylistsIntent.RemoveTrack(playlistId, index))
+                            } else {
+                                onPlaylistsIntent(PlaylistsIntent.RemoveTrackFromPlaylist(playlistId, trackId))
+                            }
                         }
                     },
                     showTrackDuration = showPlaylistTrackDuration,
+                    allowLocalIndexActions = !isOnlineMode,
                     modifier = Modifier.weight(0.64f).fillMaxHeight(),
                     showBackButton = false,
                     batchSelectionRequestKey = batchSelectionRequestKey,
@@ -776,33 +870,69 @@ internal fun PlaylistsTab(
         } else if (!filteredDetailPresentation.shouldShowDetailPane) {
             PlaylistListPane(
                 playlists = filteredPlaylists,
-                isLoadingContent = state.isLoadingContent,
+                isLoadingContent = isListLoading,
                 selectedPlaylistId = requestedPlaylistId,
-                isRefreshing = state.isRefreshing,
+                isRefreshing = isRefreshing,
                 selectedSourceFilter = state.selectedSourceFilter,
                 availableSourceFilters = state.availableSourceFilters,
+                onlineSourceOptions = onlineSourceOptions,
+                selectedOnlineSourceId = onlineState.sourceId,
+                isOnlineMode = isOnlineMode,
                 isFilteringByQuery = isFilteringPlaylists,
                 showRefreshActionButton = showRefreshActionButton,
                 showSourceFilterActionButton = showSourceFilterActionButton,
-                onRefresh = { onPlaylistsIntent(PlaylistsIntent.Refresh) },
-                onSourceFilterChanged = { onPlaylistsIntent(PlaylistsIntent.SourceFilterChanged(it)) },
+                onRefresh = {
+                    if (isOnlineMode) {
+                        onOnlineIntent(OnlinePlaylistsIntent.Refresh)
+                    } else {
+                        onPlaylistsIntent(PlaylistsIntent.Refresh)
+                    }
+                },
+                onSourceFilterChanged = {
+                    onOnlineIntent(OnlinePlaylistsIntent.SelectSource(sourceId = null))
+                    onPlaylistsIntent(PlaylistsIntent.SourceFilterChanged(it))
+                },
+                onOnlineSourceSelected = { onOnlineIntent(OnlinePlaylistsIntent.SelectSource(it)) },
                 onCreate = { showCreateDialog = true },
                 onRename = { playlistId, name ->
-                    onPlaylistsIntent(PlaylistsIntent.RenamePlaylist(playlistId, name))
+                    if (isOnlineMode) {
+                        onOnlineIntent(OnlinePlaylistsIntent.RenamePlaylist(playlistId, name))
+                    } else {
+                        onPlaylistsIntent(PlaylistsIntent.RenamePlaylist(playlistId, name))
+                    }
                 },
-                onDelete = { onPlaylistsIntent(PlaylistsIntent.DeletePlaylist(it)) },
-                onSelect = { onPlaylistsIntent(PlaylistsIntent.SelectPlaylist(it)) },
+                onDelete = {
+                    if (isOnlineMode) {
+                        onOnlineIntent(OnlinePlaylistsIntent.DeletePlaylist(it))
+                    } else {
+                        onPlaylistsIntent(PlaylistsIntent.DeletePlaylist(it))
+                    }
+                },
+                onSelect = {
+                    if (isOnlineMode) {
+                        onOnlineIntent(OnlinePlaylistsIntent.SelectPlaylist(it))
+                    } else {
+                        onPlaylistsIntent(PlaylistsIntent.SelectPlaylist(it))
+                    }
+                },
                 modifier = Modifier.fillMaxSize(),
             )
         } else {
             PlaylistDetailPane(
                 detail = resolvedDetail,
-                isLoadingContent = state.isLoadingContent,
+                isLoadingContent = isDetailLoading,
                 isDetailSwitchLoading = filteredDetailPresentation.isDetailSwitchLoading,
                 requestedPlaylistName = filteredDetailPresentation.requestedPlaylistName,
-                hasTracksOutsideFilter = resolvedRawDetail?.tracks?.isNotEmpty() == true &&
+                hasTracksOutsideFilter = !isOnlineMode &&
+                    resolvedRawDetail?.tracks?.isNotEmpty() == true &&
                     resolvedDetail?.tracks?.isEmpty() == true,
-                onBack = { onPlaylistsIntent(PlaylistsIntent.BackToList) },
+                onBack = {
+                    if (isOnlineMode) {
+                        onOnlineIntent(OnlinePlaylistsIntent.SelectPlaylist(null))
+                    } else {
+                        onPlaylistsIntent(PlaylistsIntent.BackToList)
+                    }
+                },
                 onPlayAll = { tracks ->
                     if (tracks.isNotEmpty()) {
                         onPlayerIntent(PlayerIntent.PlayTracks(tracks, 0))
@@ -811,14 +941,20 @@ internal fun PlaylistsTab(
                 onPlayTrack = { tracks, index ->
                     onPlayerIntent(PlayerIntent.PlayTracks(tracks, index))
                 },
-                isImportingPlaylist = state.isImporting,
+                isImportingPlaylist = if (isOnlineMode) onlineState.isImporting else state.isImporting,
                 onImportPlaylist = { showImportDialog = true },
-                onRemoveTrack = { trackId ->
+                showImportPlaylistAction = true,
+                onRemoveTrack = { trackId, index ->
                     resolvedRawDetail?.id?.let { playlistId ->
-                        onPlaylistsIntent(PlaylistsIntent.RemoveTrackFromPlaylist(playlistId, trackId))
+                        if (isOnlineMode) {
+                            onOnlineIntent(OnlinePlaylistsIntent.RemoveTrack(playlistId, index))
+                        } else {
+                            onPlaylistsIntent(PlaylistsIntent.RemoveTrackFromPlaylist(playlistId, trackId))
+                        }
                     }
                 },
                 showTrackDuration = showPlaylistTrackDuration,
+                allowLocalIndexActions = !isOnlineMode,
                 modifier = Modifier.fillMaxSize(),
                 showBackButton = true,
                 batchSelectionRequestKey = batchSelectionRequestKey,
@@ -860,11 +996,15 @@ private fun PlaylistListPane(
     isRefreshing: Boolean,
     selectedSourceFilter: LibrarySourceFilter,
     availableSourceFilters: List<LibrarySourceFilter>,
+    onlineSourceOptions: List<OnlineSourceOption> = emptyList(),
+    selectedOnlineSourceId: String? = null,
+    isOnlineMode: Boolean = false,
     isFilteringByQuery: Boolean = false,
     showRefreshActionButton: Boolean = true,
     showSourceFilterActionButton: Boolean = true,
     onRefresh: () -> Unit,
     onSourceFilterChanged: (LibrarySourceFilter) -> Unit,
+    onOnlineSourceSelected: (String) -> Unit = {},
     onCreate: () -> Unit,
     onRename: (String, String) -> Unit,
     onDelete: (String) -> Unit,
@@ -906,7 +1046,11 @@ private fun PlaylistListPane(
             item {
                 PlaylistSectionTitle(
                     title = "歌单",
-                    subtitle = "普通歌单支持本地歌曲和 Subsonic-compatible 歌曲混合收藏。",
+                    subtitle = if (isOnlineMode) {
+                        "当前显示 Navidrome 远端歌单，变更会直接同步到服务器。"
+                    } else {
+                        "普通歌单支持本地歌曲和 Subsonic-compatible 歌曲混合收藏。"
+                    },
                 )
             }
             item {
@@ -936,12 +1080,16 @@ private fun PlaylistListPane(
                         }
                     }
                     if (showSourceFilterActionButton) {
+                        val selectedOnlineSourceLabel = onlineSourceOptions
+                            .firstOrNull { it.sourceId == selectedOnlineSourceId }
+                            ?.label
                         Box {
                             OutlinedButton(onClick = { sourceFilterMenuExpanded = true }) {
                                 Icon(Icons.Rounded.Tune, contentDescription = null)
                                 Spacer(Modifier.width(8.dp))
                                 Text(
-                                    text = playlistSourceFilterButtonLabel(selectedSourceFilter),
+                                    text = selectedOnlineSourceLabel
+                                        ?: playlistSourceFilterButtonLabel(selectedSourceFilter),
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
@@ -957,6 +1105,15 @@ private fun PlaylistListPane(
                                         onClick = {
                                             sourceFilterMenuExpanded = false
                                             onSourceFilterChanged(filter)
+                                        },
+                                    )
+                                }
+                                onlineSourceOptions.forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text(option.label) },
+                                        onClick = {
+                                            sourceFilterMenuExpanded = false
+                                            onOnlineSourceSelected(option.sourceId)
                                         },
                                     )
                                 }
@@ -982,7 +1139,11 @@ private fun PlaylistListPane(
                     } else {
                         EmptyStateCard(
                             title = "还没有普通歌单",
-                            body = "从播放器把当前歌曲加入歌单，或先新建一个空歌单。",
+                            body = if (isOnlineMode) {
+                                "远端还没有普通歌单，可以先新建一个空歌单。"
+                            } else {
+                                "从播放器把当前歌曲加入歌单，或先新建一个空歌单。"
+                            },
                         )
                     }
                 }
@@ -1035,6 +1196,7 @@ private fun PlaylistListPane(
         pendingDeletePlaylist?.let { playlist ->
             PlaylistDeleteDialog(
                 playlistName = pendingDeletePlaylistName.ifBlank { playlist.name },
+                isOnlineMode = isOnlineMode,
                 onDismiss = {
                     pendingDeletePlaylistId = null
                     pendingDeletePlaylistName = ""
@@ -1180,6 +1342,7 @@ internal fun playlistSummaryArtworkCacheKey(playlist: PlaylistSummary): String? 
 @Composable
 private fun PlaylistDeleteDialog(
     playlistName: String,
+    isOnlineMode: Boolean = false,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
 ) {
@@ -1193,7 +1356,15 @@ private fun PlaylistDeleteDialog(
         tonalElevation = 0.dp,
         shape = RoundedCornerShape(28.dp),
         title = { Text("删除歌单") },
-        text = { Text("确认删除“$playlistName”吗？本地和已同步的远端歌单都会一起删除。") },
+        text = {
+            Text(
+                if (isOnlineMode) {
+                    "确认删除远端歌单“$playlistName”吗？删除后会同步到服务器。"
+                } else {
+                    "确认删除“$playlistName”吗？本地和已同步的远端歌单都会一起删除。"
+                },
+            )
+        },
         confirmButton = {
             TextButton(onClick = onConfirm) {
                 Text(
@@ -1213,6 +1384,7 @@ private fun PlaylistDeleteDialog(
 @Composable
 private fun PlaylistTextImportDialog(
     playlistName: String,
+    isOnlineMode: Boolean = false,
     isImporting: Boolean,
     report: PlaylistImportReport?,
     onDismiss: () -> Unit,
@@ -1275,7 +1447,11 @@ private fun PlaylistTextImportDialog(
                                     fontWeight = FontWeight.Bold,
                                 )
                                 Text(
-                                    text = "导入到“$playlistName”。每行使用“歌名 - 歌手”，只会匹配已有曲库中的歌曲。",
+                                    text = if (isOnlineMode) {
+                                        "导入到远端歌单“$playlistName”。每行使用“歌名 - 歌手”，会远端搜索 Navidrome 曲库并加入当前远端歌单。"
+                                    } else {
+                                        "导入到“$playlistName”。每行使用“歌名 - 歌手”，只会匹配已有曲库中的歌曲。"
+                                    },
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.bodyMedium,
                                 )
@@ -1509,8 +1685,10 @@ private fun PlaylistDetailPane(
     onPlayTrack: (List<Track>, Int) -> Unit,
     isImportingPlaylist: Boolean,
     onImportPlaylist: () -> Unit,
-    onRemoveTrack: (String) -> Unit,
+    showImportPlaylistAction: Boolean = true,
+    onRemoveTrack: (String, Int) -> Unit,
     showTrackDuration: Boolean,
+    allowLocalIndexActions: Boolean = true,
     modifier: Modifier = Modifier,
     showBackButton: Boolean,
     batchSelectionRequestKey: Int = 0,
@@ -1537,7 +1715,7 @@ private fun PlaylistDetailPane(
             downloadsByTrackId = offlineUiState.downloadsByTrackId,
         )
     }
-    val supportsBatchDownload = supportsBatchOfflineDownloadActions() && onOfflineDownloadIntent != null
+    val supportsBatchDownload = allowLocalIndexActions && supportsBatchOfflineDownloadActions() && onOfflineDownloadIntent != null
     val inlineBatchOperationButtonVisible = showInlineBatchOperationButton
     fun exitSelectionMode() {
         selectionMode = false
@@ -1655,17 +1833,19 @@ private fun PlaylistDetailPane(
                             Spacer(Modifier.width(8.dp))
                             Text("播放全部")
                         }
-                        OutlinedButton(
-                            onClick = onImportPlaylist,
-                            enabled = canShowPlaylistImportAction(detail) && !isImportingPlaylist,
-                        ) {
-                            Icon(Icons.AutoMirrored.Rounded.List, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                text = if (isImportingPlaylist) "导入中" else "导入歌单",
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                        if (showImportPlaylistAction) {
+                            OutlinedButton(
+                                onClick = onImportPlaylist,
+                                enabled = canShowPlaylistImportAction(detail) && !isImportingPlaylist,
+                            ) {
+                                Icon(Icons.AutoMirrored.Rounded.List, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = if (isImportingPlaylist) "导入中" else "导入歌单",
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
                         if (
                             supportsBatchDownload &&
@@ -1719,7 +1899,7 @@ private fun PlaylistDetailPane(
                         selectedTrackIds = toggleTrackSelection(selectedTrackIds, item.track.id)
                     },
                     onClick = { onPlayTrack(detail.tracks.map { it.track }, index) },
-                    onRemove = { onRemoveTrack(item.track.id) },
+                    onRemove = { onRemoveTrack(item.track.id, index) },
                     showDuration = showTrackDuration,
                 )
             }

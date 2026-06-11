@@ -24,8 +24,10 @@ import top.iwesley.lyn.music.core.model.ImportScanProgressSink
 import top.iwesley.lyn.music.core.model.ImportScanFailure
 import top.iwesley.lyn.music.core.model.ImportScanSummary
 import top.iwesley.lyn.music.core.model.ImportSource
+import top.iwesley.lyn.music.core.model.ImportSourceIndexMode
 import top.iwesley.lyn.music.core.model.ImportSourceType
 import top.iwesley.lyn.music.core.model.LocalFolderPickerMode
+import top.iwesley.lyn.music.core.model.NavidromeLibraryProbe
 import top.iwesley.lyn.music.core.model.NavidromeSourceDraft
 import top.iwesley.lyn.music.core.model.PlatformCapabilities
 import top.iwesley.lyn.music.core.model.SambaSourceDraft
@@ -595,6 +597,61 @@ class ImportStoreTest {
     }
 
     @Test
+    fun `failed navidrome online import clears pending large library choice`() = runTest {
+        val repository = FakeImportSourceRepository(
+            navidromeResult = Result.failure(IllegalStateException("save failed")),
+        ).also {
+            it.navidromeProbeResult = Result.success(NavidromeLibraryProbe(totalTrackCount = 150_000))
+        }
+        val harness = createStore(repository)
+        val store = harness.store
+
+        store.dispatch(ImportIntent.OpenRemoteSourceCreator(ImportSourceType.NAVIDROME))
+        store.dispatch(ImportIntent.NavidromeBaseUrlChanged("https://nav.example.com"))
+        store.dispatch(ImportIntent.NavidromeUsernameChanged("demo"))
+        store.dispatch(ImportIntent.NavidromePasswordChanged("secret"))
+        advanceUntilIdle()
+        store.dispatch(ImportIntent.AddNavidromeSource)
+        advanceUntilIdle()
+
+        assertNotNull(store.state.value.pendingLargeNavidromeImport)
+
+        store.dispatch(ImportIntent.ConfirmLargeNavidromeOnlineMode)
+        advanceUntilIdle()
+
+        assertNull(store.state.value.pendingLargeNavidromeImport)
+        assertEquals("Navidrome 在线模式保存失败: save failed", store.state.value.testMessage)
+        harness.close()
+    }
+
+    @Test
+    fun `large navidrome import without online paging support uses full import`() = runTest {
+        val repository = FakeImportSourceRepository().also {
+            it.navidromeProbeResult = Result.success(
+                NavidromeLibraryProbe(
+                    totalTrackCount = 150_000,
+                    supportsOnlineLibraryPaging = false,
+                ),
+            )
+        }
+        val harness = createStore(repository)
+        val store = harness.store
+
+        store.dispatch(ImportIntent.OpenRemoteSourceCreator(ImportSourceType.NAVIDROME))
+        store.dispatch(ImportIntent.NavidromeBaseUrlChanged("https://nav.example.com"))
+        store.dispatch(ImportIntent.NavidromeUsernameChanged("demo"))
+        store.dispatch(ImportIntent.NavidromePasswordChanged("secret"))
+        advanceUntilIdle()
+        store.dispatch(ImportIntent.AddNavidromeSource)
+        advanceUntilIdle()
+
+        assertNull(store.state.value.pendingLargeNavidromeImport)
+        assertEquals("Navidrome 音乐源已导入。发现 1 个音频文件，成功导入 1 首，0 个失败。", store.state.value.message)
+        assertEquals(testScanSummary("nav-1"), store.state.value.latestScanSummariesBySourceId["nav-1"])
+        harness.close()
+    }
+
+    @Test
     fun `testing navidrome source only updates test message without scan summary`() = runTest {
         val harness = createStore(FakeImportSourceRepository())
         val store = harness.store
@@ -646,6 +703,74 @@ class ImportStoreTest {
 
         assertEquals("音乐源已重新扫描。发现 2 个音频文件，成功导入 1 首，1 个失败。", store.state.value.message)
         assertEquals(summary, store.state.value.latestScanSummariesBySourceId["nav-1"])
+        harness.close()
+    }
+
+    @Test
+    fun `failed navidrome online rescan clears pending large library choice`() = runTest {
+        val repository = FakeImportSourceRepository(
+            sources = listOf(
+                source(
+                    sourceId = "nav-1",
+                    type = ImportSourceType.NAVIDROME,
+                    label = "Navidrome",
+                    rootReference = "https://nav.example.com",
+                    username = "demo",
+                    credentialKey = "credential-nav-1",
+                    indexMode = ImportSourceIndexMode.LOCAL_INDEX,
+                ),
+            ),
+            switchNavidromeOnlineResult = Result.failure(IllegalStateException("switch failed")),
+        ).also {
+            it.existingNavidromeProbeResult = Result.success(NavidromeLibraryProbe(totalTrackCount = 150_000))
+        }
+        val harness = createStore(repository)
+        val store = harness.store
+
+        store.dispatch(ImportIntent.RescanSource("nav-1"))
+        advanceUntilIdle()
+
+        assertNotNull(store.state.value.pendingLargeNavidromeImport)
+
+        store.dispatch(ImportIntent.ConfirmLargeNavidromeOnlineMode)
+        advanceUntilIdle()
+
+        assertNull(store.state.value.pendingLargeNavidromeImport)
+        assertEquals("切换在线模式失败: switch failed", store.state.value.message)
+        harness.close()
+    }
+
+    @Test
+    fun `large navidrome rescan without online paging support uses full rescan`() = runTest {
+        val repository = FakeImportSourceRepository(
+            sources = listOf(
+                source(
+                    sourceId = "nav-1",
+                    type = ImportSourceType.NAVIDROME,
+                    label = "Navidrome",
+                    rootReference = "https://nav.example.com",
+                    username = "demo",
+                    credentialKey = "credential-nav-1",
+                    indexMode = ImportSourceIndexMode.LOCAL_INDEX,
+                ),
+            ),
+        ).also {
+            it.existingNavidromeProbeResult = Result.success(
+                NavidromeLibraryProbe(
+                    totalTrackCount = 150_000,
+                    supportsOnlineLibraryPaging = false,
+                ),
+            )
+        }
+        val harness = createStore(repository)
+        val store = harness.store
+
+        store.dispatch(ImportIntent.RescanSource("nav-1"))
+        advanceUntilIdle()
+
+        assertNull(store.state.value.pendingLargeNavidromeImport)
+        assertEquals("音乐源已重新扫描。发现 1 个音频文件，成功导入 1 首，0 个失败。", store.state.value.message)
+        assertEquals(testScanSummary("nav-1"), store.state.value.latestScanSummariesBySourceId["nav-1"])
         harness.close()
     }
 
@@ -817,6 +942,7 @@ private fun source(
     username: String? = null,
     credentialKey: String? = null,
     subsonicAuthMode: SubsonicAuthMode = SubsonicAuthMode.PASSWORD,
+    indexMode: ImportSourceIndexMode = ImportSourceIndexMode.LOCAL_INDEX,
     enabled: Boolean = true,
 ): SourceWithStatus {
     return SourceWithStatus(
@@ -832,6 +958,7 @@ private fun source(
             username = username,
             credentialKey = credentialKey,
             subsonicAuthMode = subsonicAuthMode,
+            indexMode = indexMode,
             enabled = enabled,
             createdAt = 1L,
         ),
@@ -843,6 +970,7 @@ private class FakeImportSourceRepository(
     sambaResult: Result<ImportScanSummary> = Result.success(testScanSummary("smb-1")),
     private val webDavResult: Result<ImportScanSummary> = Result.success(testScanSummary("dav-1")),
     private val navidromeResult: Result<ImportScanSummary> = Result.success(testScanSummary("nav-1")),
+    private val switchNavidromeOnlineResult: Result<ImportScanSummary>? = null,
     private val subsonicResult: Result<ImportScanSummary> = Result.success(testScanSummary("sub-1")),
     sources: List<SourceWithStatus> = emptyList(),
 ) : ImportSourceRepository {
@@ -866,6 +994,10 @@ private class FakeImportSourceRepository(
     var lastUpdatedEmbyDraft: EmbySourceDraft? = null
     var lastUpdatedEmbyKeepExisting: Boolean = false
     var lastLocalFolderMode: LocalFolderPickerMode? = null
+    var navidromeProbeResult: Result<NavidromeLibraryProbe> =
+        Result.success(NavidromeLibraryProbe(totalTrackCount = null))
+    var existingNavidromeProbeResult: Result<NavidromeLibraryProbe> =
+        Result.success(NavidromeLibraryProbe(totalTrackCount = null))
     var progressToEmit: ImportScanProgress? = null
 
     override fun observeSources(): Flow<List<SourceWithStatus>> = mutableSources.asStateFlow()
@@ -944,6 +1076,10 @@ private class FakeImportSourceRepository(
         return pendingResult?.await() ?: Result.success(Unit)
     }
 
+    override suspend fun probeNavidromeSource(draft: NavidromeSourceDraft): Result<NavidromeLibraryProbe> {
+        return navidromeProbeResult
+    }
+
     override suspend fun testUpdatedNavidromeSource(
         sourceId: String,
         draft: NavidromeSourceDraft,
@@ -952,6 +1088,26 @@ private class FakeImportSourceRepository(
 
     override suspend fun addNavidromeSource(draft: NavidromeSourceDraft): Result<ImportScanSummary> {
         return pendingResult?.await()?.map { testScanSummary("nav-1") } ?: navidromeResult
+    }
+
+    override suspend fun addNavidromeSourceOnline(
+        draft: NavidromeSourceDraft,
+        remoteTrackCount: Int?,
+    ): Result<ImportScanSummary> {
+        return pendingResult?.await()?.map { testScanSummary("nav-1") } ?: navidromeResult
+    }
+
+    override suspend fun probeExistingNavidromeSource(sourceId: String): Result<NavidromeLibraryProbe> {
+        return existingNavidromeProbeResult
+    }
+
+    override suspend fun switchNavidromeSourceToOnline(
+        sourceId: String,
+        remoteTrackCount: Int?,
+    ): Result<ImportScanSummary> {
+        return pendingResult?.await()?.map { testScanSummary(sourceId) }
+            ?: switchNavidromeOnlineResult
+            ?: Result.success(testScanSummary(sourceId))
     }
 
     override suspend fun addNavidromeSource(

@@ -34,6 +34,7 @@ import top.iwesley.lyn.music.core.model.ImportScanSummary
 import top.iwesley.lyn.music.core.model.ImportStreamingScanReport
 import top.iwesley.lyn.music.core.model.ImportSource
 import top.iwesley.lyn.music.core.model.ImportSourceGateway
+import top.iwesley.lyn.music.core.model.ImportSourceIndexMode
 import top.iwesley.lyn.music.core.model.ImportSourceType
 import top.iwesley.lyn.music.core.model.ImportTrackBatchSink
 import top.iwesley.lyn.music.core.model.ImportedTrackCandidate
@@ -51,6 +52,7 @@ import top.iwesley.lyn.music.core.model.LyricsSourceConfig
 import top.iwesley.lyn.music.core.model.MenuBarLyricsControlsPreferencesStore
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.NavidromeAudioQualityPreferencesStore
+import top.iwesley.lyn.music.core.model.NavidromeLibraryProbe
 import top.iwesley.lyn.music.core.model.NavidromeLocatorRuntime
 import top.iwesley.lyn.music.core.model.NavidromeSourceDraft
 import top.iwesley.lyn.music.core.model.NoopDiagnosticLogger
@@ -261,6 +263,7 @@ interface ImportSourceRepository {
         return updateWebDavSource(sourceId, draft, keepExistingCredentialWhenBlankPassword)
     }
     suspend fun testNavidromeSource(draft: NavidromeSourceDraft): Result<Unit>
+    suspend fun probeNavidromeSource(draft: NavidromeSourceDraft): Result<NavidromeLibraryProbe>
     suspend fun testUpdatedNavidromeSource(
         sourceId: String,
         draft: NavidromeSourceDraft,
@@ -273,6 +276,15 @@ interface ImportSourceRepository {
     ): Result<ImportScanSummary> {
         return addNavidromeSource(draft)
     }
+    suspend fun addNavidromeSourceOnline(
+        draft: NavidromeSourceDraft,
+        remoteTrackCount: Int?,
+    ): Result<ImportScanSummary>
+    suspend fun probeExistingNavidromeSource(sourceId: String): Result<NavidromeLibraryProbe>
+    suspend fun switchNavidromeSourceToOnline(
+        sourceId: String,
+        remoteTrackCount: Int?,
+    ): Result<ImportScanSummary>
     suspend fun updateNavidromeSource(
         sourceId: String,
         draft: NavidromeSourceDraft,
@@ -490,7 +502,7 @@ class RoomLibraryRepository(
         database.lyricsCacheDao().observeArtworkLocators(),
     ) { entities, sources, artworkRows ->
         val enabledSourceIds = sources.asSequence()
-            .filter { it.enabled }
+            .filter { it.isLocalIndexedEnabled() }
             .map { it.id }
             .toSet()
         val artworkOverrides = effectiveArtworkOverridesByTrackId(artworkRows)
@@ -801,6 +813,22 @@ class RoomImportSourceRepository(
         }
     }
 
+    override suspend fun probeNavidromeSource(draft: NavidromeSourceDraft): Result<NavidromeLibraryProbe> {
+        return runCatching {
+            val preparedDraft = prepareNavidromeDraft(draft)
+            addressSelector.invalidate("draft-navidrome")
+            addressSelector.withAddressFallback(
+                sourceId = "draft-navidrome",
+                sourceType = ImportSourceType.NAVIDROME,
+                lanBaseUrl = preparedDraft.baseUrl,
+                wanBaseUrl = preparedDraft.wanBaseUrl,
+                normalizeBaseUrl = ::normalizeNavidromeBaseUrl,
+            ) { candidate ->
+                gateway.probeNavidrome(preparedDraft.copy(baseUrl = candidate.value))
+            }
+        }
+    }
+
     override suspend fun testUpdatedNavidromeSource(
         sourceId: String,
         draft: NavidromeSourceDraft,
@@ -865,6 +893,53 @@ class RoomImportSourceRepository(
         }
     }
 
+    override suspend fun addNavidromeSourceOnline(
+        draft: NavidromeSourceDraft,
+        remoteTrackCount: Int?,
+    ): Result<ImportScanSummary> {
+        return runCatching {
+            val confirmedRemoteTrackCount = requireOnlineNavidromeRemoteTrackCount(remoteTrackCount)
+            val sourceId = newId("navidrome")
+            val preparedDraft = prepareNavidromeDraft(draft)
+            val source = createNavidromeSource(
+                sourceId = sourceId,
+                draft = preparedDraft,
+                indexMode = ImportSourceIndexMode.ONLINE,
+            ).copy(credentialKey = "credential-$sourceId")
+            validateImportSourceCreation(label = source.label)
+            persistOnlineNavidromeSourceWithCredential(
+                source = source,
+                remoteTrackCount = confirmedRemoteTrackCount,
+                credential = preparedDraft.password,
+                shouldWriteCredential = true,
+                previousCredentialKey = null,
+            )
+        }
+    }
+
+    override suspend fun probeExistingNavidromeSource(sourceId: String): Result<NavidromeLibraryProbe> {
+        return runCatching {
+            val source = requireRemoteSource(sourceId, ImportSourceType.NAVIDROME)
+            require(source.enabled) { "来源已禁用，请先启用。" }
+            probeExistingNavidromeSource(source)
+        }
+    }
+
+    override suspend fun switchNavidromeSourceToOnline(
+        sourceId: String,
+        remoteTrackCount: Int?,
+    ): Result<ImportScanSummary> {
+        return runCatching {
+            val confirmedRemoteTrackCount = requireOnlineNavidromeRemoteTrackCount(remoteTrackCount)
+            val source = requireRemoteSource(sourceId, ImportSourceType.NAVIDROME)
+            require(source.enabled) { "来源已禁用，请先启用。" }
+            persistOnlineNavidromeSource(
+                source = source.copy(indexMode = ImportSourceIndexMode.ONLINE),
+                remoteTrackCount = confirmedRemoteTrackCount,
+            )
+        }
+    }
+
     override suspend fun updateNavidromeSource(
         sourceId: String,
         draft: NavidromeSourceDraft,
@@ -893,6 +968,7 @@ class RoomImportSourceRepository(
                 draft = preparedDraft,
                 createdAt = existing.createdAt,
                 enabled = existing.enabled,
+                indexMode = existing.indexMode,
             )
             assertUniqueImportSourceLabel(updatedSource.label, excludingSourceId = existing.id)
             val password = resolveUpdatedPassword(
@@ -903,12 +979,36 @@ class RoomImportSourceRepository(
             if (password.isBlank()) {
                 error("Navidrome 来源缺少有效密码。")
             }
-            val credentialKey = resolveUpdatedCredentialKey(
-                sourceId = sourceId,
-                existingCredentialKey = existing.credentialKey,
-                password = password,
-                keepExistingCredentialWhenBlankPassword = true,
-            )
+            val submittedPassword = preparedDraft.password.isNotBlank()
+            val credentialKey = if (existing.indexMode == ImportSourceIndexMode.ONLINE && submittedPassword && existing.credentialKey != null) {
+                newId("credential-$sourceId")
+            } else {
+                resolveUpdatedCredentialKey(
+                    sourceId = sourceId,
+                    existingCredentialKey = existing.credentialKey,
+                    password = password,
+                    keepExistingCredentialWhenBlankPassword = true,
+                )
+            }
+            if (existing.indexMode == ImportSourceIndexMode.ONLINE) {
+                val probe = addressSelector.withAddressFallback(
+                    sourceId = sourceId,
+                    sourceType = ImportSourceType.NAVIDROME,
+                    lanBaseUrl = preparedDraft.baseUrl,
+                    wanBaseUrl = preparedDraft.wanBaseUrl,
+                    normalizeBaseUrl = ::normalizeNavidromeBaseUrl,
+                ) { candidate ->
+                    gateway.probeNavidrome(preparedDraft.copy(baseUrl = candidate.value, password = password))
+                }
+                requireOnlineNavidromePaging(probe)
+                return@runCatching persistOnlineNavidromeSourceWithCredential(
+                    source = updatedSource.copy(credentialKey = credentialKey),
+                    remoteTrackCount = probe.totalTrackCount,
+                    credential = password,
+                    shouldWriteCredential = submittedPassword,
+                    previousCredentialKey = existing.credentialKey,
+                )
+            }
             runNavidromeStreamingScan(updatedSource.copy(credentialKey = credentialKey), progressSink) { trackBatchSink, resetStage ->
                 val report = addressSelector.withAddressFallback(
                     sourceId = sourceId,
@@ -1268,6 +1368,33 @@ class RoomImportSourceRepository(
                 error("来源已禁用，请先启用。")
             }
             if (source.type == ImportSourceType.NAVIDROME) {
+                if (source.indexMode == ImportSourceIndexMode.ONLINE) {
+                    val password = source.credentialKey?.let { secureCredentialStore.get(it) }.orEmpty()
+                    if (password.isBlank()) {
+                        error("Navidrome 来源缺少有效密码。")
+                    }
+                    val draft = NavidromeSourceDraft(
+                        label = source.label,
+                        baseUrl = source.rootReference,
+                        wanBaseUrl = source.wanRootReference.orEmpty(),
+                        username = source.username.orEmpty(),
+                        password = password,
+                    )
+                    val probe = addressSelector.withAddressFallback(
+                        sourceId = sourceId,
+                        sourceType = ImportSourceType.NAVIDROME,
+                        lanBaseUrl = source.rootReference,
+                        wanBaseUrl = source.wanRootReference.orEmpty(),
+                        normalizeBaseUrl = ::normalizeNavidromeBaseUrl,
+                    ) { candidate ->
+                        gateway.probeNavidrome(draft.copy(baseUrl = candidate.value))
+                    }
+                    requireOnlineNavidromePaging(probe)
+                    return@runCatching persistOnlineNavidromeSource(
+                        source = source,
+                        remoteTrackCount = probe.totalTrackCount,
+                    )
+                }
                 return@runCatching rescanNavidromeSource(source, progressSink)
             }
             val summary = runScan(source.copy(lastScannedAt = now()), progressSink) {
@@ -1545,6 +1672,7 @@ class RoomImportSourceRepository(
         draft: NavidromeSourceDraft,
         createdAt: Long = now(),
         enabled: Boolean = true,
+        indexMode: ImportSourceIndexMode = ImportSourceIndexMode.LOCAL_INDEX,
     ): ImportSource {
         val label = draft.label.ifBlank { draft.baseUrl.ifBlank { draft.wanBaseUrl } }
         return ImportSource(
@@ -1556,6 +1684,7 @@ class RoomImportSourceRepository(
             username = draft.username,
             createdAt = createdAt,
             enabled = enabled,
+            indexMode = indexMode,
         )
     }
 
@@ -1673,6 +1802,100 @@ class RoomImportSourceRepository(
         }
     }
 
+    private suspend fun persistOnlineNavidromeSourceWithCredential(
+        source: ImportSource,
+        remoteTrackCount: Int?,
+        credential: String,
+        shouldWriteCredential: Boolean,
+        previousCredentialKey: String?,
+    ): ImportScanSummary {
+        val nextCredentialKey = source.credentialKey
+        val wroteNewCredential = shouldWriteCredential &&
+            nextCredentialKey != null &&
+            nextCredentialKey != previousCredentialKey
+        val writtenCredentialKey = if (wroteNewCredential) nextCredentialKey else null
+        if (shouldWriteCredential && nextCredentialKey != null) {
+            secureCredentialStore.put(nextCredentialKey, credential)
+        }
+        return try {
+            val summary = persistOnlineNavidromeSource(source = source, remoteTrackCount = remoteTrackCount)
+            if (previousCredentialKey != null && previousCredentialKey != nextCredentialKey) {
+                runCatching { secureCredentialStore.remove(previousCredentialKey) }
+            }
+            summary
+        } catch (throwable: Throwable) {
+            if (writtenCredentialKey != null) {
+                runCatching { secureCredentialStore.remove(writtenCredentialKey) }
+            }
+            throw throwable
+        }
+    }
+
+    private suspend fun persistOnlineNavidromeSource(
+        source: ImportSource,
+        remoteTrackCount: Int?,
+    ): ImportScanSummary {
+        val savedAt = now()
+        database.immediateWriteTransaction {
+            val previousState = database.importIndexStateDao().getBySourceId(source.id)
+            database.importSourceDao().upsert(
+                source.copy(
+                    lastScannedAt = savedAt,
+                    indexMode = ImportSourceIndexMode.ONLINE,
+                ).toEntity(),
+            )
+            database.importIndexStateDao().upsert(
+                ImportIndexStateEntity(
+                    sourceId = source.id,
+                    trackCount = previousState?.trackCount ?: database.trackDao().getBySourceId(source.id).size,
+                    remoteTrackCount = remoteTrackCount,
+                    lastScannedAt = savedAt,
+                    lastError = null,
+                ),
+            )
+            rebuildLibrarySummaries()
+        }
+        return ImportScanSummary(
+            sourceId = source.id,
+            discoveredAudioFileCount = remoteTrackCount ?: 0,
+            importedTrackCount = 0,
+        )
+    }
+
+    private fun requireOnlineNavidromeRemoteTrackCount(remoteTrackCount: Int?): Int {
+        return remoteTrackCount ?: error("Navidrome 在线模式需要先确认远端曲目数量。")
+    }
+
+    private fun requireOnlineNavidromePaging(probe: NavidromeLibraryProbe) {
+        if (!probe.supportsOnlineLibraryPaging) {
+            error("Navidrome 在线模式需要服务器支持 native 歌曲分页接口。")
+        }
+    }
+
+    private suspend fun probeExistingNavidromeSource(source: ImportSource): NavidromeLibraryProbe {
+        val password = source.credentialKey?.let { secureCredentialStore.get(it) }.orEmpty()
+        if (password.isBlank()) {
+            error("Navidrome 来源缺少有效密码。")
+        }
+        val draft = NavidromeSourceDraft(
+            label = source.label,
+            baseUrl = source.rootReference,
+            wanBaseUrl = source.wanRootReference.orEmpty(),
+            username = source.username.orEmpty(),
+            password = password,
+        )
+        addressSelector.invalidate(source.id)
+        return addressSelector.withAddressFallback(
+            sourceId = source.id,
+            sourceType = ImportSourceType.NAVIDROME,
+            lanBaseUrl = source.rootReference,
+            wanBaseUrl = source.wanRootReference.orEmpty(),
+            normalizeBaseUrl = ::normalizeNavidromeBaseUrl,
+        ) { candidate ->
+            gateway.probeNavidrome(draft.copy(baseUrl = candidate.value))
+        }
+    }
+
     private fun SubsonicAuthMode.credentialLabel(): String {
         return when (this) {
             SubsonicAuthMode.PASSWORD -> "密码"
@@ -1719,6 +1942,7 @@ class RoomImportSourceRepository(
             ImportIndexStateEntity(
                 sourceId = source.id,
                 trackCount = trackEntities.size,
+                remoteTrackCount = report.totalTrackCount,
                 lastScannedAt = scannedAt,
                 lastError = report.warnings.joinToString("\n").ifBlank { null },
             ),
@@ -1861,6 +2085,7 @@ class RoomImportSourceRepository(
             ImportIndexStateEntity(
                 sourceId = source.id,
                 trackCount = report.importedTrackCount,
+                remoteTrackCount = report.totalTrackCount,
                 lastScannedAt = source.lastScannedAt,
                 lastError = report.warnings.joinToString("\n").ifBlank { null },
             ),
@@ -1952,6 +2177,7 @@ class RoomImportSourceRepository(
             ImportIndexStateEntity(
                 sourceId = sourceId,
                 trackCount = previous?.trackCount ?: 0,
+                remoteTrackCount = previous?.remoteTrackCount,
                 lastScannedAt = previous?.lastScannedAt,
                 lastError = throwable.message ?: "扫描失败。",
             ),
@@ -1977,7 +2203,7 @@ class RoomImportSourceRepository(
     private suspend fun rebuildLibrarySummaries() {
         val enabledSourceIds = database.importSourceDao().getAll()
             .asSequence()
-            .filter { it.enabled }
+            .filter { it.isLocalIndexedEnabled() }
             .map { it.id }
             .toList()
         database.artistDao().deleteAll()
@@ -3955,6 +4181,7 @@ fun TrackEntity.toDomain(artworkOverrideLocator: String? = null): Track {
         bitRate = bitRate,
         channelCount = channelCount,
         albumId = albumId,
+        artistId = artistId,
     )
 }
 
@@ -4004,6 +4231,7 @@ private fun ImportSourceEntity.toDomain(): ImportSource {
         enabled = enabled,
         lastScannedAt = lastScannedAt,
         createdAt = createdAt,
+        indexMode = indexMode.toImportSourceIndexMode(),
     )
 }
 
@@ -4024,6 +4252,7 @@ private fun ImportSource.toEntity(): ImportSourceEntity {
         lastScannedAt = lastScannedAt,
         createdAt = createdAt,
         authMode = subsonicAuthMode.name,
+        indexMode = indexMode.name,
     )
 }
 
@@ -4031,6 +4260,7 @@ private fun ImportIndexStateEntity.toDomain(): ImportIndexState {
     return ImportIndexState(
         sourceId = sourceId,
         trackCount = trackCount,
+        remoteTrackCount = remoteTrackCount,
         lastScannedAt = lastScannedAt,
         lastError = lastError,
     )
@@ -4122,6 +4352,14 @@ private fun hasLocalFolderPathConflict(
 
 private fun String.toImportSourceType(): ImportSourceType {
     return runCatching { ImportSourceType.valueOf(this) }.getOrDefault(ImportSourceType.LOCAL_FOLDER)
+}
+
+internal fun String.toImportSourceIndexMode(): ImportSourceIndexMode {
+    return runCatching { ImportSourceIndexMode.valueOf(this) }.getOrDefault(ImportSourceIndexMode.LOCAL_INDEX)
+}
+
+internal fun ImportSourceEntity.isLocalIndexedEnabled(): Boolean {
+    return enabled && indexMode.toImportSourceIndexMode() == ImportSourceIndexMode.LOCAL_INDEX
 }
 
 private fun String.toRequestMethod(): RequestMethod {

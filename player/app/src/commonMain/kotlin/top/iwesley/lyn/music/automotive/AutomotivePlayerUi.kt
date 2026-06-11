@@ -68,6 +68,7 @@ import top.iwesley.lyn.music.core.model.PlaybackSnapshot
 import top.iwesley.lyn.music.core.model.PlayerArtworkStyle
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.trackArtworkCacheKey
+import top.iwesley.lyn.music.deriveOnlinePlaybackLibraryNavigationTargets
 import top.iwesley.lyn.music.derivePlaybackLibraryNavigationTargets
 import top.iwesley.lyn.music.feature.player.PlayerIntent
 import top.iwesley.lyn.music.feature.player.PlayerState
@@ -81,8 +82,10 @@ internal fun AutomotiveLandscapePlayerOverlayContent(
     artworkBitmap: ImageBitmap?,
     playerArtworkStyle: PlayerArtworkStyle,
     isFavorite: Boolean,
+    canToggleFavorite: Boolean = true,
     onToggleFavorite: () -> Unit,
     onOpenQueue: () -> Unit,
+    onlineNavigationSourceId: String? = null,
     onOpenLibraryNavigationTarget: (LibraryNavigationTarget) -> Unit,
     onPlayerIntent: (PlayerIntent) -> Unit,
     modifier: Modifier = Modifier,
@@ -103,8 +106,10 @@ internal fun AutomotiveLandscapePlayerOverlayContent(
                 artworkBitmap = artworkBitmap,
                 playerArtworkStyle = playerArtworkStyle,
                 isFavorite = isFavorite,
+                canToggleFavorite = canToggleFavorite,
                 onToggleFavorite = onToggleFavorite,
                 onOpenQueue = onOpenQueue,
+                onlineNavigationSourceId = onlineNavigationSourceId,
                 onOpenLibraryNavigationTarget = onOpenLibraryNavigationTarget,
                 onPlayerIntent = onPlayerIntent,
                 modifier = Modifier
@@ -130,8 +135,10 @@ private fun AutomotivePlaybackPane(
     artworkBitmap: ImageBitmap?,
     playerArtworkStyle: PlayerArtworkStyle,
     isFavorite: Boolean,
+    canToggleFavorite: Boolean,
     onToggleFavorite: () -> Unit,
     onOpenQueue: () -> Unit,
+    onlineNavigationSourceId: String?,
     onOpenLibraryNavigationTarget: (LibraryNavigationTarget) -> Unit,
     onPlayerIntent: (PlayerIntent) -> Unit,
     modifier: Modifier = Modifier,
@@ -167,7 +174,9 @@ private fun AutomotivePlaybackPane(
             artworkBitmap = artworkBitmap,
             playerArtworkStyle = playerArtworkStyle,
             isFavorite = isFavorite,
+            canToggleFavorite = canToggleFavorite,
             onToggleFavorite = onToggleFavorite,
+            onlineNavigationSourceId = onlineNavigationSourceId,
             onOpenLibraryNavigationTarget = onOpenLibraryNavigationTarget,
             onPlayerIntent = onPlayerIntent,
             modifier = Modifier
@@ -190,7 +199,9 @@ private fun AutomotiveTrackAndProgress(
     artworkBitmap: ImageBitmap?,
     playerArtworkStyle: PlayerArtworkStyle,
     isFavorite: Boolean,
+    canToggleFavorite: Boolean,
     onToggleFavorite: () -> Unit,
+    onlineNavigationSourceId: String?,
     onOpenLibraryNavigationTarget: (LibraryNavigationTarget) -> Unit,
     onPlayerIntent: (PlayerIntent) -> Unit,
     modifier: Modifier = Modifier,
@@ -250,6 +261,7 @@ private fun AutomotiveTrackAndProgress(
                         buttonSize = inlineActionButtonSize,
                         iconSize = inlineActionIconSize,
                         tint = if (isFavorite) Color(0xFFE5484D) else Color.White.copy(alpha = 0.9f),
+                        enabled = canToggleFavorite,
                     )
                 }
                 AutomotiveMetadataNavigationRow(
@@ -257,6 +269,7 @@ private fun AutomotiveTrackAndProgress(
                     track = track,
                     style = if (compactVertical) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.titleMedium,
                     color = Color.White.copy(alpha = 0.72f),
+                    onlineNavigationSourceId = onlineNavigationSourceId,
                     onOpenLibraryNavigationTarget = onOpenLibraryNavigationTarget,
                 )
             }
@@ -363,6 +376,7 @@ private fun AutomotiveMetadataNavigationRow(
     track: Track,
     style: TextStyle,
     color: Color,
+    onlineNavigationSourceId: String?,
     onOpenLibraryNavigationTarget: (LibraryNavigationTarget) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -371,8 +385,20 @@ private fun AutomotiveMetadataNavigationRow(
         snapshot.currentDisplayArtistName,
         track.albumTitle,
         track.artistName,
+        track.albumId,
+        track.artistId,
+        track.artworkLocator,
+        onlineNavigationSourceId,
     ) {
-        derivePlaybackLibraryNavigationTargets(snapshot, track)
+        if (onlineNavigationSourceId != null) {
+            deriveOnlinePlaybackLibraryNavigationTargets(
+                snapshot = snapshot,
+                track = track,
+                sourceId = onlineNavigationSourceId,
+            )
+        } else {
+            derivePlaybackLibraryNavigationTargets(snapshot, track)
+        }
     }
     val artistLabel = automotiveMetadataValue(
         primary = snapshot.currentDisplayArtistName,

@@ -99,6 +99,7 @@ import top.iwesley.lyn.music.core.model.Artist
 import top.iwesley.lyn.music.core.model.ImportScanPhase
 import top.iwesley.lyn.music.core.model.ImportScanProgress
 import top.iwesley.lyn.music.core.model.ImportScanSummary
+import top.iwesley.lyn.music.core.model.ImportSourceIndexMode
 import top.iwesley.lyn.music.core.model.ImportSourceType
 import top.iwesley.lyn.music.core.model.LocalFolderPickerMode
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
@@ -111,28 +112,64 @@ import top.iwesley.lyn.music.feature.favorites.FavoritesState
 import top.iwesley.lyn.music.feature.importing.ImportIntent
 import top.iwesley.lyn.music.feature.importing.ImportScanOperation
 import top.iwesley.lyn.music.feature.importing.ImportState
+import top.iwesley.lyn.music.feature.importing.PendingLargeNavidromeAction
+import top.iwesley.lyn.music.feature.library.LibraryAlbumUiItem
+import top.iwesley.lyn.music.feature.library.LibraryArtistUiItem
+import top.iwesley.lyn.music.feature.library.LibraryBrowserActions
+import top.iwesley.lyn.music.feature.library.LibraryBrowserCount
 import top.iwesley.lyn.music.feature.library.LibraryIntent
 import top.iwesley.lyn.music.feature.library.LibrarySourceFilter
 import top.iwesley.lyn.music.feature.library.LibraryState
+import top.iwesley.lyn.music.feature.library.LibraryTrackUiItem
+import top.iwesley.lyn.music.feature.library.LibraryBrowserUiState
 import top.iwesley.lyn.music.feature.library.TrackSortMode
 import top.iwesley.lyn.music.feature.library.deriveVisibleAlbums
 import top.iwesley.lyn.music.feature.library.libraryAlbumId
 import top.iwesley.lyn.music.feature.library.libraryArtistId
+import top.iwesley.lyn.music.feature.library.toBrowserUiState
 import top.iwesley.lyn.music.feature.offline.OfflineDownloadIntent
 import top.iwesley.lyn.music.feature.offline.batchDownloadInsufficientSpaceMessage
 import top.iwesley.lyn.music.feature.offline.batchDownloadSizeEstimateLabel
 import top.iwesley.lyn.music.feature.offline.estimateBatchDownloadSize
+import top.iwesley.lyn.music.feature.online.OnlineFavoritesIntent
+import top.iwesley.lyn.music.feature.online.OnlineFavoritesState
+import top.iwesley.lyn.music.feature.online.OnlineLibraryIntent
+import top.iwesley.lyn.music.feature.online.OnlineLibraryState
 import top.iwesley.lyn.music.feature.player.PlayerIntent
 import top.iwesley.lyn.music.platform.PlatformBackHandler
 import top.iwesley.lyn.music.ui.mainShellColors
 import kotlin.math.roundToInt
 
+internal enum class LibraryTabMessageDismissTarget {
+    OnlineLibrary,
+    Favorites,
+}
+
+internal fun libraryTabBrowserMessage(
+    isOnlineMode: Boolean,
+    onlineErrorMessage: String?,
+    favoritesMessage: String?,
+): String? {
+    return if (isOnlineMode) onlineErrorMessage else favoritesMessage
+}
+
+internal fun libraryTabMessageDismissTarget(isOnlineMode: Boolean): LibraryTabMessageDismissTarget {
+    return if (isOnlineMode) {
+        LibraryTabMessageDismissTarget.OnlineLibrary
+    } else {
+        LibraryTabMessageDismissTarget.Favorites
+    }
+}
+
 @Composable
 internal fun LibraryTab(
     state: LibraryState,
     favoritesState: FavoritesState,
+    importState: ImportState,
+    onlineState: OnlineLibraryState,
     onLibraryIntent: (LibraryIntent) -> Unit,
     onFavoritesIntent: (FavoritesIntent) -> Unit,
+    onOnlineIntent: (OnlineLibraryIntent) -> Unit,
     onPlayerIntent: (PlayerIntent) -> Unit,
     showFavoriteButton: Boolean = true,
     showDuration: Boolean = true,
@@ -145,21 +182,85 @@ internal fun LibraryTab(
     rootSelectorStyle: LibraryRootSelectorStyle = LibraryRootSelectorStyle.Default,
     modifier: Modifier = Modifier,
 ) {
-    LibraryBrowserTab(
-        state = LibraryBrowserPageState(
-            isLoadingContent = state.isLoadingContent,
-            query = state.query,
-            tracks = state.tracks,
-            filteredTracks = state.filteredTracks,
-            filteredAlbums = state.filteredAlbums,
-            filteredArtists = state.filteredArtists,
-            selectedSourceFilter = state.selectedSourceFilter,
-            availableSourceFilters = state.availableSourceFilters,
-            selectedTrackSortMode = state.selectedTrackSortMode,
+    val onlineSourceOptions = remember(importState.sources) {
+        importState.onlineNavidromeSourceOptions()
+    }
+    val isOnlineMode = onlineState.sourceId != null
+    val browserMessage = libraryTabBrowserMessage(
+        isOnlineMode = isOnlineMode,
+        onlineErrorMessage = onlineState.errorMessage,
+        favoritesMessage = favoritesState.message,
+    )
+    val browserState = if (isOnlineMode) {
+        onlineState.toBrowserUiState(message = browserMessage)
+    } else {
+        state.toBrowserUiState(
             favoriteTrackIds = favoritesState.favoriteTrackIds,
-            message = favoritesState.message,
-            sourceLabelsById = state.sourceLabelsById,
-        ),
+            message = browserMessage,
+        )
+    }
+    val browserActions = LibraryBrowserActions(
+        onSearchChanged = {
+            if (isOnlineMode) {
+                onOnlineIntent(OnlineLibraryIntent.SearchChanged(it))
+            } else {
+                onLibraryIntent(LibraryIntent.SearchChanged(it))
+            }
+        },
+        onSourceFilterChanged = {
+            onOnlineIntent(OnlineLibraryIntent.SelectSource(sourceId = null))
+            onLibraryIntent(LibraryIntent.SourceFilterChanged(it))
+        },
+        onOnlineSourceSelected = { sourceId -> onOnlineIntent(OnlineLibraryIntent.SelectSource(sourceId)) },
+        onTrackSortChanged = { onLibraryIntent(LibraryIntent.TrackSortChanged(it)) },
+        onToggleFavorite = { onFavoritesIntent(FavoritesIntent.ToggleFavorite(it)) },
+        onDismissMessage = {
+            when (libraryTabMessageDismissTarget(isOnlineMode)) {
+                LibraryTabMessageDismissTarget.OnlineLibrary -> onOnlineIntent(OnlineLibraryIntent.ClearError)
+                LibraryTabMessageDismissTarget.Favorites -> onFavoritesIntent(FavoritesIntent.ClearMessage)
+            }
+        },
+        onLoadMoreTracks = { onOnlineIntent(OnlineLibraryIntent.LoadMoreTracks) },
+        onLoadMoreAlbums = { onOnlineIntent(OnlineLibraryIntent.LoadMoreAlbums) },
+        onLoadMoreArtists = { onOnlineIntent(OnlineLibraryIntent.LoadMoreArtists) },
+        onPrepareOnlineAlbumNavigation = { sourceId, albumId, albumTitle, artistName, artworkLocator ->
+            onOnlineIntent(
+                OnlineLibraryIntent.PrepareAlbumNavigation(
+                    sourceId = sourceId,
+                    albumId = albumId,
+                    albumTitle = albumTitle,
+                    artistName = artistName,
+                    artworkLocator = artworkLocator,
+                ),
+            )
+        },
+        onPrepareOnlineArtistNavigation = { sourceId, artistId, artistName ->
+            onOnlineIntent(
+                OnlineLibraryIntent.PrepareArtistNavigation(
+                    sourceId = sourceId,
+                    artistId = artistId,
+                    artistName = artistName,
+                ),
+            )
+        },
+        onLoadAlbumTracks = { onOnlineIntent(OnlineLibraryIntent.LoadAlbumTracks(it)) },
+        onLoadArtistAlbums = { onOnlineIntent(OnlineLibraryIntent.LoadArtistAlbums(it)) },
+        onAlbumClick = { album ->
+            if (isOnlineMode) {
+                onOnlineIntent(OnlineLibraryIntent.LoadAlbumTracks(album.id))
+            }
+        },
+        onArtistClick = { artist ->
+            if (isOnlineMode) {
+                onOnlineIntent(OnlineLibraryIntent.LoadArtistAlbums(artist.id))
+            }
+        },
+        onPlayTracks = { tracks, index -> onPlayerIntent(PlayerIntent.PlayTracks(tracks, index)) },
+    )
+    LibraryBrowserTab(
+        state = browserState,
+        actions = browserActions,
+        onlineSourceOptions = onlineSourceOptions,
         strings = LibraryBrowserStrings(
             searchLabel = "搜索歌曲 / 艺人 / 专辑 / 文件夹",
             sectionTitle = "",
@@ -174,17 +275,11 @@ internal fun LibraryTab(
             artistLabel = "艺人",
             folderLabel = "文件夹",
         ),
-        onSearchChanged = { onLibraryIntent(LibraryIntent.SearchChanged(it)) },
-        onSourceFilterChanged = { onLibraryIntent(LibraryIntent.SourceFilterChanged(it)) },
-        onTrackSortChanged = { onLibraryIntent(LibraryIntent.TrackSortChanged(it)) },
-        onToggleFavorite = { onFavoritesIntent(FavoritesIntent.ToggleFavorite(it)) },
-        onDismissMessage = { onFavoritesIntent(FavoritesIntent.ClearMessage) },
-        onPlayTracks = { tracks, index -> onPlayerIntent(PlayerIntent.PlayTracks(tracks, index)) },
-        showFavoriteButton = showFavoriteButton,
+        showFavoriteButton = showFavoriteButton && !isOnlineMode,
         showDuration = showDuration,
         showSearchField = showSearchField,
-        showTrackSortActionButton = showSearchField,
-        showFolderBrowser = true,
+        showTrackSortActionButton = showSearchField && !isOnlineMode,
+        showFolderBrowser = !isOnlineMode,
         rootSelectorStyle = rootSelectorStyle,
         navigationTarget = navigationTarget,
         onNavigationHandled = onNavigationHandled,
@@ -198,7 +293,10 @@ internal fun LibraryTab(
 @Composable
 internal fun FavoritesTab(
     state: FavoritesState,
+    importState: ImportState,
+    onlineState: OnlineFavoritesState,
     onFavoritesIntent: (FavoritesIntent) -> Unit,
+    onOnlineIntent: (OnlineFavoritesIntent) -> Unit,
     onPlayerIntent: (PlayerIntent) -> Unit,
     showFavoriteButton: Boolean = true,
     showDuration: Boolean = true,
@@ -209,20 +307,56 @@ internal fun FavoritesTab(
     showInlineBatchOperationButton: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
+    val onlineSourceOptions = remember(importState.sources) {
+        importState.onlineNavidromeSourceOptions()
+    }
+    val isOnlineMode = onlineState.sourceId != null
+    val browserState = if (isOnlineMode) {
+        onlineState.toBrowserUiState(message = onlineState.errorMessage ?: onlineState.message ?: state.message)
+    } else {
+        state.toBrowserUiState(message = state.message)
+    }
+    val browserActions = LibraryBrowserActions(
+        onSearchChanged = {
+            if (isOnlineMode) {
+                onOnlineIntent(OnlineFavoritesIntent.SearchChanged(it))
+            } else {
+                onFavoritesIntent(FavoritesIntent.SearchChanged(it))
+            }
+        },
+        onSourceFilterChanged = {
+            onOnlineIntent(OnlineFavoritesIntent.SelectSource(sourceId = null))
+            onFavoritesIntent(FavoritesIntent.SourceFilterChanged(it))
+        },
+        onOnlineSourceSelected = { sourceId -> onOnlineIntent(OnlineFavoritesIntent.SelectSource(sourceId)) },
+        onTrackSortChanged = { onFavoritesIntent(FavoritesIntent.TrackSortChanged(it)) },
+        onToggleFavorite = {
+            if (isOnlineMode) {
+                val sourceId = onlineState.sourceId
+                if (sourceId != null) {
+                    onOnlineIntent(
+                        OnlineFavoritesIntent.SetFavorite(
+                            sourceId = sourceId,
+                            track = it,
+                            favorite = false,
+                        )
+                    )
+                }
+            } else {
+                onFavoritesIntent(FavoritesIntent.ToggleFavorite(it))
+            }
+        },
+        onDismissMessage = {
+            onOnlineIntent(OnlineFavoritesIntent.ClearMessage)
+            onFavoritesIntent(FavoritesIntent.ClearMessage)
+        },
+        onLoadMoreTracks = { onOnlineIntent(OnlineFavoritesIntent.LoadMore) },
+        onPlayTracks = { tracks, index -> onPlayerIntent(PlayerIntent.PlayTracks(tracks, index)) },
+    )
     LibraryBrowserTab(
-        state = LibraryBrowserPageState(
-            isLoadingContent = state.isLoadingContent,
-            query = state.query,
-            tracks = state.tracks,
-            filteredTracks = state.filteredTracks,
-            filteredAlbums = state.filteredAlbums,
-            filteredArtists = state.filteredArtists,
-            selectedSourceFilter = state.selectedSourceFilter,
-            availableSourceFilters = state.availableSourceFilters,
-            selectedTrackSortMode = state.selectedTrackSortMode,
-            favoriteTrackIds = state.favoriteTrackIds,
-            message = state.message,
-        ),
+        state = browserState,
+        actions = browserActions,
+        onlineSourceOptions = onlineSourceOptions,
         strings = LibraryBrowserStrings(
             searchLabel = "搜索歌曲 / 艺人 / 专辑",
             sectionTitle = "",
@@ -237,52 +371,60 @@ internal fun FavoritesTab(
             artistLabel = "喜欢的艺人",
             folderLabel = "喜欢的文件夹",
         ),
-        onSearchChanged = { onFavoritesIntent(FavoritesIntent.SearchChanged(it)) },
-        onSourceFilterChanged = { onFavoritesIntent(FavoritesIntent.SourceFilterChanged(it)) },
-        onTrackSortChanged = { onFavoritesIntent(FavoritesIntent.TrackSortChanged(it)) },
-        onToggleFavorite = { onFavoritesIntent(FavoritesIntent.ToggleFavorite(it)) },
-        actionButton = if (showRefreshActionButton && state.canRefreshRemote) {
+        actionButton = if (showRefreshActionButton && (state.canRefreshRemote || isOnlineMode)) {
             {
                 IconButton(
-                    onClick = { onFavoritesIntent(FavoritesIntent.Refresh) },
-                    enabled = !state.isRefreshing,
+                    onClick = {
+                        if (isOnlineMode) {
+                            onOnlineIntent(OnlineFavoritesIntent.Refresh)
+                        } else {
+                            onFavoritesIntent(FavoritesIntent.Refresh)
+                        }
+                    },
+                    enabled = if (isOnlineMode) !onlineState.isLoading else !state.isRefreshing,
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Sync,
-                        contentDescription = if (state.isRefreshing) "刷新中" else "刷新",
+                        contentDescription = if (state.isRefreshing || onlineState.isLoading) "刷新中" else "刷新",
                     )
                 }
             }
         } else {
             null
         },
-        onDismissMessage = { onFavoritesIntent(FavoritesIntent.ClearMessage) },
-        onPlayTracks = { tracks, index -> onPlayerIntent(PlayerIntent.PlayTracks(tracks, index)) },
         showFavoriteButton = showFavoriteButton,
         showDuration = showDuration,
         showSearchField = showSearchField,
-        showTrackSortActionButton = showSearchField,
+        showTrackSortActionButton = showSearchField && !isOnlineMode,
         onOpenLibraryNavigationTarget = onOpenLibraryNavigationTarget,
         batchSelectionRequestKey = batchSelectionRequestKey,
-        showInlineBatchOperationButton = showInlineBatchOperationButton,
+        showInlineBatchOperationButton = showInlineBatchOperationButton && !isOnlineMode,
         modifier = modifier,
     )
 }
 
-private data class LibraryBrowserPageState(
-    val isLoadingContent: Boolean,
-    val query: String,
-    val tracks: List<Track>,
-    val filteredTracks: List<Track>,
-    val filteredAlbums: List<Album>,
-    val filteredArtists: List<Artist>,
-    val selectedSourceFilter: LibrarySourceFilter,
-    val availableSourceFilters: List<LibrarySourceFilter>,
-    val selectedTrackSortMode: TrackSortMode,
-    val favoriteTrackIds: Set<String>,
-    val message: String?,
-    val sourceLabelsById: Map<String, String> = emptyMap(),
+internal data class OnlineSourceOption(
+    val sourceId: String,
+    val label: String,
 )
+
+internal fun ImportState.onlineNavidromeSourceOptions(): List<OnlineSourceOption> {
+    return sources
+        .asSequence()
+        .map { it.source }
+        .filter {
+            it.enabled &&
+                it.type == ImportSourceType.NAVIDROME &&
+                it.indexMode == ImportSourceIndexMode.ONLINE
+        }
+        .map { source ->
+            OnlineSourceOption(
+                sourceId = source.id,
+                label = source.label.trim().ifBlank { source.id } + " · 在线",
+            )
+        }
+        .toList()
+}
 
 private data class LibraryBrowserStrings(
     val searchLabel: String,
@@ -327,26 +469,27 @@ internal data class LibraryRootSelectorModel(
 
 internal fun buildLibraryRootSelectorModel(
     style: LibraryRootSelectorStyle,
-    trackCount: Int,
-    albumCount: Int,
-    artistCount: Int,
+    trackCount: LibraryBrowserCount,
+    albumCount: LibraryBrowserCount,
+    artistCount: LibraryBrowserCount,
     folderCount: Int,
     showFolderBrowser: Boolean,
+    playAllEnabled: Boolean = trackCount.loaded > 0,
 ): LibraryRootSelectorModel {
     val trackItem = LibraryRootSelectorItem(
         rootView = LibraryBrowserRootView.Tracks,
         title = "歌曲",
-        value = trackCount.coerceAtLeast(0).toString(),
+        value = trackCount.displayValue(),
     )
     val albumItem = LibraryRootSelectorItem(
         rootView = LibraryBrowserRootView.Albums,
         title = "专辑",
-        value = albumCount.coerceAtLeast(0).toString(),
+        value = albumCount.displayValue(),
     )
     val artistItem = LibraryRootSelectorItem(
         rootView = LibraryBrowserRootView.Artists,
         title = "艺人",
-        value = artistCount.coerceAtLeast(0).toString(),
+        value = artistCount.displayValue(),
     )
     val folderItem = LibraryRootSelectorItem(
         rootView = LibraryBrowserRootView.Folders,
@@ -377,7 +520,7 @@ internal fun buildLibraryRootSelectorModel(
                 add(artistItem)
                 if (showFolderBrowser) add(folderItem)
             },
-            playAllEnabled = trackCount > 0,
+            playAllEnabled = playAllEnabled,
         )
     }
 }
@@ -531,14 +674,41 @@ internal fun resolveTrackRowLibraryNavigationTargets(
     }
 }
 
+private fun prepareOnlineNavigationTarget(
+    target: LibraryNavigationTarget,
+    actions: LibraryBrowserActions,
+) {
+    when (target) {
+        is LibraryNavigationTarget.OnlineAlbum -> {
+            actions.onPrepareOnlineAlbumNavigation(
+                target.sourceId,
+                target.albumId,
+                target.albumTitle,
+                target.artistName,
+                target.artworkLocator,
+            )
+        }
+
+        is LibraryNavigationTarget.OnlineArtist -> {
+            actions.onPrepareOnlineArtistNavigation(
+                target.sourceId,
+                target.artistId,
+                target.artistName,
+            )
+        }
+
+        is LibraryNavigationTarget.Album,
+        is LibraryNavigationTarget.Artist,
+        -> Unit
+    }
+}
+
 @Composable
 private fun LibraryBrowserTab(
-    state: LibraryBrowserPageState,
+    state: LibraryBrowserUiState,
+    actions: LibraryBrowserActions,
+    onlineSourceOptions: List<OnlineSourceOption> = emptyList(),
     strings: LibraryBrowserStrings,
-    onSearchChanged: (String) -> Unit,
-    onSourceFilterChanged: (LibrarySourceFilter) -> Unit,
-    onTrackSortChanged: (TrackSortMode) -> Unit,
-    onToggleFavorite: (Track) -> Unit,
     showFavoriteButton: Boolean = true,
     showDuration: Boolean = true,
     showSearchField: Boolean = true,
@@ -546,8 +716,6 @@ private fun LibraryBrowserTab(
     showFolderBrowser: Boolean = false,
     rootSelectorStyle: LibraryRootSelectorStyle = LibraryRootSelectorStyle.Default,
     actionButton: (@Composable () -> Unit)? = null,
-    onDismissMessage: () -> Unit,
-    onPlayTracks: (List<Track>, Int) -> Unit,
     navigationTarget: LibraryNavigationTarget? = null,
     onNavigationHandled: () -> Unit = {},
     onOpenLibraryNavigationTarget: ((LibraryNavigationTarget) -> Unit)? = null,
@@ -562,6 +730,9 @@ private fun LibraryBrowserTab(
     val albumDetailListState = rememberLazyListState()
     val artistDetailListState = rememberLazyListState()
     val folderDetailListState = rememberLazyListState()
+    val visibleTracks = remember(state.tracks) { state.tracks.map(LibraryTrackUiItem::track) }
+    val visibleAlbums = remember(state.albums) { state.albums.map(LibraryAlbumUiItem::album) }
+    val visibleArtists = remember(state.artists) { state.artists.map(LibraryArtistUiItem::artist) }
     val folderDetailScrollPositions = remember { mutableMapOf<String, LibraryFolderDetailScrollPosition>() }
     var sourceFilterMenuExpanded by remember { mutableStateOf(false) }
     var trackSortMenuExpanded by remember { mutableStateOf(false) }
@@ -570,6 +741,7 @@ private fun LibraryBrowserTab(
     var selectedAlbumId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedFolderSourceId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedFolderPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var lastAppliedOnlineContextTarget by remember { mutableStateOf<LibraryNavigationTarget?>(null) }
     fun selectedFolderStableId(): String? {
         val sourceId = selectedFolderSourceId ?: return null
         return LibraryFolderKey(sourceId = sourceId, path = selectedFolderPath.orEmpty()).stableId
@@ -613,11 +785,11 @@ private fun LibraryBrowserTab(
 
         null -> Unit
     }
-    val tracksByArtistId = remember(state.filteredTracks) {
-        state.filteredTracks.groupBy(Track::artistLibraryIdOrNull)
+    val tracksByArtistId = remember(visibleTracks) {
+        visibleTracks.groupBy(Track::artistLibraryIdOrNull)
     }
-    val tracksByAlbumId = remember(state.filteredTracks) {
-        state.filteredTracks.groupBy(Track::albumLibraryIdOrNull)
+    val tracksByAlbumId = remember(visibleTracks) {
+        visibleTracks.groupBy(Track::albumLibraryIdOrNull)
     }
     val artistAlbumCountById = remember(tracksByArtistId) {
         tracksByArtistId.entries
@@ -626,33 +798,96 @@ private fun LibraryBrowserTab(
             }
             .toMap()
     }
-    val selectedArtist = remember(state.filteredArtists, selectedArtistId) {
-        state.filteredArtists.firstOrNull { it.id == selectedArtistId }
+    val selectedArtistItem = remember(state.artists, state.onlineArtistItemsById, state.isOnline, selectedArtistId) {
+        val artistId = selectedArtistId
+        when {
+            artistId == null -> null
+            state.isOnline -> state.artists.firstOrNull { it.id == artistId }
+                ?: state.onlineArtistItemsById[artistId]
+            else -> state.artists.firstOrNull { it.id == artistId }
+        }
     }
-    val artistTracks = remember(tracksByArtistId, selectedArtistId) {
+    val selectedArtist = selectedArtistItem?.artist
+    val onlineArtistAlbumItems = selectedArtistId
+        ?.let { state.onlineArtistAlbumsById[it] }
+        .orEmpty()
+    val isLoadingOnlineArtistAlbums = selectedArtistId in state.loadingArtistAlbumIds
+    val localArtistTracks = remember(tracksByArtistId, selectedArtistId) {
         tracksByArtistId[selectedArtistId].orEmpty().sortedWith(ARTIST_DETAIL_TRACK_COMPARATOR)
     }
-    val artistAlbums = remember(artistTracks) {
-        deriveVisibleAlbums(artistTracks)
+    val artistTracks = if (state.isOnline && selectedArtistId != null) {
+        emptyList()
+    } else {
+        localArtistTracks
     }
-    val selectedAlbum =
-        remember(state.filteredAlbums, artistAlbums, selectedAlbumId, selectedArtistId) {
+    val localArtistAlbumItems = remember(localArtistTracks) {
+        deriveVisibleAlbums(localArtistTracks)
+            .map { album -> LibraryAlbumUiItem(id = album.id, album = album) }
+    }
+    val artistAlbumItems = if (state.isOnline && selectedArtistId != null) {
+        onlineArtistAlbumItems
+    } else {
+        localArtistAlbumItems
+    }
+    val artistAlbums = remember(artistAlbumItems) {
+        artistAlbumItems.map(LibraryAlbumUiItem::album)
+    }
+    val selectedArtistTrackCount = if (state.isOnline) {
+        selectedArtistItem?.trackCount
+    } else {
+        artistTracks.size
+    }
+    val selectedArtistAlbumCount = if (state.isOnline) {
+        selectedArtistItem?.albumCount
+            ?: artistAlbumItems.size.takeIf {
+                selectedArtistId != null &&
+                    selectedArtistId in state.onlineArtistAlbumsById &&
+                    !isLoadingOnlineArtistAlbums
+            }
+    } else {
+        artistAlbumItems.size
+    }
+    val isLoadingOnlineAlbumTracks = selectedAlbumId in state.loadingAlbumIds
+    val selectedAlbumItem =
+        remember(
+            visibleAlbums,
+            state.albums,
+            artistAlbumItems,
+            selectedAlbumId,
+            selectedArtistId,
+            state.isOnline,
+            state.onlineAlbumItemsById,
+        ) {
             when {
                 selectedAlbumId == null -> null
-                selectedArtistId != null -> artistAlbums.firstOrNull { it.id == selectedAlbumId }
-                else -> state.filteredAlbums.firstOrNull { it.id == selectedAlbumId }
+                state.isOnline && selectedArtistId != null -> artistAlbumItems.firstOrNull { it.id == selectedAlbumId }
+                    ?: state.onlineAlbumItemsById[selectedAlbumId]
+                selectedArtistId != null -> artistAlbumItems.firstOrNull { it.id == selectedAlbumId }
+                state.isOnline -> state.albums.firstOrNull { it.id == selectedAlbumId }
+                    ?: state.onlineAlbumItemsById[selectedAlbumId]
+                else -> state.albums.firstOrNull { it.id == selectedAlbumId }
             }
         }
-    val albumTracks = remember(tracksByAlbumId, artistTracks, selectedAlbumId, selectedArtistId) {
+    val selectedAlbum = selectedAlbumItem?.album
+    val albumTracks = remember(
+        tracksByAlbumId,
+        artistTracks,
+        selectedAlbumId,
+        selectedArtistId,
+        state.onlineAlbumTracksById,
+        state.isOnline,
+    ) {
+        val albumId = selectedAlbumId
         when {
-            selectedAlbumId == null -> emptyList()
-            selectedArtistId != null -> artistTracks.filter { it.albumLibraryIdOrNull() == selectedAlbumId }
-            else -> tracksByAlbumId[selectedAlbumId].orEmpty()
+            albumId == null -> emptyList()
+            state.isOnline -> state.onlineAlbumTracksById[albumId].orEmpty()
+            selectedArtistId != null -> artistTracks.filter { it.albumLibraryIdOrNull() == albumId }
+            else -> tracksByAlbumId[albumId].orEmpty()
         }.sortedWith(ALBUM_DETAIL_TRACK_COMPARATOR)
     }
-    val folderTree = remember(state.filteredTracks, state.sourceLabelsById) {
+    val folderTree = remember(visibleTracks, state.sourceLabelsById) {
         deriveLibraryFolderTree(
-            tracks = state.filteredTracks,
+            tracks = visibleTracks,
             sourceLabelsById = state.sourceLabelsById,
         )
     }
@@ -671,19 +906,21 @@ private fun LibraryBrowserTab(
     }
     val rootSelectorModel = remember(
         rootSelectorStyle,
-        state.filteredTracks.size,
-        state.filteredAlbums.size,
-        state.filteredArtists.size,
+        state.trackCount,
+        state.albumCount,
+        state.artistCount,
         folderTree.folderCount,
         showFolderBrowser,
+        visibleTracks.isNotEmpty(),
     ) {
         buildLibraryRootSelectorModel(
             style = rootSelectorStyle,
-            trackCount = state.filteredTracks.size,
-            albumCount = state.filteredAlbums.size,
-            artistCount = state.filteredArtists.size,
+            trackCount = state.trackCount,
+            albumCount = state.albumCount,
+            artistCount = state.artistCount,
             folderCount = folderTree.folderCount,
             showFolderBrowser = showFolderBrowser,
+            playAllEnabled = visibleTracks.isNotEmpty(),
         )
     }
     var selectionMode by rememberSaveable { mutableStateOf(false) }
@@ -696,7 +933,7 @@ private fun LibraryBrowserTab(
         selectedArtistId == null &&
         selectedAlbumId == null
     ) {
-        state.filteredTracks
+        visibleTracks
     } else {
         emptyList()
     }
@@ -716,7 +953,9 @@ private fun LibraryBrowserTab(
             downloadsByTrackId = offlineUiState.downloadsByTrackId,
         )
     }
-    val supportsBatchDownload = supportsBatchOfflineDownloadActions() && onOfflineDownloadIntent != null
+    val supportsBatchDownload = state.capabilities.canBatchDownload &&
+        supportsBatchOfflineDownloadActions() &&
+        onOfflineDownloadIntent != null
     val inlineBatchOperationButtonVisible = showInlineBatchOperationButton
     fun exitSelectionMode() {
         selectionMode = false
@@ -789,34 +1028,70 @@ private fun LibraryBrowserTab(
     LaunchedEffect(
         navigationTarget,
         state.query,
+        state.isOnline,
+        state.sourceId,
         state.selectedSourceFilter,
-        state.filteredAlbums,
-        state.filteredArtists,
+        visibleAlbums,
+        visibleArtists,
     ) {
-        val target = navigationTarget ?: return@LaunchedEffect
+        val target = navigationTarget
+        if (target == null) {
+            lastAppliedOnlineContextTarget = null
+            return@LaunchedEffect
+        }
+        if (lastAppliedOnlineContextTarget != null && lastAppliedOnlineContextTarget != target) {
+            lastAppliedOnlineContextTarget = null
+        }
         when (
             val command = resolveLibraryNavigationCommand(
                 target = target,
                 query = state.query,
+                isOnline = state.isOnline,
+                onlineSourceId = state.sourceId,
                 selectedSourceFilter = state.selectedSourceFilter,
                 availableSourceFilters = state.availableSourceFilters,
-                filteredAlbums = state.filteredAlbums,
-                filteredArtists = state.filteredArtists,
+                filteredAlbums = visibleAlbums,
+                filteredArtists = visibleArtists,
             )
         ) {
             is LibraryNavigationCommand.ApplyContext -> {
-                if (command.clearQuery && state.query.isNotBlank()) {
-                    onSearchChanged("")
+                if (shouldClearNavigationQuery(command.clearQuery, state.query)) {
+                    actions.onSearchChanged("")
                 }
                 if (state.selectedSourceFilter != command.sourceFilter) {
-                    onSourceFilterChanged(command.sourceFilter)
+                    actions.onSourceFilterChanged(command.sourceFilter)
+                }
+            }
+
+            is LibraryNavigationCommand.ApplyOnlineContext -> {
+                if (shouldClearNavigationQuery(command.clearQuery, state.query)) {
+                    actions.onSearchChanged("")
+                }
+                if (shouldApplyOnlineNavigationContext(target, lastAppliedOnlineContextTarget)) {
+                    prepareOnlineNavigationTarget(target, actions)
+                    lastAppliedOnlineContextTarget = target
                 }
             }
 
             is LibraryNavigationCommand.Navigate -> {
+                prepareOnlineNavigationTarget(target, actions)
+                when (target) {
+                    is LibraryNavigationTarget.OnlineAlbum -> {
+                        actions.onLoadAlbumTracks(target.albumId)
+                    }
+
+                    is LibraryNavigationTarget.OnlineArtist -> {
+                        actions.onLoadArtistAlbums(target.artistId)
+                    }
+
+                    is LibraryNavigationTarget.Album,
+                    is LibraryNavigationTarget.Artist,
+                    -> Unit
+                }
                 rootView = command.resolution.rootView
                 selectedArtistId = command.resolution.selectedArtistId
                 selectedAlbumId = command.resolution.selectedAlbumId
+                lastAppliedOnlineContextTarget = null
                 onNavigationHandled()
             }
         }
@@ -824,8 +1099,9 @@ private fun LibraryBrowserTab(
 
     LaunchedEffect(
         rootView,
-        state.filteredAlbums,
-        state.filteredArtists,
+        state.isOnline,
+        visibleAlbums,
+        visibleArtists,
         selectedArtistId,
         selectedAlbumId,
         artistAlbums,
@@ -844,7 +1120,11 @@ private fun LibraryBrowserTab(
                 if (selectedArtistId != null) selectedArtistId = null
                 if (selectedFolderSourceId != null) selectedFolderSourceId = null
                 if (selectedFolderPath != null) selectedFolderPath = null
-                if (selectedAlbumId != null && state.filteredAlbums.none { it.id == selectedAlbumId }) {
+                if (
+                    !state.isOnline &&
+                    selectedAlbumId != null &&
+                    visibleAlbums.none { it.id == selectedAlbumId }
+                ) {
                     selectedAlbumId = null
                 }
             }
@@ -852,10 +1132,18 @@ private fun LibraryBrowserTab(
             LibraryBrowserRootView.Artists -> {
                 if (selectedFolderSourceId != null) selectedFolderSourceId = null
                 if (selectedFolderPath != null) selectedFolderPath = null
-                if (selectedArtistId != null && state.filteredArtists.none { it.id == selectedArtistId }) {
+                if (
+                    !state.isOnline &&
+                    selectedArtistId != null &&
+                    visibleArtists.none { it.id == selectedArtistId }
+                ) {
                     selectedArtistId = null
                     selectedAlbumId = null
-                } else if (selectedAlbumId != null && artistAlbums.none { it.id == selectedAlbumId }) {
+                } else if (
+                    !state.isOnline &&
+                    selectedAlbumId != null &&
+                    artistAlbums.none { it.id == selectedAlbumId }
+                ) {
                     selectedAlbumId = null
                 }
             }
@@ -903,6 +1191,18 @@ private fun LibraryBrowserTab(
         selectedFolderPath = null
     }
     fun trackRowNavigationTargets(track: Track): PlaybackLibraryNavigationTargets {
+        val onlineSourceId = state.sourceId
+        if (
+            state.isOnline &&
+            onlineSourceId != null &&
+            showDuration &&
+            onOpenLibraryNavigationTarget != null
+        ) {
+            return deriveOnlineTrackLibraryNavigationTargets(
+                track = track,
+                sourceId = onlineSourceId,
+            )
+        }
         return resolveTrackRowLibraryNavigationTargets(
             track = track,
             showDuration = showDuration,
@@ -1002,7 +1302,7 @@ private fun LibraryBrowserTab(
                         ) {
                             LibraryBrowserSearchField(
                                 query = state.query,
-                                onQueryChanged = onSearchChanged,
+                                onQueryChanged = actions.onSearchChanged,
                                 placeholder = strings.searchLabel,
                                 useDesktopToolbar = useDesktopToolbar,
                                 containerColor = searchFieldContainerColor,
@@ -1019,14 +1319,17 @@ private fun LibraryBrowserTab(
                                         LibraryBrowserToolbarActions(
                                             availableSourceFilters = state.availableSourceFilters,
                                             selectedSourceFilter = state.selectedSourceFilter,
+                                            onlineSourceOptions = onlineSourceOptions,
+                                            selectedOnlineSourceId = state.sourceId,
                                             sourceFilterMenuExpanded = sourceFilterMenuExpanded,
                                             onSourceFilterMenuExpandedChange = { sourceFilterMenuExpanded = it },
-                                            onSourceFilterChanged = onSourceFilterChanged,
+                                            onSourceFilterChanged = actions.onSourceFilterChanged,
+                                            onOnlineSourceSelected = actions.onOnlineSourceSelected,
                                             showTrackSortMenu = showTrackSortMenu,
                                             selectedTrackSortMode = state.selectedTrackSortMode,
                                             trackSortMenuExpanded = trackSortMenuExpanded,
                                             onTrackSortMenuExpandedChange = { trackSortMenuExpanded = it },
-                                            onTrackSortChanged = onTrackSortChanged,
+                                            onTrackSortChanged = actions.onTrackSortChanged,
                                             actionButton = combinedActionButton,
                                         )
                                     }
@@ -1037,14 +1340,17 @@ private fun LibraryBrowserTab(
                                 LibraryBrowserToolbarActions(
                                     availableSourceFilters = state.availableSourceFilters,
                                     selectedSourceFilter = state.selectedSourceFilter,
+                                    onlineSourceOptions = onlineSourceOptions,
+                                    selectedOnlineSourceId = state.sourceId,
                                     sourceFilterMenuExpanded = sourceFilterMenuExpanded,
                                     onSourceFilterMenuExpandedChange = { sourceFilterMenuExpanded = it },
-                                    onSourceFilterChanged = onSourceFilterChanged,
+                                    onSourceFilterChanged = actions.onSourceFilterChanged,
+                                    onOnlineSourceSelected = actions.onOnlineSourceSelected,
                                     showTrackSortMenu = showTrackSortMenu,
                                     selectedTrackSortMode = state.selectedTrackSortMode,
                                     trackSortMenuExpanded = trackSortMenuExpanded,
                                     onTrackSortMenuExpandedChange = { trackSortMenuExpanded = it },
-                                    onTrackSortChanged = onTrackSortChanged,
+                                    onTrackSortChanged = actions.onTrackSortChanged,
                                     actionButton = combinedActionButton,
                                 )
                             }
@@ -1084,8 +1390,8 @@ private fun LibraryBrowserTab(
                     tracksStatFocusRequester = tracksStatFocusRequester,
                     onSelectRootView = ::selectRootView,
                     onPlayAllTracks = {
-                        if (state.filteredTracks.isNotEmpty()) {
-                            onPlayTracks(state.filteredTracks, 0)
+                        if (visibleTracks.isNotEmpty()) {
+                            actions.onPlayTracks(visibleTracks, 0)
                         }
                     },
                 )
@@ -1094,7 +1400,7 @@ private fun LibraryBrowserTab(
                 item {
                     BannerCard(
                         message = message,
-                        onDismiss = onDismissMessage,
+                        onDismiss = actions.onDismissMessage,
                     )
                 }
             }
@@ -1107,15 +1413,27 @@ private fun LibraryBrowserTab(
                         DetailSummaryCard(
                             title = selectedAlbum.title,
                             subtitle = selectedAlbum.artistName ?: "未知艺人",
-                            supportingText = "${albumTracks.size} 首歌曲",
-                            artworkLocator = albumTracks.firstOrNull()?.artworkLocator,
+                            supportingText = if (isLoadingOnlineAlbumTracks) {
+                                "正在加载歌曲"
+                            } else {
+                                "${albumTracks.size} 首歌曲"
+                            },
+                            artworkLocator = albumTracks.firstOrNull()?.artworkLocator
+                                ?: selectedAlbumItem.artworkLocator,
                             artworkCacheKey = albumTracks.firstOrNull()?.let(::trackArtworkCacheKey),
                         )
                     }
                     item {
                         SectionTitle(title = "歌曲", subtitle = "当前专辑下的可见歌曲。")
                     }
-                    if (albumTracks.isEmpty()) {
+                    if (isLoadingOnlineAlbumTracks && albumTracks.isEmpty()) {
+                        item {
+                            EmptyStateCard(
+                                title = "正在加载专辑歌曲",
+                                body = "正在从在线来源读取这个专辑的歌曲。",
+                            )
+                        }
+                    } else if (albumTracks.isEmpty()) {
                         item {
                             EmptyStateCard(
                                 title = "这个专辑暂时没有歌曲",
@@ -1129,13 +1447,13 @@ private fun LibraryBrowserTab(
                                 track = track,
                                 index = index,
                                 isFavorite = track.id in state.favoriteTrackIds,
-                                onToggleFavorite = { onToggleFavorite(track) },
+                                onToggleFavorite = { actions.onToggleFavorite(track) },
                                 showFavoriteButton = showFavoriteButton,
                                 showDuration = showDuration,
                                 onArtistClick = navigationTargetClick(navigationTargets.artistTarget),
                                 onAlbumClick = navigationTargetClick(navigationTargets.albumTarget),
                                 onClick = {
-                                    onPlayTracks(albumTracks, index)
+                                    actions.onPlayTracks(albumTracks, index)
                                 },
                             )
                         }
@@ -1154,59 +1472,98 @@ private fun LibraryBrowserTab(
                     item {
                         DetailSummaryCard(
                             title = selectedArtist.name,
-                            subtitle = "${artistTracks.size} 首歌曲 · ${artistAlbums.size} 张专辑",
-                            supportingText = "当前筛选结果中的艺人详情",
-                            artworkLocator = artistTracks.firstOrNull()?.artworkLocator,
-                            artworkCacheKey = artistTracks.firstOrNull()?.let(::trackArtworkCacheKey),
+                            subtitle = artistSummaryLabel(
+                                trackCount = selectedArtistTrackCount,
+                                albumCount = selectedArtistAlbumCount,
+                            ),
+                            supportingText = if (state.isOnline) {
+                                "在线艺人详情"
+                            } else {
+                                "当前筛选结果中的艺人详情"
+                            },
+                            artworkLocator = if (state.isOnline) null else artistTracks.firstOrNull()?.artworkLocator,
+                            artworkCacheKey = if (state.isOnline) {
+                                null
+                            } else {
+                                artistTracks.firstOrNull()?.let(::trackArtworkCacheKey)
+                            },
                         )
                     }
                     item {
-                        SectionTitle(title = "专辑", subtitle = "当前艺人下的可见专辑。")
+                        SectionTitle(
+                            title = "专辑",
+                            subtitle = if (state.isOnline) "Navidrome 返回的艺人专辑。" else "当前艺人下的可见专辑。",
+                        )
                     }
-                    if (artistAlbums.isEmpty()) {
+                    if (isLoadingOnlineArtistAlbums && artistAlbumItems.isEmpty()) {
                         item {
                             EmptyStateCard(
-                                title = "这个艺人下暂无专辑信息",
-                                body = "当前艺人的可见歌曲还没有可用的专辑标签。",
+                                title = "正在加载艺人专辑",
+                                body = "正在从 Navidrome 获取这个艺人的专辑。",
                             )
                         }
-                    } else {
-                        items(artistAlbums, key = { it.id }) { album ->
-                            AlbumRow(
-                                album = album,
-                                artworkLocator = artistTracks.firstOrNull { it.albumLibraryIdOrNull() == album.id }?.artworkLocator,
-                                artworkCacheKey = artistTracks.firstOrNull { it.albumLibraryIdOrNull() == album.id }
-                                    ?.let(::trackArtworkCacheKey),
-                                onClick = { selectedAlbumId = album.id },
-                            )
-                        }
-                    }
-                    item {
-                        SectionTitle(title = "歌曲", subtitle = "当前艺人下的可见歌曲。")
-                    }
-                    if (artistTracks.isEmpty()) {
+                    } else if (artistAlbumItems.isEmpty()) {
                         item {
                             EmptyStateCard(
-                                title = "这个艺人暂时没有歌曲",
-                                body = "当前筛选结果里已经没有这个艺人的可见歌曲。",
-                            )
-                        }
-                    } else {
-                        itemsIndexed(artistTracks, key = { _, item -> item.id }) { index, track ->
-                            val navigationTargets = trackRowNavigationTargets(track)
-                            TrackRow(
-                                track = track,
-                                index = index,
-                                isFavorite = track.id in state.favoriteTrackIds,
-                                onToggleFavorite = { onToggleFavorite(track) },
-                                showFavoriteButton = showFavoriteButton,
-                                showDuration = showDuration,
-                                onArtistClick = navigationTargetClick(navigationTargets.artistTarget),
-                                onAlbumClick = navigationTargetClick(navigationTargets.albumTarget),
-                                onClick = {
-                                    onPlayTracks(artistTracks, index)
+                                title = if (state.isOnline) "这个艺人暂无可显示专辑" else "这个艺人下暂无专辑信息",
+                                body = if (state.isOnline) {
+                                    "Navidrome 没有返回这个艺人的专辑。"
+                                } else {
+                                    "当前艺人的可见歌曲还没有可用的专辑标签。"
                                 },
                             )
+                        }
+                    } else {
+                        items(artistAlbumItems, key = { it.id }) { albumItem ->
+                            val album = albumItem.album
+                            val fallbackArtworkTrack = if (state.isOnline) {
+                                null
+                            } else {
+                                artistTracks.firstOrNull { it.albumLibraryIdOrNull() == album.id }
+                            }
+                            AlbumRow(
+                                album = album,
+                                artworkLocator = albumItem.artworkLocator ?: fallbackArtworkTrack?.artworkLocator,
+                                artworkCacheKey = if (albumItem.artworkLocator == null) {
+                                    fallbackArtworkTrack?.let(::trackArtworkCacheKey)
+                                } else {
+                                    null
+                                },
+                                onClick = {
+                                    actions.onAlbumClick(albumItem)
+                                    selectedAlbumId = album.id
+                                },
+                            )
+                        }
+                    }
+                    if (!state.isOnline) {
+                        item {
+                            SectionTitle(title = "歌曲", subtitle = "当前艺人下的可见歌曲。")
+                        }
+                        if (artistTracks.isEmpty()) {
+                            item {
+                                EmptyStateCard(
+                                    title = "这个艺人暂时没有歌曲",
+                                    body = "当前筛选结果里已经没有这个艺人的可见歌曲。",
+                                )
+                            }
+                        } else {
+                            itemsIndexed(artistTracks, key = { _, item -> item.id }) { index, track ->
+                                val navigationTargets = trackRowNavigationTargets(track)
+                                TrackRow(
+                                    track = track,
+                                    index = index,
+                                    isFavorite = track.id in state.favoriteTrackIds,
+                                    onToggleFavorite = { actions.onToggleFavorite(track) },
+                                    showFavoriteButton = showFavoriteButton,
+                                    showDuration = showDuration,
+                                    onArtistClick = navigationTargetClick(navigationTargets.artistTarget),
+                                    onAlbumClick = navigationTargetClick(navigationTargets.albumTarget),
+                                    onClick = {
+                                        actions.onPlayTracks(artistTracks, index)
+                                    },
+                                )
+                            }
                         }
                     }
                 }
@@ -1258,13 +1615,13 @@ private fun LibraryBrowserTab(
                                 track = track,
                                 index = index,
                                 isFavorite = track.id in state.favoriteTrackIds,
-                                onToggleFavorite = { onToggleFavorite(track) },
+                                onToggleFavorite = { actions.onToggleFavorite(track) },
                                 showFavoriteButton = showFavoriteButton,
                                 showDuration = showDuration,
                                 onArtistClick = navigationTargetClick(navigationTargets.artistTarget),
                                 onAlbumClick = navigationTargetClick(navigationTargets.albumTarget),
                                 onClick = {
-                                    onPlayTracks(selectedFolderTracks, index)
+                                    actions.onPlayTracks(selectedFolderTracks, index)
                                 },
                             )
                         }
@@ -1273,9 +1630,9 @@ private fun LibraryBrowserTab(
 
                 else -> {
                     val currentItemCount = when (rootView) {
-                        LibraryBrowserRootView.Tracks -> state.filteredTracks.size
-                        LibraryBrowserRootView.Albums -> state.filteredAlbums.size
-                        LibraryBrowserRootView.Artists -> state.filteredArtists.size
+                        LibraryBrowserRootView.Tracks -> visibleTracks.size
+                        LibraryBrowserRootView.Albums -> visibleAlbums.size
+                        LibraryBrowserRootView.Artists -> visibleArtists.size
                         LibraryBrowserRootView.Folders -> folderTree.rootFolders.size
                     }
                     val currentLabel = when (rootView) {
@@ -1301,12 +1658,12 @@ private fun LibraryBrowserTab(
                     if (currentItemCount == 0) {
                         item {
                             when {
-                                state.isLoadingContent -> EmptyStateCard(
+                                state.isLoading -> EmptyStateCard(
                                     title = "正在加载$currentLabel",
                                     body = "歌曲数据会在首屏显示后继续异步整理，请稍候。",
                                 )
 
-                                state.tracks.isEmpty() -> EmptyStateCard(
+                                state.allTrackCount == 0 -> EmptyStateCard(
                                     title = strings.emptyCollectionTitle,
                                     body = strings.emptyCollectionBody,
                                 )
@@ -1326,14 +1683,15 @@ private fun LibraryBrowserTab(
                         when (rootView) {
                             LibraryBrowserRootView.Tracks -> {
                                 itemsIndexed(
-                                    state.filteredTracks,
-                                    key = { _, item -> item.id }) { index, track ->
+                                    state.tracks,
+                                    key = { _, item -> item.id }) { index, trackItem ->
+                                    val track = trackItem.track
                                     val navigationTargets = trackRowNavigationTargets(track)
                                     TrackRow(
                                         track = track,
                                         index = index,
-                                        isFavorite = track.id in state.favoriteTrackIds,
-                                        onToggleFavorite = { onToggleFavorite(track) },
+                                        isFavorite = trackItem.isFavorite,
+                                        onToggleFavorite = { actions.onToggleFavorite(track) },
                                         showFavoriteButton = showFavoriteButton,
                                         showDuration = showDuration,
                                         onArtistClick = navigationTargetClick(navigationTargets.artistTarget),
@@ -1344,35 +1702,73 @@ private fun LibraryBrowserTab(
                                             selectedTrackIds = toggleTrackSelection(selectedTrackIds, track.id)
                                         },
                                         onClick = {
-                                            onPlayTracks(state.filteredTracks, index)
+                                            actions.onPlayTracks(visibleTracks, index)
                                         },
                                     )
+                                }
+                                if (state.capabilities.canLoadMoreTracks) {
+                                    item {
+                                        LibraryLoadMoreRow(
+                                            isLoading = state.isLoadingMoreTracks,
+                                            count = state.trackCount,
+                                            onLoadMore = actions.onLoadMoreTracks,
+                                        )
+                                    }
                                 }
                             }
 
                             LibraryBrowserRootView.Albums -> {
-                                items(state.filteredAlbums, key = { it.id }) { album ->
+                                items(state.albums, key = { it.id }) { albumItem ->
+                                    val album = albumItem.album
+                                    val fallbackArtworkTrack = tracksByAlbumId[album.id].orEmpty().firstOrNull()
                                     AlbumRow(
                                         album = album,
-                                        artworkLocator = tracksByAlbumId[album.id].orEmpty()
-                                            .firstOrNull()?.artworkLocator,
-                                        artworkCacheKey = tracksByAlbumId[album.id].orEmpty()
-                                            .firstOrNull()?.let(::trackArtworkCacheKey),
-                                        onClick = { selectedAlbumId = album.id },
+                                        artworkLocator = albumItem.artworkLocator ?: fallbackArtworkTrack?.artworkLocator,
+                                        artworkCacheKey = if (albumItem.artworkLocator == null) {
+                                            fallbackArtworkTrack?.let(::trackArtworkCacheKey)
+                                        } else {
+                                            null
+                                        },
+                                        onClick = {
+                                            actions.onAlbumClick(albumItem)
+                                            selectedAlbumId = album.id
+                                        },
                                     )
+                                }
+                                if (state.capabilities.canLoadMoreAlbums) {
+                                    item {
+                                        LibraryLoadMoreRow(
+                                            isLoading = state.isLoadingMoreAlbums,
+                                            count = state.albumCount,
+                                            onLoadMore = actions.onLoadMoreAlbums,
+                                        )
+                                    }
                                 }
                             }
 
                             LibraryBrowserRootView.Artists -> {
-                                items(state.filteredArtists, key = { it.id }) { artist ->
+                                items(state.artists, key = { it.id }) { artistItem ->
+                                    val artist = artistItem.artist
                                     ArtistRow(
                                         artist = artist,
-                                        albumCount = artistAlbumCountById[artist.id] ?: 0,
+                                        trackCount = artistItem.trackCount ?: if (state.isOnline) null else artist.trackCount,
+                                        albumCount = artistItem.albumCount
+                                            ?: if (state.isOnline) null else artistAlbumCountById[artist.id] ?: 0,
                                         onClick = {
+                                            actions.onArtistClick(artistItem)
                                             selectedArtistId = artist.id
                                             selectedAlbumId = null
                                         },
                                     )
+                                }
+                                if (state.capabilities.canLoadMoreArtists) {
+                                    item {
+                                        LibraryLoadMoreRow(
+                                            isLoading = state.isLoadingMoreArtists,
+                                            count = state.artistCount,
+                                            onLoadMore = actions.onLoadMoreArtists,
+                                        )
+                                    }
                                 }
                             }
 
@@ -1410,6 +1806,49 @@ private fun LibraryBrowserTab(
                 pendingBatchDownloadTracks = emptyList()
             },
         )
+    }
+}
+
+@Composable
+private fun LibraryLoadMoreRow(
+    isLoading: Boolean,
+    count: LibraryBrowserCount? = null,
+    onLoadMore: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        count?.let {
+            Text(
+                text = libraryLoadMoreStatusLabel(it),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        OutlinedButton(
+            onClick = onLoadMore,
+            enabled = !isLoading,
+        ) {
+            Text(if (isLoading) "加载中" else "加载更多")
+        }
+    }
+}
+
+internal fun libraryLoadMoreStatusLabel(count: LibraryBrowserCount): String {
+    val loaded = count.loaded.coerceAtLeast(0)
+    val total = count.total?.coerceAtLeast(0)
+    return if (total != null) {
+        "已显示 $loaded / 共 $total"
+    } else if (count.hasMore) {
+        "已显示 $loaded+"
+    } else {
+        "已显示 $loaded"
     }
 }
 
@@ -1927,9 +2366,12 @@ private fun librarySearchTextFieldValueFor(value: String): TextFieldValue {
 private fun LibraryBrowserToolbarActions(
     availableSourceFilters: List<LibrarySourceFilter>,
     selectedSourceFilter: LibrarySourceFilter,
+    onlineSourceOptions: List<OnlineSourceOption>,
+    selectedOnlineSourceId: String?,
     sourceFilterMenuExpanded: Boolean,
     onSourceFilterMenuExpandedChange: (Boolean) -> Unit,
     onSourceFilterChanged: (LibrarySourceFilter) -> Unit,
+    onOnlineSourceSelected: (String) -> Unit,
     showTrackSortMenu: Boolean,
     selectedTrackSortMode: TrackSortMode,
     trackSortMenuExpanded: Boolean,
@@ -1949,10 +2391,16 @@ private fun LibraryBrowserToolbarActions(
                 expanded = sourceFilterMenuExpanded,
                 availableSourceFilters = availableSourceFilters,
                 selectedSourceFilter = selectedSourceFilter,
+                onlineSourceOptions = onlineSourceOptions,
+                selectedOnlineSourceId = selectedOnlineSourceId,
                 onDismiss = { onSourceFilterMenuExpandedChange(false) },
                 onSourceFilterChanged = { filter ->
                     onSourceFilterMenuExpandedChange(false)
                     onSourceFilterChanged(filter)
+                },
+                onOnlineSourceSelected = { sourceId ->
+                    onSourceFilterMenuExpandedChange(false)
+                    onOnlineSourceSelected(sourceId)
                 },
             )
         }
@@ -2004,8 +2452,11 @@ private fun LibrarySourceFilterDropdownMenu(
     expanded: Boolean,
     availableSourceFilters: List<LibrarySourceFilter>,
     selectedSourceFilter: LibrarySourceFilter,
+    onlineSourceOptions: List<OnlineSourceOption>,
+    selectedOnlineSourceId: String?,
     onDismiss: () -> Unit,
     onSourceFilterChanged: (LibrarySourceFilter) -> Unit,
+    onOnlineSourceSelected: (String) -> Unit,
 ) {
     DropdownMenu(
         expanded = expanded,
@@ -2013,7 +2464,7 @@ private fun LibrarySourceFilterDropdownMenu(
         containerColor = mainShellColors.navContainer,
     ) {
         availableSourceFilters.forEach { filter ->
-            val isSelected = filter == selectedSourceFilter
+            val isSelected = selectedOnlineSourceId == null && filter == selectedSourceFilter
             DropdownMenuItem(
                 text = { Text(librarySourceFilterMenuLabel(filter)) },
                 trailingIcon = if (isSelected) {
@@ -2027,6 +2478,23 @@ private fun LibrarySourceFilterDropdownMenu(
                     null
                 },
                 onClick = { onSourceFilterChanged(filter) },
+            )
+        }
+        onlineSourceOptions.forEach { option ->
+            val isSelected = option.sourceId == selectedOnlineSourceId
+            DropdownMenuItem(
+                text = { Text(option.label) },
+                trailingIcon = if (isSelected) {
+                    {
+                        Icon(
+                            imageVector = Icons.Rounded.Check,
+                            contentDescription = null,
+                        )
+                    }
+                } else {
+                    null
+                },
+                onClick = { onOnlineSourceSelected(option.sourceId) },
             )
         }
     }
@@ -2214,7 +2682,9 @@ internal fun SourcesTab(
             state = editingSource,
             isWorking = state.isWorking,
             isSavingScan = activeScanOperation == ImportScanOperation.UpdateRemote(editingSource.sourceId),
+            sourceIndexMode = editingSourceStatus?.source?.indexMode ?: ImportSourceIndexMode.LOCAL_INDEX,
             currentTrackCount = editingSourceStatus?.indexState?.trackCount,
+            remoteTrackCount = editingSourceStatus?.indexState?.remoteTrackCount,
             scanProgress = editingScanProgress,
             constrainWidth = !isMobileSourcesPlatform(platform),
             testMessage = state.testMessage,
@@ -2298,6 +2768,18 @@ internal fun SourcesTab(
                     Text("知道了")
                 }
             },
+        )
+    }
+    state.pendingLargeNavidromeImport?.let { pending ->
+        val action = pending.action
+        LargeNavidromeLibraryDialog(
+            trackCount = pending.remoteTrackCount,
+            sourceLabel = (action as? PendingLargeNavidromeAction.Rescan)?.sourceLabel,
+            isRescan = action is PendingLargeNavidromeAction.Rescan,
+            isWorking = state.isWorking,
+            onDismiss = { onImportIntent(ImportIntent.DismissLargeNavidromeChoice) },
+            onUseOnline = { onImportIntent(ImportIntent.ConfirmLargeNavidromeOnlineMode) },
+            onImportAll = { onImportIntent(ImportIntent.ConfirmLargeNavidromeFullImport) },
         )
     }
     state.testMessage?.let { message ->
@@ -2879,6 +3361,61 @@ private fun SubsonicAuthModeSelector(
 }
 
 @Composable
+private fun LargeNavidromeLibraryDialog(
+    trackCount: Int,
+    sourceLabel: String?,
+    isRescan: Boolean,
+    isWorking: Boolean,
+    onDismiss: () -> Unit,
+    onUseOnline: () -> Unit,
+    onImportAll: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = {
+            if (!isWorking) onDismiss()
+        },
+        shape = RoundedCornerShape(28.dp),
+        containerColor = mainShellColors.cardContainer,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        title = { Text("Navidrome 曲库较大") },
+        text = {
+            Text(
+                if (isRescan) {
+                    "检测到“${sourceLabel.orEmpty().ifBlank { "Navidrome 来源" }}”远端共有 $trackCount 首歌曲。建议切换为在线模式，旧本地索引会隐藏并保留；也可以继续全量重扫，把远端歌曲重新写入本地索引。"
+                } else {
+                    "检测到远端共有 $trackCount 首歌曲。建议使用在线模式，LynMusic 只保存来源和凭据，不会把全部歌曲写入本地索引；也可以选择全部导入，继续执行完整扫描。"
+                },
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = onUseOnline,
+                enabled = !isWorking,
+            ) {
+                Text(if (isWorking) "处理中" else "在线模式")
+            }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(
+                    onClick = onDismiss,
+                    enabled = !isWorking,
+                ) {
+                    Text("取消")
+                }
+                TextButton(
+                    onClick = onImportAll,
+                    enabled = !isWorking,
+                ) {
+                    Text(if (isRescan) "继续重扫" else "全部导入")
+                }
+            }
+        },
+    )
+}
+
+@Composable
 private fun LocalFolderPickerModeDialog(
     isWorking: Boolean,
     onDismiss: () -> Unit,
@@ -3035,7 +3572,9 @@ private fun RemoteSourceEditorDialog(
     state: top.iwesley.lyn.music.feature.importing.RemoteSourceEditorState,
     isWorking: Boolean,
     isSavingScan: Boolean,
+    sourceIndexMode: ImportSourceIndexMode,
     currentTrackCount: Int?,
+    remoteTrackCount: Int?,
     scanProgress: ImportScanProgress?,
     constrainWidth: Boolean,
     testMessage: String?,
@@ -3094,7 +3633,11 @@ private fun RemoteSourceEditorDialog(
                                 fontWeight = FontWeight.Bold,
                             )
                             Text(
-                                text = remoteSourceEditorTrackCountLabel(currentTrackCount),
+                                text = remoteSourceEditorTrackCountLabel(
+                                    indexMode = sourceIndexMode,
+                                    currentTrackCount = currentTrackCount,
+                                    remoteTrackCount = remoteTrackCount,
+                                ),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.bodySmall,
                             )
@@ -3325,8 +3868,16 @@ private fun RemoteSourceEditorScanProgress(progress: ImportScanProgress) {
     }
 }
 
-internal fun remoteSourceEditorTrackCountLabel(currentTrackCount: Int?): String {
-    return currentTrackCount?.let { "当前已导入 ${it.coerceAtLeast(0)} 首歌曲" } ?: "当前还没有导入歌曲"
+internal fun remoteSourceEditorTrackCountLabel(
+    indexMode: ImportSourceIndexMode,
+    currentTrackCount: Int?,
+    remoteTrackCount: Int?,
+): String {
+    return if (indexMode == ImportSourceIndexMode.ONLINE) {
+        remoteTrackCount?.let { "当前远端共有 ${it.coerceAtLeast(0)} 首歌曲" } ?: "当前远端歌曲数未知"
+    } else {
+        currentTrackCount?.let { "当前已导入 ${it.coerceAtLeast(0)} 首歌曲" } ?: "当前还没有导入歌曲"
+    }
 }
 
 private fun isMobileSourcesPlatform(platform: PlatformDescriptor): Boolean {

@@ -5,12 +5,22 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import top.iwesley.lyn.music.core.model.ImportSource
+import top.iwesley.lyn.music.core.model.ImportSourceIndexMode
+import top.iwesley.lyn.music.core.model.ImportSourceType
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.OfflineDownload
 import top.iwesley.lyn.music.core.model.OfflineDownloadStatus
+import top.iwesley.lyn.music.core.model.PlatformCapabilities
+import top.iwesley.lyn.music.core.model.SourceWithStatus
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.buildNavidromeSongLocator
 import top.iwesley.lyn.music.core.model.buildWebDavLocator
+import top.iwesley.lyn.music.feature.importing.ImportState
+import top.iwesley.lyn.music.feature.online.OnlineFavoritesState
+import top.iwesley.lyn.music.feature.online.OnlineFavoritesIntent
+import top.iwesley.lyn.music.feature.online.OnlineLibraryIntent
+import top.iwesley.lyn.music.feature.online.OnlinePlaylistsIntent
 import top.iwesley.lyn.music.feature.offline.batchDownloadInsufficientSpaceMessage
 import top.iwesley.lyn.music.feature.offline.batchDownloadSizeEstimateLabel
 import top.iwesley.lyn.music.feature.offline.estimateBatchDownloadSize
@@ -67,6 +77,183 @@ class AppCommonUiLogicTest {
             "下载失败",
             compactPlayerOfflineDownloadStatusLabel(completedDownload(status = OfflineDownloadStatus.Failed)),
         )
+    }
+
+    @Test
+    fun `secondary toast shows online favorite error before playlist success`() {
+        val message = secondaryToastMessage(
+            onlineFavoritesErrorMessage = "在线收藏失败",
+            onlinePlaylistsErrorMessage = null,
+            playlistsMessage = "歌单已创建",
+            onlineFavoritesMessage = "已收藏",
+            onlinePlaylistsMessage = null,
+        )
+
+        assertEquals("在线收藏失败", message)
+    }
+
+    @Test
+    fun `secondary toast includes online favorite success message`() {
+        val message = secondaryToastMessage(
+            onlineFavoritesErrorMessage = null,
+            onlinePlaylistsErrorMessage = null,
+            playlistsMessage = null,
+            onlineFavoritesMessage = "已收藏",
+            onlinePlaylistsMessage = "在线歌单已更新",
+        )
+
+        assertEquals("已收藏", message)
+    }
+
+    @Test
+    fun `secondary toast returns null without secondary messages`() {
+        assertNull(
+            secondaryToastMessage(
+                onlineFavoritesErrorMessage = null,
+                onlinePlaylistsErrorMessage = null,
+                playlistsMessage = null,
+                onlineFavoritesMessage = null,
+                onlinePlaylistsMessage = null,
+            ),
+        )
+    }
+
+    @Test
+    fun `passive online library intents do not require store startup`() {
+        val clearSource = OnlineLibraryIntent.SelectSource(sourceId = null)
+        val temporaryClearSource = OnlineLibraryIntent.SelectSource(sourceId = null, persist = false)
+
+        assertTrue(clearSource.isPassiveLibrarySourceClear())
+        assertFalse(clearSource.shouldStartOnlineLibraryStore())
+        assertFalse(
+            clearSource.shouldClearRememberedOnlineLibrarySource(
+                currentOnlineSourceId = null,
+                rememberedOnlineSourceId = null,
+            ),
+        )
+        assertTrue(
+            clearSource.shouldClearRememberedOnlineLibrarySource(
+                currentOnlineSourceId = null,
+                rememberedOnlineSourceId = "nav-online",
+            ),
+        )
+        assertFalse(
+            clearSource.shouldClearRememberedOnlineLibrarySource(
+                currentOnlineSourceId = "nav-online",
+                rememberedOnlineSourceId = "nav-online",
+            ),
+        )
+        assertFalse(temporaryClearSource.isPassiveLibrarySourceClear())
+        assertFalse(temporaryClearSource.shouldStartOnlineLibraryStore())
+        assertFalse(OnlineLibraryIntent.ClearError.shouldStartOnlineLibraryStore())
+        assertTrue(OnlineLibraryIntent.SelectSource("nav-online").shouldStartOnlineLibraryStore())
+        assertTrue(OnlineLibraryIntent.Refresh.shouldStartOnlineLibraryStore())
+    }
+
+    @Test
+    fun `passive online favorites intents do not require store startup`() {
+        val clearSource = OnlineFavoritesIntent.SelectSource(sourceId = null)
+        val temporaryClearSource = OnlineFavoritesIntent.SelectSource(sourceId = null, persist = false)
+
+        assertTrue(clearSource.isPassiveFavoritesSourceClear())
+        assertFalse(clearSource.shouldStartOnlineFavoritesStore())
+        assertFalse(
+            clearSource.shouldClearRememberedOnlineFavoritesSource(
+                currentOnlineSourceId = null,
+                rememberedOnlineSourceId = null,
+            ),
+        )
+        assertTrue(
+            clearSource.shouldClearRememberedOnlineFavoritesSource(
+                currentOnlineSourceId = null,
+                rememberedOnlineSourceId = "nav-online",
+            ),
+        )
+        assertFalse(temporaryClearSource.isPassiveFavoritesSourceClear())
+        assertFalse(temporaryClearSource.shouldStartOnlineFavoritesStore())
+        assertFalse(OnlineFavoritesIntent.ClearMessage.shouldStartOnlineFavoritesStore())
+        assertTrue(OnlineFavoritesIntent.SelectSource("nav-online").shouldStartOnlineFavoritesStore())
+        assertTrue(OnlineFavoritesIntent.Refresh.shouldStartOnlineFavoritesStore())
+    }
+
+    @Test
+    fun `passive online playlists intents do not require store startup`() {
+        val clearSource = OnlinePlaylistsIntent.SelectSource(sourceId = null)
+        val temporaryClearSource = OnlinePlaylistsIntent.SelectSource(sourceId = null, persist = false)
+
+        assertTrue(clearSource.isPassivePlaylistsSourceClear())
+        assertFalse(clearSource.shouldStartOnlinePlaylistsStore())
+        assertFalse(
+            clearSource.shouldClearRememberedOnlinePlaylistsSource(
+                currentOnlineSourceId = null,
+                rememberedOnlineSourceId = null,
+            ),
+        )
+        assertTrue(
+            clearSource.shouldClearRememberedOnlinePlaylistsSource(
+                currentOnlineSourceId = null,
+                rememberedOnlineSourceId = "nav-online",
+            ),
+        )
+        assertFalse(temporaryClearSource.isPassivePlaylistsSourceClear())
+        assertFalse(temporaryClearSource.shouldStartOnlinePlaylistsStore())
+        assertFalse(OnlinePlaylistsIntent.ClearMessage.shouldStartOnlinePlaylistsStore())
+        assertFalse(OnlinePlaylistsIntent.ClearPlaylistImportReport.shouldStartOnlinePlaylistsStore())
+        assertFalse(OnlinePlaylistsIntent.SelectPlaylist(null).shouldStartOnlinePlaylistsStore())
+        assertTrue(OnlinePlaylistsIntent.SelectSource("nav-online").shouldStartOnlinePlaylistsStore())
+        assertTrue(OnlinePlaylistsIntent.SelectPlaylist("playlist-1").shouldStartOnlinePlaylistsStore())
+        assertTrue(OnlinePlaylistsIntent.Refresh.shouldStartOnlinePlaylistsStore())
+    }
+
+    @Test
+    fun `library tab online mode does not show favorites message fallback`() {
+        assertNull(
+            libraryTabBrowserMessage(
+                isOnlineMode = true,
+                onlineErrorMessage = null,
+                favoritesMessage = "喜欢刷新失败",
+            ),
+        )
+        assertEquals(
+            "在线曲库加载失败",
+            libraryTabBrowserMessage(
+                isOnlineMode = true,
+                onlineErrorMessage = "在线曲库加载失败",
+                favoritesMessage = "喜欢刷新失败",
+            ),
+        )
+    }
+
+    @Test
+    fun `library tab local mode keeps favorites message fallback`() {
+        assertEquals(
+            "本地收藏已更新",
+            libraryTabBrowserMessage(
+                isOnlineMode = false,
+                onlineErrorMessage = "在线曲库加载失败",
+                favoritesMessage = "本地收藏已更新",
+            ),
+        )
+    }
+
+    @Test
+    fun `library tab dismiss target follows current mode`() {
+        assertEquals(
+            LibraryTabMessageDismissTarget.OnlineLibrary,
+            libraryTabMessageDismissTarget(isOnlineMode = true),
+        )
+        assertEquals(
+            LibraryTabMessageDismissTarget.Favorites,
+            libraryTabMessageDismissTarget(isOnlineMode = false),
+        )
+    }
+
+    @Test
+    fun `artist summary label hides unknown online counts instead of showing zero`() {
+        assertEquals("在线艺人", artistSummaryLabel(trackCount = null, albumCount = null))
+        assertEquals("12 首歌曲", artistSummaryLabel(trackCount = 12, albumCount = null))
+        assertEquals("3 张专辑", artistSummaryLabel(trackCount = null, albumCount = 3))
+        assertEquals("12 首歌曲 · 3 张专辑", artistSummaryLabel(trackCount = 12, albumCount = 3))
     }
 
     @Test
@@ -180,6 +367,186 @@ class AppCommonUiLogicTest {
     fun `detects navidrome tracks for batch quality selection`() {
         assertTrue(hasNavidromeTracks(listOf(sampleNavidromeTrack("nav"))))
         assertFalse(hasNavidromeTracks(listOf(sampleTrack("local"))))
+    }
+
+    @Test
+    fun `player favorite binding uses online remote favorite hint`() {
+        val track = sampleNavidromeTrack("nav").copy(remoteFavoriteHint = true)
+
+        val binding = playerFavoriteBinding(
+            track = track,
+            localFavoriteTrackIds = emptySet(),
+            onlineFavoritesState = OnlineFavoritesState(),
+            importState = importStateWithOnlineSource(),
+        )
+
+        assertTrue(binding.isFavorite)
+        assertEquals("source-1", binding.onlineSourceId)
+        assertTrue(binding.isFavoriteKnown)
+        assertTrue(binding.canToggleFavorite)
+    }
+
+    @Test
+    fun `player favorite binding override wins over online hint`() {
+        val track = sampleNavidromeTrack("nav").copy(remoteFavoriteHint = true)
+
+        val binding = playerFavoriteBinding(
+            track = track,
+            localFavoriteTrackIds = emptySet(),
+            onlineFavoritesState = OnlineFavoritesState(
+                favoriteOverridesBySourceId = mapOf(
+                    "source-1" to mapOf("nav" to false),
+                ),
+            ),
+            importState = importStateWithOnlineSource(),
+        )
+
+        assertFalse(binding.isFavorite)
+        assertEquals("source-1", binding.onlineSourceId)
+        assertTrue(binding.isFavoriteKnown)
+        assertTrue(binding.canToggleFavorite)
+    }
+
+    @Test
+    fun `player favorite binding allows toggling online loading gap as unknown`() {
+        val track = sampleNavidromeTrack("nav")
+
+        val binding = playerFavoriteBinding(
+            track = track,
+            localFavoriteTrackIds = emptySet(),
+            onlineFavoritesState = OnlineFavoritesState(
+                sourceId = "source-1",
+                isLoading = true,
+                tracks = emptyList(),
+            ),
+            importState = importStateWithOnlineSource(),
+        )
+
+        assertFalse(binding.isFavorite)
+        assertFalse(binding.isFavoriteKnown)
+        assertTrue(binding.canToggleFavorite)
+        assertEquals("source-1", binding.onlineSourceId)
+    }
+
+    @Test
+    fun `player favorite binding allows toggling unselected online favorites source as unknown`() {
+        val track = sampleNavidromeTrack("nav")
+
+        val binding = playerFavoriteBinding(
+            track = track,
+            localFavoriteTrackIds = emptySet(),
+            onlineFavoritesState = OnlineFavoritesState(sourceId = null),
+            importState = importStateWithOnlineSource(),
+        )
+
+        assertFalse(binding.isFavorite)
+        assertFalse(binding.isFavoriteKnown)
+        assertTrue(binding.canToggleFavorite)
+        assertEquals("source-1", binding.onlineSourceId)
+    }
+
+    @Test
+    fun `player favorite binding allows toggling mismatched online favorites source as unknown`() {
+        val track = sampleNavidromeTrack("nav")
+
+        val binding = playerFavoriteBinding(
+            track = track,
+            localFavoriteTrackIds = emptySet(),
+            onlineFavoritesState = OnlineFavoritesState(sourceId = "other-source"),
+            importState = importStateWithOnlineSource(),
+        )
+
+        assertFalse(binding.isFavorite)
+        assertFalse(binding.isFavoriteKnown)
+        assertTrue(binding.canToggleFavorite)
+        assertEquals("source-1", binding.onlineSourceId)
+    }
+
+    @Test
+    fun `player favorite binding allows toggling paginated online favorites as unknown`() {
+        val track = sampleNavidromeTrack("nav")
+
+        val binding = playerFavoriteBinding(
+            track = track,
+            localFavoriteTrackIds = emptySet(),
+            onlineFavoritesState = OnlineFavoritesState(
+                sourceId = "source-1",
+                tracks = listOf(sampleNavidromeTrack("loaded-favorite")),
+                canLoadMore = true,
+            ),
+            importState = importStateWithOnlineSource(),
+        )
+
+        assertFalse(binding.isFavorite)
+        assertFalse(binding.isFavoriteKnown)
+        assertTrue(binding.canToggleFavorite)
+        assertEquals("source-1", binding.onlineSourceId)
+    }
+
+    @Test
+    fun `player favorite binding allows toggling loading more online favorites as unknown`() {
+        val track = sampleNavidromeTrack("nav")
+
+        val binding = playerFavoriteBinding(
+            track = track,
+            localFavoriteTrackIds = emptySet(),
+            onlineFavoritesState = OnlineFavoritesState(
+                sourceId = "source-1",
+                tracks = listOf(sampleNavidromeTrack("loaded-favorite")),
+                isLoadingMore = true,
+                canLoadMore = true,
+            ),
+            importState = importStateWithOnlineSource(),
+        )
+
+        assertFalse(binding.isFavorite)
+        assertFalse(binding.isFavoriteKnown)
+        assertTrue(binding.canToggleFavorite)
+        assertEquals("source-1", binding.onlineSourceId)
+    }
+
+    @Test
+    fun `player favorite binding treats fully loaded online absence as known`() {
+        val track = sampleNavidromeTrack("nav")
+
+        val binding = playerFavoriteBinding(
+            track = track,
+            localFavoriteTrackIds = emptySet(),
+            onlineFavoritesState = OnlineFavoritesState(
+                sourceId = "source-1",
+                tracks = listOf(sampleNavidromeTrack("loaded-favorite")),
+                isLoading = false,
+                isLoadingMore = false,
+                canLoadMore = false,
+            ),
+            importState = importStateWithOnlineSource(),
+        )
+
+        assertFalse(binding.isFavorite)
+        assertTrue(binding.isFavoriteKnown)
+        assertTrue(binding.canToggleFavorite)
+        assertEquals("source-1", binding.onlineSourceId)
+    }
+
+    @Test
+    fun `player favorite binding keeps local favorites independent of online overrides`() {
+        val track = sampleTrack("local")
+
+        val binding = playerFavoriteBinding(
+            track = track,
+            localFavoriteTrackIds = setOf("local"),
+            onlineFavoritesState = OnlineFavoritesState(
+                favoriteOverridesBySourceId = mapOf(
+                    "source-1" to mapOf("local" to false),
+                ),
+            ),
+            importState = importStateWithOnlineSource(),
+        )
+
+        assertTrue(binding.isFavorite)
+        assertNull(binding.onlineSourceId)
+        assertTrue(binding.isFavoriteKnown)
+        assertTrue(binding.canToggleFavorite)
     }
 
     @Test
@@ -371,6 +738,34 @@ class AppCommonUiLogicTest {
             mediaLocator = mediaLocator,
             relativePath = "$id.mp3",
             sizeBytes = sizeBytes,
+        )
+    }
+
+    private fun importStateWithOnlineSource(): ImportState {
+        return ImportState(
+            capabilities = testPlatformCapabilities(),
+            sources = listOf(
+                SourceWithStatus(
+                    source = ImportSource(
+                        id = "source-1",
+                        type = ImportSourceType.NAVIDROME,
+                        label = "Navidrome",
+                        rootReference = "https://navidrome.example",
+                        enabled = true,
+                        indexMode = ImportSourceIndexMode.ONLINE,
+                    ),
+                ),
+            ),
+        )
+    }
+
+    private fun testPlatformCapabilities(): PlatformCapabilities {
+        return PlatformCapabilities(
+            supportsLocalFolderImport = true,
+            supportsSambaImport = true,
+            supportsWebDavImport = true,
+            supportsNavidromeImport = true,
+            supportsSystemMediaControls = true,
         )
     }
 }

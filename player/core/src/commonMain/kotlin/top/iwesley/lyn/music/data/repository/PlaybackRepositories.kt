@@ -2,6 +2,8 @@ package top.iwesley.lyn.music.data.repository
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -11,6 +13,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.longOrNull
 import kotlin.concurrent.Volatile
 import kotlin.random.Random
 import kotlin.time.Clock
@@ -26,6 +34,7 @@ import top.iwesley.lyn.music.cast.UnsupportedCastNotificationPermissionRequester
 import top.iwesley.lyn.music.cast.UnsupportedCastSessionForegroundPlatformService
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
 import top.iwesley.lyn.music.core.model.EqualizerPlatformService
+import top.iwesley.lyn.music.core.model.ImportSourceIndexMode
 import top.iwesley.lyn.music.core.model.LyricsShareFontLibraryPlatformService
 import top.iwesley.lyn.music.core.model.LyricsSharePlatformService
 import top.iwesley.lyn.music.core.model.LyricsShareFontPreferencesStore
@@ -51,6 +60,8 @@ import top.iwesley.lyn.music.core.model.UnsupportedSystemPlaybackControlsPlatfor
 import top.iwesley.lyn.music.core.model.debug
 import top.iwesley.lyn.music.core.model.error
 import top.iwesley.lyn.music.core.model.normalizePlaybackVolume
+import top.iwesley.lyn.music.core.model.parseEmbySongLocator
+import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleSongLocator
 import top.iwesley.lyn.music.core.model.warn
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
 import top.iwesley.lyn.music.data.db.PlaybackQueueSnapshotEntity
@@ -94,12 +105,16 @@ class DefaultPlaybackRepository(
         ),
     )
     private val playbackCommandMutex = Mutex()
+    private val closeMutex = Mutex()
+    private val lifecycleJobs = mutableListOf<Job>()
     @Volatile
     private var latestLoadRequestId = 0L
     @Volatile
     private var hasHydratedPersistedQueue = false
     @Volatile
     private var currentQueueIsTransient = false
+    @Volatile
+    private var hasClosed = false
     private var observedCompletionCount = 0L
     private var playbackStatsSession: PlaybackStatsSession? = null
     private var loggedArtworkTrackId: String? = null
@@ -129,7 +144,7 @@ class DefaultPlaybackRepository(
                 hydratePersistedQueueIfNeeded()
             }
         }
-        scope.launch {
+        launchLifecycleJob {
             combine(
                 database.trackDao().observeAll(),
                 database.lyricsCacheDao().observeArtworkLocators(),
@@ -178,12 +193,9 @@ class DefaultPlaybackRepository(
                         metadataArtworkLocator = if (currentArtworkChanged) null else snapshot.metadataArtworkLocator,
                     )
                 }
-                if (snapshotChanged) {
-                    persistSnapshotIfPersistent()
-                }
             }
         }
-        scope.launch {
+        launchLifecycleJob {
             gateway.state.collect { gatewayState ->
                 val beforeSnapshot = mutableSnapshot.value
                 val gatewayStateLogKey = listOf(
@@ -239,11 +251,11 @@ class DefaultPlaybackRepository(
                 }
                 completionLoadRequest?.let {
                     loadGatewaySafely(it)
-                    persistSnapshotIfPersistent()
+                    persistSnapshotCursorIfPersistent()
                 }
             }
         }
-        scope.launch {
+        launchLifecycleJob {
             snapshot.collect { snapshot ->
                 logDisplayArtwork(snapshot)
                 systemPlaybackControlsPlatformService.updateSnapshot(snapshot)
@@ -292,7 +304,7 @@ class DefaultPlaybackRepository(
         }
         loadRequest?.let {
             loadGatewaySafely(it)
-            persistSnapshot()
+            persistSnapshotContent()
         }
     }
 
@@ -347,7 +359,7 @@ class DefaultPlaybackRepository(
             mutableSnapshot.value = nextSnapshot
         }
         if (preparedSnapshot != null) {
-            persistSnapshot()
+            persistSnapshotContent()
         }
         return preparedSnapshot
     }
@@ -363,7 +375,7 @@ class DefaultPlaybackRepository(
         }
         loadRequest?.let {
             loadGatewaySafely(it)
-            persistSnapshotIfPersistent()
+            persistSnapshotCursorIfPersistent()
         }
     }
 
@@ -392,7 +404,7 @@ class DefaultPlaybackRepository(
         }
         loadRequest?.let {
             loadGatewaySafely(it)
-            persistSnapshotIfPersistent()
+            persistSnapshotCursorIfPersistent()
         }
     }
 
@@ -404,7 +416,7 @@ class DefaultPlaybackRepository(
             if (snapshot.mode != PlaybackMode.REPEAT_ONE && snapshot.canSeek && snapshot.positionMs > 5_000) {
                 gateway.seekTo(0L)
                 mutableSnapshot.update { it.copy(positionMs = 0L) }
-                persistSnapshotIfPersistent()
+                persistSnapshotCursorIfPersistent()
                 return@withLock
             }
             val previousIndex = when {
@@ -417,7 +429,7 @@ class DefaultPlaybackRepository(
         }
         loadRequest?.let {
             loadGatewaySafely(it)
-            persistSnapshotIfPersistent()
+            persistSnapshotCursorIfPersistent()
         }
     }
 
@@ -426,7 +438,7 @@ class DefaultPlaybackRepository(
             if (!mutableSnapshot.value.canSeek) return@withLock
             gateway.seekTo(positionMs)
             mutableSnapshot.update { it.copy(positionMs = positionMs.coerceAtLeast(0L)) }
-            persistSnapshotIfPersistent()
+            persistSnapshotCursorIfPersistent()
         }
     }
 
@@ -448,7 +460,7 @@ class DefaultPlaybackRepository(
                 PlaybackMode.REPEAT_ONE -> snapshot.toOrderSnapshot()
             }
             mutableSnapshot.value = nextSnapshot
-            persistSnapshotIfPersistent()
+            persistSnapshotContentIfPersistent()
         }
     }
 
@@ -466,9 +478,18 @@ class DefaultPlaybackRepository(
     }
 
     override suspend fun close() {
-        updatePlaybackStats(mutableSnapshot.value)
-        systemPlaybackControlsPlatformService.close()
-        gateway.release()
+        closeMutex.withLock {
+            if (hasClosed) return@withLock
+            updatePlaybackStats(mutableSnapshot.value)
+            lifecycleJobs.forEach { job -> job.cancelAndJoin() }
+            systemPlaybackControlsPlatformService.close()
+            gateway.release()
+            hasClosed = true
+        }
+    }
+
+    private fun launchLifecycleJob(block: suspend CoroutineScope.() -> Unit) {
+        lifecycleJobs += scope.launch(block = block)
     }
 
     private suspend fun playCurrentTrack() {
@@ -584,13 +605,23 @@ class DefaultPlaybackRepository(
         val tracksById = database.trackDao().getByIds(allIds)
             .associateBy { it.id }
             .mapValues { (trackId, entity) -> entity.toDomain(artworkOverrides[trackId]) }
-        val tracks = queueIds.mapNotNull { trackId -> tracksById[trackId] }
-        val orderedTracks = orderedQueueIds.mapNotNull { trackId -> tracksById[trackId] }.ifEmpty { tracks }
+        val queueFallbackTracksById = decodePlaybackQueueTrackSnapshots(persisted.queueTracksJson)
+        val orderedFallbackTracksById = decodePlaybackQueueTrackSnapshots(persisted.orderedQueueTracksJson)
+        val restoredTracks = queueIds.mapIndexedNotNull { index, trackId ->
+            (tracksById[trackId] ?: queueFallbackTracksById[trackId] ?: orderedFallbackTracksById[trackId])
+                ?.let { track -> RestoredPlaybackQueueTrack(originalIndex = index, track = track) }
+        }
+        val tracks = restoredTracks.map { it.track }
+        val orderedTracks = orderedQueueIds.mapNotNull { trackId ->
+            tracksById[trackId] ?: orderedFallbackTracksById[trackId] ?: queueFallbackTracksById[trackId]
+        }.ifEmpty { tracks }
         if (tracks.isEmpty()) {
             mutableSnapshot.update { it.copy(isHydratingPlayback = false) }
             return
         }
-        val index = persisted.currentIndex.coerceIn(0, tracks.lastIndex)
+        val index = restoredTracks.restoredIndexForOriginalIndex(
+            persisted.currentIndex.coerceIn(0, queueIds.lastIndex),
+        )
         val mode = persisted.mode.toPlaybackMode()
         val playWhenReady = playbackPreferencesStore.autoPlayOnStartup.value
         var loadRequest: PlaybackLoadRequest? = null
@@ -798,12 +829,16 @@ class DefaultPlaybackRepository(
         )
     }
 
-    private suspend fun persistSnapshot() {
+    private suspend fun persistSnapshotContent() {
         val snapshot = mutableSnapshot.value
+        val orderedQueue = snapshot.orderedQueue.ifEmpty { snapshot.queue }
+        val fallbackTracks = tracksNeedingPlaybackQueueJsonFallback(snapshot.queue, orderedQueue)
         database.playbackQueueSnapshotDao().upsert(
             PlaybackQueueSnapshotEntity(
                 queueTrackIds = snapshot.queue.joinToString(",") { it.id },
-                orderedQueueTrackIds = snapshot.orderedQueue.ifEmpty { snapshot.queue }.joinToString(",") { it.id },
+                orderedQueueTrackIds = orderedQueue.joinToString(",") { it.id },
+                queueTracksJson = encodePlaybackQueueTrackSnapshots(fallbackTracks),
+                orderedQueueTracksJson = "",
                 currentIndex = snapshot.currentIndex,
                 positionMs = snapshot.positionMs,
                 mode = snapshot.mode.name,
@@ -812,9 +847,80 @@ class DefaultPlaybackRepository(
         )
     }
 
-    private suspend fun persistSnapshotIfPersistent() {
+    private suspend fun tracksNeedingPlaybackQueueJsonFallback(
+        queue: List<Track>,
+        orderedQueue: List<Track>,
+    ): List<Track> {
+        val fallbackSourceIds = remotePlaybackSourceIds(queue, orderedQueue)
+            .filter { sourceId ->
+                database.importSourceDao()
+                    .getById(sourceId)
+                    ?.indexMode != ImportSourceIndexMode.LOCAL_INDEX.name
+            }
+            .toSet()
+        if (fallbackSourceIds.isEmpty()) return emptyList()
+        val fallbackQueue = queue.filter { track -> track.remotePlaybackSourceIdOrNull() in fallbackSourceIds }
+        val fallbackOrderedQueue = orderedQueue.filter { track -> track.remotePlaybackSourceIdOrNull() in fallbackSourceIds }
+        val persistedTrackIds = persistedTrackIds(fallbackQueue, fallbackOrderedQueue)
+        return fallbackTracksForSnapshot(
+            queue = fallbackQueue,
+            orderedQueue = fallbackOrderedQueue,
+            persistedTrackIds = persistedTrackIds,
+        )
+    }
+
+    private suspend fun persistSnapshotContentIfPersistent() {
         if (!currentQueueIsTransient) {
-            persistSnapshot()
+            persistSnapshotContent()
+        }
+    }
+
+    private suspend fun persistSnapshotCursorIfPersistent() {
+        if (!currentQueueIsTransient) {
+            persistSnapshotCursor()
+        }
+    }
+
+    private suspend fun persistSnapshotCursor() {
+        val snapshot = mutableSnapshot.value
+        database.playbackQueueSnapshotDao().updateCursor(
+            currentIndex = snapshot.currentIndex,
+            positionMs = snapshot.positionMs,
+            mode = snapshot.mode.name,
+            updatedAt = now(),
+        )
+    }
+
+    private suspend fun persistedTrackIds(
+        queue: List<Track>,
+        orderedQueue: List<Track>,
+    ): Set<String> {
+        val trackIds = (queue.asSequence() + orderedQueue.asSequence())
+            .map { it.id }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .toList()
+        if (trackIds.isEmpty()) return emptySet()
+        return trackIds
+            .chunked(PLAYBACK_QUEUE_TRACK_LOOKUP_CHUNK_SIZE)
+            .flatMap { chunk -> database.trackDao().getByIds(chunk).map { it.id } }
+            .toSet()
+    }
+
+    private fun fallbackTracksForSnapshot(
+        queue: List<Track>,
+        orderedQueue: List<Track>,
+        persistedTrackIds: Set<String>,
+    ): List<Track> {
+        val seenIds = mutableSetOf<String>()
+        return buildList {
+            fun addIfMissing(track: Track) {
+                if (track.id !in persistedTrackIds && seenIds.add(track.id)) {
+                    add(track)
+                }
+            }
+            queue.forEach(::addIfMissing)
+            orderedQueue.forEach(::addIfMissing)
         }
     }
 
@@ -940,6 +1046,20 @@ data class PlayerRuntimeServices(
 
 private fun now(): Long = Clock.System.now().toEpochMilliseconds()
 
+internal fun remotePlaybackSourceIds(
+    queue: List<Track>,
+    orderedQueue: List<Track>,
+): Set<String> {
+    return (queue.asSequence() + orderedQueue.asSequence())
+        .mapNotNull { track -> track.remotePlaybackSourceIdOrNull() }
+        .toSet()
+}
+
+private fun Track.remotePlaybackSourceIdOrNull(): String? {
+    return parseSubsonicCompatibleSongLocator(mediaLocator)?.sourceId
+        ?: parseEmbySongLocator(mediaLocator)?.first
+}
+
 internal fun playbackStatsSubmissionThresholdMs(durationMs: Long): Long {
     if (durationMs <= 0L) return PLAYBACK_STATS_FALLBACK_THRESHOLD_MS
     return minOf((durationMs / 2L).coerceAtLeast(1L), PLAYBACK_STATS_FALLBACK_THRESHOLD_MS)
@@ -967,6 +1087,174 @@ private fun resolvePlaybackDurationMs(
 
 private const val PLAYBACK_LOG_TAG = "Playback"
 private const val PLAYBACK_STATS_FALLBACK_THRESHOLD_MS = 4 * 60 * 1000L
+private const val PLAYBACK_QUEUE_TRACK_LOOKUP_CHUNK_SIZE = 500
+
+private data class PlaybackQueueTrackSnapshot(
+    val id: String,
+    val sourceId: String,
+    val title: String,
+    val artistName: String?,
+    val albumTitle: String?,
+    val durationMs: Long,
+    val mediaLocator: String,
+    val relativePath: String?,
+    val artworkLocator: String?,
+    val albumId: String?,
+    val artistId: String?,
+    val remoteFavoriteHint: Boolean?,
+)
+
+private data class RestoredPlaybackQueueTrack(
+    val originalIndex: Int,
+    val track: Track,
+)
+
+private fun List<RestoredPlaybackQueueTrack>.restoredIndexForOriginalIndex(originalIndex: Int): Int {
+    val exactIndex = indexOfFirst { it.originalIndex == originalIndex }
+    if (exactIndex >= 0) return exactIndex
+    val nextIndex = indexOfFirst { it.originalIndex > originalIndex }
+    if (nextIndex >= 0) return nextIndex
+    return indexOfLast { it.originalIndex < originalIndex }.coerceAtLeast(0)
+}
+
+private val playbackQueueSnapshotJson = Json
+
+private fun encodePlaybackQueueTrackSnapshots(tracks: List<Track>): String {
+    if (tracks.isEmpty()) return ""
+    return buildString {
+        append('[')
+        tracks.forEachIndexed { index, track ->
+            if (index > 0) append(',')
+            track.appendPlaybackQueueTrackSnapshotJsonTo(this)
+        }
+        append(']')
+    }
+}
+
+private fun decodePlaybackQueueTrackSnapshots(raw: String): Map<String, Track> {
+    if (raw.isBlank()) return emptyMap()
+    val array = runCatching { playbackQueueSnapshotJson.parseToJsonElement(raw) }
+        .getOrNull() as? JsonArray ?: return emptyMap()
+    return array
+        .mapNotNull { element ->
+            (element as? JsonObject)
+                ?.toPlaybackQueueTrackSnapshot()
+                ?.toTrack()
+        }
+        .associateBy { it.id }
+}
+
+private fun Track.appendPlaybackQueueTrackSnapshotJsonTo(builder: StringBuilder) {
+    builder.append('{')
+    var needsComma = false
+    fun appendName(name: String) {
+        if (needsComma) builder.append(',')
+        builder.appendJsonString(name)
+        builder.append(':')
+        needsComma = true
+    }
+    fun appendStringField(name: String, value: String) {
+        appendName(name)
+        builder.appendJsonString(value)
+    }
+    fun appendOptionalStringField(name: String, value: String?) {
+        val resolved = value?.takeIf { it.isNotBlank() } ?: return
+        appendStringField(name, resolved)
+    }
+
+    appendStringField("id", id)
+    appendStringField("sourceId", sourceId)
+    appendStringField("title", title)
+    appendName("durationMs")
+    builder.append(durationMs)
+    appendStringField("mediaLocator", mediaLocator)
+    appendOptionalStringField("relativePath", relativePath)
+    appendOptionalStringField("artistName", artistName)
+    appendOptionalStringField("albumTitle", albumTitle)
+    appendOptionalStringField("artworkLocator", artworkLocator)
+    appendOptionalStringField("albumId", albumId)
+    appendOptionalStringField("artistId", artistId)
+    remoteFavoriteHint?.let {
+        appendName("remoteFavoriteHint")
+        builder.append(it)
+    }
+    builder.append('}')
+}
+
+private fun StringBuilder.appendJsonString(value: String) {
+    append('"')
+    value.forEach { char ->
+        when (char) {
+            '"' -> append("\\\"")
+            '\\' -> append("\\\\")
+            '\b' -> append("\\b")
+            '\u000C' -> append("\\f")
+            '\n' -> append("\\n")
+            '\r' -> append("\\r")
+            '\t' -> append("\\t")
+            else -> {
+                if (char < ' ') {
+                    append("\\u")
+                    append(char.code.toString(16).padStart(4, '0'))
+                } else {
+                    append(char)
+                }
+            }
+        }
+    }
+    append('"')
+}
+
+private fun PlaybackQueueTrackSnapshot.toTrack(): Track? {
+    val restoredId = id.trim().takeIf { it.isNotBlank() } ?: return null
+    val restoredSourceId = sourceId.trim().takeIf { it.isNotBlank() } ?: return null
+    val restoredTitle = title.trim().takeIf { it.isNotBlank() } ?: return null
+    val restoredMediaLocator = mediaLocator.trim().takeIf { it.isNotBlank() } ?: return null
+    val restoredRelativePath = relativePath?.takeIf { it.isNotBlank() } ?: restoredMediaLocator
+    return Track(
+        id = restoredId,
+        sourceId = restoredSourceId,
+        title = restoredTitle,
+        artistName = artistName?.trim()?.takeIf { it.isNotBlank() },
+        albumTitle = albumTitle?.trim()?.takeIf { it.isNotBlank() },
+        durationMs = durationMs.coerceAtLeast(0L),
+        mediaLocator = restoredMediaLocator,
+        relativePath = restoredRelativePath,
+        artworkLocator = artworkLocator?.trim()?.takeIf { it.isNotBlank() },
+        albumId = albumId?.trim()?.takeIf { it.isNotBlank() },
+        artistId = artistId?.trim()?.takeIf { it.isNotBlank() },
+        remoteFavoriteHint = remoteFavoriteHint,
+    )
+}
+
+private fun JsonObject.toPlaybackQueueTrackSnapshot(): PlaybackQueueTrackSnapshot? {
+    return PlaybackQueueTrackSnapshot(
+        id = stringOrNull("id") ?: return null,
+        sourceId = stringOrNull("sourceId") ?: return null,
+        title = stringOrNull("title") ?: return null,
+        artistName = stringOrNull("artistName"),
+        albumTitle = stringOrNull("albumTitle"),
+        durationMs = longOrNull("durationMs") ?: 0L,
+        mediaLocator = stringOrNull("mediaLocator") ?: return null,
+        relativePath = stringOrNull("relativePath"),
+        artworkLocator = stringOrNull("artworkLocator"),
+        albumId = stringOrNull("albumId"),
+        artistId = stringOrNull("artistId"),
+        remoteFavoriteHint = booleanOrNull("remoteFavoriteHint"),
+    )
+}
+
+private fun JsonObject.stringOrNull(key: String): String? {
+    return (this[key] as? JsonPrimitive)?.contentOrNull
+}
+
+private fun JsonObject.longOrNull(key: String): Long? {
+    return (this[key] as? JsonPrimitive)?.longOrNull
+}
+
+private fun JsonObject.booleanOrNull(key: String): Boolean? {
+    return (this[key] as? JsonPrimitive)?.contentOrNull?.toBooleanStrictOrNull()
+}
 
 private data class PlaybackStatsSession(
     val sessionId: Long,

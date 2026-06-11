@@ -109,6 +109,7 @@ import top.iwesley.lyn.music.core.model.Album
 import top.iwesley.lyn.music.core.model.Artist
 import top.iwesley.lyn.music.core.model.ArtworkTintTheme
 import top.iwesley.lyn.music.core.model.ImportSourceType
+import top.iwesley.lyn.music.core.model.ImportSourceIndexMode
 import top.iwesley.lyn.music.core.model.ImportScanPhase
 import top.iwesley.lyn.music.core.model.ImportScanProgress
 import top.iwesley.lyn.music.core.model.ImportScanSummary
@@ -595,12 +596,17 @@ internal fun FavoriteToggleButton(
     tint: Color = MaterialTheme.colorScheme.primary,
     buttonSize: androidx.compose.ui.unit.Dp = 48.dp,
     iconSize: androidx.compose.ui.unit.Dp = 24.dp,
+    enabled: Boolean = true,
 ) {
-    IconButton(onClick = onClick, modifier = Modifier.size(buttonSize)) {
+    IconButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.size(buttonSize),
+    ) {
         Icon(
             imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
             contentDescription = if (isFavorite) "取消喜欢" else "标记为喜欢",
-            tint = tint,
+            tint = if (enabled) tint else tint.copy(alpha = 0.46f),
             modifier = Modifier.size(iconSize),
         )
     }
@@ -724,7 +730,8 @@ internal fun AlbumRow(
 @Composable
 internal fun ArtistRow(
     artist: Artist,
-    albumCount: Int,
+    trackCount: Int?,
+    albumCount: Int?,
     onClick: () -> Unit,
 ) {
     val shellColors = mainShellColors
@@ -763,7 +770,7 @@ internal fun ArtistRow(
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    text = "${artist.trackCount} 首歌曲 · $albumCount 张专辑",
+                    text = artistSummaryLabel(trackCount, albumCount),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -778,6 +785,18 @@ internal fun ArtistRow(
                 .background(shellColors.cardBorder),
         )
     }
+}
+
+internal fun artistSummaryLabel(
+    trackCount: Int?,
+    albumCount: Int?,
+    unknownLabel: String = "在线艺人",
+): String {
+    val parts = buildList {
+        trackCount?.let { add("$it 首歌曲") }
+        albumCount?.let { add("$it 张专辑") }
+    }
+    return parts.joinToString(" · ").ifBlank { unknownLabel }
 }
 
 @Composable
@@ -1340,9 +1359,16 @@ internal fun SourceCard(
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                val sourceIndexMode = state.source.indexMode
+                val isOnlineSource = sourceIndexMode == ImportSourceIndexMode.ONLINE
+                val trackCountLabel = importSourceTrackCountLabel(
+                    indexMode = sourceIndexMode,
+                    localTrackCount = state.indexState?.trackCount,
+                    remoteTrackCount = state.indexState?.remoteTrackCount,
+                )
                 MainShellAssistChip(
                     onClick = {},
-                    label = { Text("${state.indexState?.trackCount ?: 0} 首歌曲") },
+                    label = { Text(trackCountLabel) },
                     leadingIcon = { Icon(Icons.Rounded.LibraryMusic, null) })
                 MainShellAssistChip(
                     onClick = {},
@@ -1350,6 +1376,7 @@ internal fun SourceCard(
                         Text(
                             when {
                                 !sourceEnabled -> "已禁用"
+                                isOnlineSource -> "在线模式"
                                 state.indexState?.lastError == null -> "扫描正常"
                                 else -> "扫描失败"
                             },
@@ -1408,6 +1435,18 @@ private fun SourceScanProgressRow(progress: ImportScanProgress) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall,
         )
+    }
+}
+
+internal fun importSourceTrackCountLabel(
+    indexMode: ImportSourceIndexMode,
+    localTrackCount: Int?,
+    remoteTrackCount: Int?,
+): String {
+    return if (indexMode == ImportSourceIndexMode.ONLINE) {
+        remoteTrackCount?.let { "${it.coerceAtLeast(0)} 首远端歌曲" } ?: "远端歌曲数未知"
+    } else {
+        "${localTrackCount?.coerceAtLeast(0) ?: 0} 首歌曲"
     }
 }
 

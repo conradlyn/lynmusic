@@ -173,9 +173,11 @@ internal fun PlayerDrawerHost(
     lyricsShareTextPalette: AppThemeTextPalette,
     onPlayerIntent: (PlayerIntent) -> Unit,
     isFavorite: Boolean,
+    canToggleFavorite: Boolean = true,
     onToggleFavorite: () -> Unit,
     onOpenAddToPlaylist: () -> Unit,
     onOpenQueue: () -> Unit,
+    onlineNavigationSourceId: String? = null,
     onOpenLibraryNavigationTarget: (LibraryNavigationTarget) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -223,9 +225,11 @@ internal fun PlayerDrawerHost(
                 lyricsShareTextPalette = lyricsShareTextPalette,
                 onPlayerIntent = onPlayerIntent,
                 isFavorite = isFavorite,
+                canToggleFavorite = canToggleFavorite,
                 onToggleFavorite = onToggleFavorite,
                 onOpenAddToPlaylist = onOpenAddToPlaylist,
                 onOpenQueue = onOpenQueue,
+                onlineNavigationSourceId = onlineNavigationSourceId,
                 onOpenLibraryNavigationTarget = onOpenLibraryNavigationTarget,
             )
         }
@@ -238,6 +242,7 @@ internal fun MiniPlayerBarVisibility(
     state: PlayerState,
     onPlayerIntent: (PlayerIntent) -> Unit,
     isFavorite: Boolean,
+    canToggleFavorite: Boolean = true,
     onToggleFavorite: () -> Unit,
     onOpenAddToPlaylist: () -> Unit,
     onOpenQueue: () -> Unit,
@@ -279,6 +284,7 @@ internal fun MiniPlayerBarVisibility(
             state = state,
             onPlayerIntent = onPlayerIntent,
             isFavorite = isFavorite,
+            canToggleFavorite = canToggleFavorite,
             onToggleFavorite = onToggleFavorite,
             onOpenAddToPlaylist = onOpenAddToPlaylist,
             onOpenQueue = onOpenQueue,
@@ -443,6 +449,7 @@ private fun MiniPlayerBar(
     state: PlayerState,
     onPlayerIntent: (PlayerIntent) -> Unit,
     isFavorite: Boolean,
+    canToggleFavorite: Boolean,
     onToggleFavorite: () -> Unit,
     onOpenAddToPlaylist: () -> Unit,
     onOpenQueue: () -> Unit,
@@ -474,6 +481,7 @@ private fun MiniPlayerBar(
             snapshot = snapshot,
             lyricsText = miniPlayerLyricsText,
             isFavorite = isFavorite,
+            canToggleFavorite = canToggleFavorite,
             onToggleFavorite = onToggleFavorite,
             onPlayerIntent = onPlayerIntent,
             onOpenQueue = onOpenQueue,
@@ -565,6 +573,7 @@ private fun MiniPlayerBar(
             isFavorite = isFavorite,
             onClick = onToggleFavorite,
             tint = miniPlayerFavoriteTint,
+            enabled = canToggleFavorite,
         )
         AddToPlaylistButton(onClick = onOpenAddToPlaylist, tint = miniPlayerActionTint)
         QueueToggleButton(onClick = onOpenQueue, tint = miniPlayerActionTint)
@@ -611,6 +620,7 @@ private fun AutomotiveLandscapeMiniPlayerBar(
     snapshot: PlaybackSnapshot,
     lyricsText: String?,
     isFavorite: Boolean,
+    canToggleFavorite: Boolean,
     onToggleFavorite: () -> Unit,
     onPlayerIntent: (PlayerIntent) -> Unit,
     onOpenQueue: () -> Unit,
@@ -691,6 +701,7 @@ private fun AutomotiveLandscapeMiniPlayerBar(
                             tint = if (isFavorite) Color(0xFFE5484D) else actionTint,
                             buttonSize = 46.dp,
                             iconSize = 24.dp,
+                            enabled = canToggleFavorite,
                         )
                     }
                 }
@@ -1139,9 +1150,11 @@ private fun PlayerOverlay(
     lyricsShareTextPalette: AppThemeTextPalette,
     onPlayerIntent: (PlayerIntent) -> Unit,
     isFavorite: Boolean,
+    canToggleFavorite: Boolean,
     onToggleFavorite: () -> Unit,
     onOpenAddToPlaylist: () -> Unit,
     onOpenQueue: () -> Unit,
+    onlineNavigationSourceId: String? = null,
     onOpenLibraryNavigationTarget: (LibraryNavigationTarget) -> Unit,
 ) {
     val snapshot = state.effectiveSnapshot
@@ -1293,8 +1306,10 @@ private fun PlayerOverlay(
                     artworkBitmap = paletteArtworkBitmap,
                     playerArtworkStyle = playerArtworkStyle,
                     isFavorite = isFavorite,
+                    canToggleFavorite = canToggleFavorite,
                     onToggleFavorite = onToggleFavorite,
                     onOpenQueue = onOpenQueue,
+                    onlineNavigationSourceId = onlineNavigationSourceId,
                     onOpenLibraryNavigationTarget = onOpenLibraryNavigationTarget,
                     onPlayerIntent = onPlayerIntent,
                     modifier = Modifier.fillMaxSize(),
@@ -1438,6 +1453,7 @@ private fun PlayerOverlay(
                                 track = track,
                                 onPlayerIntent = onPlayerIntent,
                                 onOpenLibraryNavigationTarget = onOpenLibraryNavigationTarget,
+                                onlineNavigationSourceId = onlineNavigationSourceId,
                                 mobilePlayback = mobilePlayback,
                                 pure = isPureMode,
                                 modifier = Modifier
@@ -1483,10 +1499,12 @@ private fun PlayerOverlay(
                             showEqualizerEntry = showPhoneEqualizerEntry,
                             onOpenEqualizer = onOpenEqualizer,
                             isFavorite = isFavorite,
+                            canToggleFavorite = canToggleFavorite,
                             onToggleFavorite = onToggleFavorite,
                             onOpenAddToPlaylist = onOpenAddToPlaylist,
                             onOpenQueue = onOpenQueue,
                             onPlayerIntent = onPlayerIntent,
+                            onlineNavigationSourceId = onlineNavigationSourceId,
                             onOpenLibraryNavigationTarget = onOpenLibraryNavigationTarget,
                         )
                     }
@@ -1746,10 +1764,12 @@ private fun PlayerBottomControls(
     showEqualizerEntry: Boolean,
     onOpenEqualizer: () -> Unit,
     isFavorite: Boolean,
+    canToggleFavorite: Boolean,
     onToggleFavorite: () -> Unit,
     onOpenAddToPlaylist: () -> Unit,
     onOpenQueue: () -> Unit,
     onPlayerIntent: (PlayerIntent) -> Unit,
+    onlineNavigationSourceId: String? = null,
     onOpenLibraryNavigationTarget: (LibraryNavigationTarget) -> Unit,
 ) {
     val favoriteTint = if (isFavorite) Color(0xFFE5484D) else Color.White.copy(alpha = 0.96f)
@@ -1766,9 +1786,19 @@ private fun PlayerBottomControls(
             snapshot.currentDisplayAlbumTitle,
             track.artistName,
             track.albumTitle,
+            track.albumId,
+            track.artistId,
+            track.artworkLocator,
+            onlineNavigationSourceId,
         ) {
             if (!mobilePlayback) {
                 PlaybackLibraryNavigationTargets(albumTarget = null, artistTarget = null)
+            } else if (onlineNavigationSourceId != null) {
+                deriveOnlinePlaybackLibraryNavigationTargets(
+                    snapshot = snapshot,
+                    track = track,
+                    sourceId = onlineNavigationSourceId,
+                )
             } else {
                 derivePlaybackLibraryNavigationTargets(snapshot, track)
             }
@@ -1859,6 +1889,7 @@ private fun PlayerBottomControls(
                         tint = favoriteTint,
                         buttonSize = mobileTopActionButtonSize,
                         iconSize = mobileTopActionIconSize,
+                        enabled = canToggleFavorite,
                     )
                 }
             }
@@ -2110,6 +2141,7 @@ private fun PlayerBottomControls(
                             isFavorite = isFavorite,
                             onClick = onToggleFavorite,
                             tint = favoriteTint,
+                            enabled = canToggleFavorite,
                         )
                         Box(modifier = Modifier.weight(1f)) {
                             PlaybackVolume(snapshot, onPlayerIntent, sliderWidthFraction = 0.5f)

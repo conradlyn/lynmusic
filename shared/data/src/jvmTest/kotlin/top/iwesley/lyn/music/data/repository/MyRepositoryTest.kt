@@ -173,6 +173,37 @@ class MyRepositoryTest {
     }
 
     @Test
+    fun `navidrome refresh skips online mode sources`() = runTest {
+        val database = createMyTestDatabase()
+        val httpClient = RecordingMyHttpClient(
+            albumListBody = navidromeAlbumListBody(),
+            albumBody = navidromeAlbumBody(),
+        )
+        val repository = RoomMyRepository(
+            database = database,
+            secureCredentialStore = MyCredentialStore(mutableMapOf("nav-cred" to "secret")),
+            httpClient = httpClient,
+        )
+
+        try {
+            seedSource(
+                database,
+                sourceId = "nav-online",
+                type = "NAVIDROME",
+                enabled = true,
+                indexMode = "ONLINE",
+            )
+
+            val result = repository.refreshNavidromeRecentPlays()
+
+            assertTrue(result.isSuccess)
+            assertEquals(emptyList(), httpClient.requestedEndpoints)
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
     fun `emby refresh stores server recent track stats`() = runTest {
         val database = createMyTestDatabase()
         val httpClient = RecordingMyHttpClient(
@@ -595,6 +626,7 @@ private suspend fun seedSource(
     rootReference: String = if (type == "NAVIDROME") "https://demo.example.com/navidrome" else "/music",
     username: String? = if (type == "NAVIDROME") "demo" else null,
     credentialKey: String? = if (type == "NAVIDROME") "nav-cred" else null,
+    indexMode: String = "LOCAL_INDEX",
 ) {
     database.importSourceDao().upsert(
         ImportSourceEntity(
@@ -611,6 +643,7 @@ private suspend fun seedSource(
             enabled = enabled,
             lastScannedAt = null,
             createdAt = 1L,
+            indexMode = indexMode,
         ),
     )
 }

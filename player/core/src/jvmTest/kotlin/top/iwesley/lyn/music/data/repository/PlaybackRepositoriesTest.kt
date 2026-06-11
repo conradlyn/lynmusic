@@ -21,6 +21,8 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import top.iwesley.lyn.music.core.model.DEFAULT_PLAYBACK_VOLUME
 import top.iwesley.lyn.music.core.model.EXTERNAL_OPEN_SOURCE_ID
+import top.iwesley.lyn.music.core.model.ImportSourceIndexMode
+import top.iwesley.lyn.music.core.model.ImportSourceType
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.PlaybackAudioFormat
 import top.iwesley.lyn.music.core.model.PlaybackGateway
@@ -33,9 +35,11 @@ import top.iwesley.lyn.music.core.model.PlaybackStatsReporter
 import top.iwesley.lyn.music.core.model.SystemPlaybackControlCallbacks
 import top.iwesley.lyn.music.core.model.SystemPlaybackControlsPlatformService
 import top.iwesley.lyn.music.core.model.Track
+import top.iwesley.lyn.music.core.model.buildEmbySongLocator
 import top.iwesley.lyn.music.core.model.buildExternalOpenTrackId
 import top.iwesley.lyn.music.core.model.buildNavidromeSongLocator
 import top.iwesley.lyn.music.core.model.normalizePlaybackVolume
+import top.iwesley.lyn.music.data.db.ImportSourceEntity
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
 import top.iwesley.lyn.music.data.db.LyricsCacheEntity
 import top.iwesley.lyn.music.data.db.PlaybackQueueSnapshotEntity
@@ -50,6 +54,24 @@ class PlaybackRepositoriesTest {
         assertEquals(90_000L, playbackStatsSubmissionThresholdMs(180_000L))
         assertEquals(240_000L, playbackStatsSubmissionThresholdMs(900_000L))
         assertEquals(240_000L, playbackStatsSubmissionThresholdMs(0L))
+    }
+
+    @Test
+    fun `playback queue json fallback source ids come from remote locators`() {
+        val localTracks = sampleTracks(1_200)
+        val navidromeTrack = sampleNavidromeTrack(
+            id = "nav-track-1",
+            sourceId = "nav-source",
+            songId = "song-1",
+        )
+        val embyTrack = sampleTrack("emby-track-1", "Emby Song").copy(
+            sourceId = "emby-source",
+            mediaLocator = buildEmbySongLocator("emby-source", "item-1"),
+        )
+
+        assertEquals(emptySet(), remotePlaybackSourceIds(localTracks, emptyList()))
+        assertEquals(setOf("nav-source"), remotePlaybackSourceIds(listOf(localTracks.first(), navidromeTrack), emptyList()))
+        assertEquals(setOf("emby-source"), remotePlaybackSourceIds(localTracks.take(3), listOf(embyTrack)))
     }
 
     @Test
@@ -451,6 +473,7 @@ class PlaybackRepositoriesTest {
             gateway = gateway,
             playbackPreferencesStore = playbackPreferencesStore,
             scope = scope,
+            hydrateImmediately = false,
         )
 
         try {
@@ -863,6 +886,7 @@ class PlaybackRepositoriesTest {
         val playbackPreferencesStore = FakePlaybackPreferencesStore()
         val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
         val tracks = sampleTracks(5)
+        database.trackDao().upsertAll(sampleTrackEntities(tracks))
         val repository = DefaultPlaybackRepository(
             database = database,
             gateway = gateway,
@@ -882,6 +906,493 @@ class PlaybackRepositoriesTest {
 
             assertEquals(trackIds(snapshot.queue).joinToString(","), persisted?.queueTrackIds)
             assertEquals(trackIds(tracks).joinToString(","), persisted?.orderedQueueTrackIds)
+            assertEquals("", persisted?.queueTracksJson)
+            assertEquals("", persisted?.orderedQueueTracksJson)
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `local large queue cycle mode stores no fallback json and restores from track table`() = runTest {
+        val database = createTestDatabase()
+        val gateway = FakePlaybackGateway()
+        val playbackPreferencesStore = FakePlaybackPreferencesStore()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val tracks = sampleTracks(1_200)
+        database.trackDao().upsertAll(sampleTrackEntities(tracks))
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = playbackPreferencesStore,
+            scope = scope,
+            shuffleRandom = Random(23),
+        )
+
+        try {
+            advanceUntilIdle()
+            repository.playTracks(tracks, startIndex = 10)
+            advanceUntilIdle()
+            repository.cycleMode()
+            advanceUntilIdle()
+            val persisted = database.playbackQueueSnapshotDao().get()
+
+            assertEquals("", persisted?.queueTracksJson)
+            assertEquals("", persisted?.orderedQueueTracksJson)
+
+            repository.close()
+            val restoredScope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+            val restoredRepository = DefaultPlaybackRepository(
+                database = database,
+                gateway = FakePlaybackGateway(),
+                playbackPreferencesStore = playbackPreferencesStore,
+                scope = restoredScope,
+                shuffleRandom = Random(23),
+            )
+            try {
+                advanceUntilIdle()
+                val restoredSnapshot = restoredRepository.snapshot.value
+
+                assertEquals(1_200, restoredSnapshot.queue.size)
+                assertEquals(1_200, restoredSnapshot.orderedQueue.size)
+                assertEquals(PlaybackMode.SHUFFLE, restoredSnapshot.mode)
+                assertEquals(tracks[10].id, restoredSnapshot.currentTrack?.id)
+            } finally {
+                restoredRepository.close()
+                restoredScope.cancel()
+            }
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `local index remote queue stores no fallback json and restores from track table`() = runTest {
+        val database = createTestDatabase()
+        val gateway = FakePlaybackGateway()
+        val playbackPreferencesStore = FakePlaybackPreferencesStore()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val tracks = (1..1_200).map { index ->
+            sampleNavidromeTrack(
+                id = "track:nav-local:navidrome:song-$index",
+                sourceId = "nav-local",
+                songId = "song-$index",
+            ).copy(
+                title = "Remote Indexed Song $index",
+                relativePath = "Remote Indexed Song $index.mp3",
+            )
+        }
+        database.importSourceDao().upsert(
+            sampleNavidromeSourceEntity("nav-local", ImportSourceIndexMode.LOCAL_INDEX),
+        )
+        database.trackDao().upsertAll(tracks.map(::sampleTrackEntity))
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = playbackPreferencesStore,
+            scope = scope,
+            shuffleRandom = Random(23),
+        )
+
+        try {
+            advanceUntilIdle()
+            repository.playTracks(tracks, startIndex = 25)
+            advanceUntilIdle()
+            repository.cycleMode()
+            advanceUntilIdle()
+            val persisted = database.playbackQueueSnapshotDao().get()
+
+            assertEquals("", persisted?.queueTracksJson)
+            assertEquals("", persisted?.orderedQueueTracksJson)
+
+            repository.close()
+            val restoredScope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+            val restoredRepository = DefaultPlaybackRepository(
+                database = database,
+                gateway = FakePlaybackGateway(),
+                playbackPreferencesStore = playbackPreferencesStore,
+                scope = restoredScope,
+                shuffleRandom = Random(23),
+            )
+            try {
+                advanceUntilIdle()
+                val restoredSnapshot = restoredRepository.snapshot.value
+
+                assertEquals(1_200, restoredSnapshot.queue.size)
+                assertEquals(1_200, restoredSnapshot.orderedQueue.size)
+                assertEquals(PlaybackMode.SHUFFLE, restoredSnapshot.mode)
+                assertEquals(tracks[25].id, restoredSnapshot.currentTrack?.id)
+                assertEquals("nav-local", restoredSnapshot.currentTrack?.sourceId)
+            } finally {
+                restoredRepository.close()
+                restoredScope.cancel()
+            }
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `persisted queue snapshot stores fallback json only for online tracks missing from local table`() = runTest {
+        val database = createTestDatabase()
+        val gateway = FakePlaybackGateway()
+        val playbackPreferencesStore = FakePlaybackPreferencesStore()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val tracks = listOf(
+            sampleNavidromeTrack(id = "nav-track-1", songId = "song-1"),
+            sampleNavidromeTrack(id = "nav-track-2", songId = "song-2"),
+        )
+        database.importSourceDao().upsert(
+            sampleNavidromeSourceEntity("nav-source", ImportSourceIndexMode.ONLINE),
+        )
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = playbackPreferencesStore,
+            scope = scope,
+        )
+
+        try {
+            advanceUntilIdle()
+            repository.playTracks(tracks, startIndex = 1)
+            advanceUntilIdle()
+
+            val persisted = database.playbackQueueSnapshotDao().get()
+            assertEquals("nav-track-1,nav-track-2", persisted?.queueTrackIds)
+            assertEquals("", persisted?.orderedQueueTracksJson)
+            assertEquals(true, persisted?.queueTracksJson?.contains("\"id\":\"nav-track-1\""))
+            assertEquals(true, persisted?.queueTracksJson?.contains("\"id\":\"nav-track-2\""))
+            assertEquals(true, persisted?.queueTracksJson?.contains("\"mediaLocator\":\"lynmusic-navidrome://nav-source/song-2\""))
+            assertEquals(true, persisted?.queueTracksJson?.contains("\"relativePath\":\"Remote Song.mp3\""))
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `online remote queue writes fallback only for tracks missing from local table`() = runTest {
+        val database = createTestDatabase()
+        val gateway = FakePlaybackGateway()
+        val playbackPreferencesStore = FakePlaybackPreferencesStore()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val indexedOnlineTrack = sampleNavidromeTrack(id = "nav-track-1", songId = "song-1")
+        val missingOnlineTrack = sampleNavidromeTrack(id = "nav-track-2", songId = "song-2")
+        database.importSourceDao().upsert(
+            sampleNavidromeSourceEntity("nav-source", ImportSourceIndexMode.ONLINE),
+        )
+        database.trackDao().upsertAll(listOf(sampleTrackEntity(indexedOnlineTrack)))
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = playbackPreferencesStore,
+            scope = scope,
+        )
+
+        try {
+            advanceUntilIdle()
+            repository.playTracks(listOf(indexedOnlineTrack, missingOnlineTrack), startIndex = 0)
+            advanceUntilIdle()
+
+            val persisted = database.playbackQueueSnapshotDao().get()
+            assertEquals(false, persisted?.queueTracksJson?.contains("\"id\":\"nav-track-1\""))
+            assertEquals(true, persisted?.queueTracksJson?.contains("\"id\":\"nav-track-2\""))
+            assertEquals("", persisted?.orderedQueueTracksJson)
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `mixed local index and online remote queue writes fallback only for online source`() = runTest {
+        val database = createTestDatabase()
+        val gateway = FakePlaybackGateway()
+        val playbackPreferencesStore = FakePlaybackPreferencesStore()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val localIndexTrack = sampleNavidromeTrack(
+            id = "track:nav-local:navidrome:song-1",
+            sourceId = "nav-local",
+            songId = "song-1",
+        )
+        val onlineTrack = sampleNavidromeTrack(
+            id = "track:nav-online:navidrome:song-2",
+            sourceId = "nav-online",
+            songId = "song-2",
+        )
+        database.importSourceDao().upsert(
+            sampleNavidromeSourceEntity("nav-local", ImportSourceIndexMode.LOCAL_INDEX),
+        )
+        database.importSourceDao().upsert(
+            sampleNavidromeSourceEntity("nav-online", ImportSourceIndexMode.ONLINE),
+        )
+        database.trackDao().upsertAll(listOf(sampleTrackEntity(localIndexTrack)))
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = playbackPreferencesStore,
+            scope = scope,
+        )
+
+        try {
+            advanceUntilIdle()
+            repository.playTracks(listOf(localIndexTrack, onlineTrack), startIndex = 0)
+            advanceUntilIdle()
+
+            val persisted = database.playbackQueueSnapshotDao().get()
+            assertEquals(false, persisted?.queueTracksJson?.contains("\"id\":\"${localIndexTrack.id}\""))
+            assertEquals(true, persisted?.queueTracksJson?.contains("\"id\":\"${onlineTrack.id}\""))
+            assertEquals("", persisted?.orderedQueueTracksJson)
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `unknown remote source is treated as needing fallback json`() = runTest {
+        val database = createTestDatabase()
+        val gateway = FakePlaybackGateway()
+        val playbackPreferencesStore = FakePlaybackPreferencesStore()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val track = sampleNavidromeTrack(id = "nav-missing-source-track", sourceId = "nav-missing", songId = "song-1")
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = playbackPreferencesStore,
+            scope = scope,
+        )
+
+        try {
+            advanceUntilIdle()
+            repository.playTracks(listOf(track), startIndex = 0)
+            advanceUntilIdle()
+
+            val persisted = database.playbackQueueSnapshotDao().get()
+            assertEquals(true, persisted?.queueTracksJson?.contains("\"id\":\"nav-missing-source-track\""))
+            assertEquals("", persisted?.orderedQueueTracksJson)
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `persisted queue snapshot omits local tracks from mixed fallback json`() = runTest {
+        val database = createTestDatabase()
+        val gateway = FakePlaybackGateway()
+        val playbackPreferencesStore = FakePlaybackPreferencesStore()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val localTrack = sampleTrack("track-local", "Local Song")
+        val onlineTrack = sampleNavidromeTrack(id = "nav-track-1", songId = "song-1")
+        database.trackDao().upsertAll(listOf(sampleTrackEntity(localTrack.id, localTrack.title)))
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = playbackPreferencesStore,
+            scope = scope,
+        )
+
+        try {
+            advanceUntilIdle()
+            repository.playTracks(listOf(localTrack, onlineTrack), startIndex = 0)
+            advanceUntilIdle()
+
+            val persisted = database.playbackQueueSnapshotDao().get()
+            assertEquals("track-local,nav-track-1", persisted?.queueTrackIds)
+            assertEquals(false, persisted?.queueTracksJson?.contains("\"id\":\"track-local\""))
+            assertEquals(true, persisted?.queueTracksJson?.contains("\"id\":\"nav-track-1\""))
+            assertEquals("", persisted?.orderedQueueTracksJson)
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `local queue skips update cursor without writing fallback json`() = runTest {
+        val database = createTestDatabase()
+        val gateway = FakePlaybackGateway()
+        val playbackPreferencesStore = FakePlaybackPreferencesStore()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val tracks = sampleTracks(1_200)
+        database.trackDao().upsertAll(sampleTrackEntities(tracks))
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = playbackPreferencesStore,
+            scope = scope,
+            hydrateImmediately = false,
+        )
+
+        try {
+            advanceUntilIdle()
+            repository.playTracks(tracks, startIndex = 0)
+            advanceUntilIdle()
+
+            repeat(10) {
+                repository.skipNext()
+                advanceUntilIdle()
+            }
+
+            val persisted = database.playbackQueueSnapshotDao().get()
+            assertEquals(10, persisted?.currentIndex)
+            assertEquals("", persisted?.queueTracksJson)
+            assertEquals("", persisted?.orderedQueueTracksJson)
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `online queue skips update cursor without rewriting fallback json`() = runTest {
+        val database = createTestDatabase()
+        val gateway = FakePlaybackGateway()
+        val playbackPreferencesStore = FakePlaybackPreferencesStore()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val tracks = (1..1_200).map { index ->
+            sampleNavidromeTrack(id = "nav-track-$index", songId = "song-$index").copy(
+                title = "Remote Song $index",
+                relativePath = "Remote Song $index.mp3",
+            )
+        }
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = playbackPreferencesStore,
+            scope = scope,
+        )
+
+        try {
+            advanceUntilIdle()
+            repository.playTracks(tracks, startIndex = 0)
+            advanceUntilIdle()
+            val initialPersisted = database.playbackQueueSnapshotDao().get()
+            val initialFallbackJson = initialPersisted?.queueTracksJson
+
+            repeat(10) {
+                repository.skipNext()
+                advanceUntilIdle()
+            }
+
+            val persisted = database.playbackQueueSnapshotDao().get()
+            assertEquals(10, persisted?.currentIndex)
+            assertEquals(initialFallbackJson, persisted?.queueTracksJson)
+            assertEquals("", persisted?.orderedQueueTracksJson)
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `online skip before first content snapshot exists does not persist fallback json from cursor path`() = runTest {
+        val database = createTestDatabase()
+        val gateway = BlockingPlaybackGateway()
+        val playbackPreferencesStore = FakePlaybackPreferencesStore()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val tracks = (1..1_200).map { index ->
+            sampleNavidromeTrack(id = "nav-track-$index", songId = "song-$index").copy(
+                title = "Remote Song $index",
+                relativePath = "Remote Song $index.mp3",
+            )
+        }
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = playbackPreferencesStore,
+            scope = scope,
+            hydrateImmediately = false,
+        )
+
+        try {
+            val initialLoadGate = CompletableDeferred<Unit>()
+            gateway.nextLoadGate = initialLoadGate
+            val playJob = launch { repository.playTracks(tracks, startIndex = 0) }
+            advanceUntilIdle()
+
+            assertEquals("nav-track-1", repository.snapshot.value.currentTrack?.id)
+            assertNull(database.playbackQueueSnapshotDao().get())
+
+            val skipJob = launch { repository.skipNext() }
+            advanceUntilIdle()
+
+            assertEquals("nav-track-2", repository.snapshot.value.currentTrack?.id)
+            assertNull(database.playbackQueueSnapshotDao().get())
+
+            initialLoadGate.complete(Unit)
+            playJob.join()
+            skipJob.join()
+            advanceUntilIdle()
+
+            val persisted = database.playbackQueueSnapshotDao().get()
+            assertEquals(1, persisted?.currentIndex)
+            assertEquals(true, persisted?.queueTracksJson?.contains("\"id\":\"nav-track-2\""))
+            assertEquals("", persisted?.orderedQueueTracksJson)
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `seek and automatic next update cursor without rewriting fallback json`() = runTest {
+        val database = createTestDatabase()
+        val gateway = FakePlaybackGateway()
+        val playbackPreferencesStore = FakePlaybackPreferencesStore()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val tracks = listOf(
+            sampleNavidromeTrack(id = "nav-track-1", songId = "song-1"),
+            sampleNavidromeTrack(id = "nav-track-2", songId = "song-2"),
+            sampleNavidromeTrack(id = "nav-track-3", songId = "song-3"),
+        )
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = playbackPreferencesStore,
+            scope = scope,
+            hydrateImmediately = false,
+        )
+
+        try {
+            advanceUntilIdle()
+            repository.playTracks(tracks, startIndex = 0)
+            advanceUntilIdle()
+            val initialFallbackJson = database.playbackQueueSnapshotDao().get()?.queueTracksJson
+
+            repository.seekTo(12_345L)
+            advanceUntilIdle()
+            val afterSeek = database.playbackQueueSnapshotDao().get()
+            assertEquals(12_345L, afterSeek?.positionMs)
+            assertEquals(initialFallbackJson, afterSeek?.queueTracksJson)
+
+            gateway.emitCompletion()
+            advanceUntilIdle()
+            var afterCompletion = database.playbackQueueSnapshotDao().get()
+            var completionAttempts = 0
+            while (afterCompletion?.currentIndex != 1 && completionAttempts < 5) {
+                completionAttempts += 1
+                advanceUntilIdle()
+                afterCompletion = database.playbackQueueSnapshotDao().get()
+            }
+            assertEquals(1, afterCompletion?.currentIndex)
+            assertEquals(initialFallbackJson, afterCompletion?.queueTracksJson)
+            assertEquals("", afterCompletion?.orderedQueueTracksJson)
         } finally {
             repository.close()
             scope.cancel()
@@ -1043,6 +1554,379 @@ class PlaybackRepositoriesTest {
             assertEquals("track-4", gateway.loadCalls.single().track.id)
             assertEquals(true, gateway.loadCalls.single().playWhenReady)
             assertEquals(12_000L, gateway.loadCalls.single().startPositionMs)
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `restore queue snapshot uses json fallback for online tracks missing from local table`() = runTest {
+        val database = createTestDatabase()
+        database.playbackQueueSnapshotDao().upsert(
+            PlaybackQueueSnapshotEntity(
+                queueTrackIds = "nav-track-1,nav-track-2",
+                orderedQueueTrackIds = "nav-track-1,nav-track-2",
+                queueTracksJson = """
+                    [
+                      {
+                        "id": "nav-track-1",
+                        "sourceId": "nav-source",
+                        "title": "Online One",
+                        "artistName": "Remote Artist",
+                        "albumTitle": "Remote Album",
+                        "durationMs": 181000,
+                        "mediaLocator": "lynmusic-navidrome://nav-source/song-1",
+                        "relativePath": "Remote Artist/Remote Album/Online One.flac",
+                        "artworkLocator": "lynmusic-cover://nav-source/cover-1",
+                        "albumId": "album-remote",
+                        "artistId": "artist-remote"
+                      },
+                      {
+                        "id": "nav-track-2",
+                        "sourceId": "nav-source",
+                        "title": "Online Two",
+                        "artistName": "Remote Artist",
+                        "albumTitle": "Remote Album",
+                        "durationMs": 182000,
+                        "mediaLocator": "lynmusic-navidrome://nav-source/song-2",
+                        "relativePath": "Remote Artist/Remote Album/Online Two.flac",
+                        "artworkLocator": "lynmusic-cover://nav-source/cover-2",
+                        "albumId": "album-remote",
+                        "artistId": "artist-remote",
+                        "remoteFavoriteHint": true
+                      }
+                    ]
+                """.trimIndent(),
+                orderedQueueTracksJson = """
+                    [
+                      {
+                        "id": "nav-track-1",
+                        "sourceId": "nav-source",
+                        "title": "Online One",
+                        "durationMs": 181000,
+                        "mediaLocator": "lynmusic-navidrome://nav-source/song-1"
+                      },
+                      {
+                        "id": "nav-track-2",
+                        "sourceId": "nav-source",
+                        "title": "Online Two",
+                        "durationMs": 182000,
+                        "mediaLocator": "lynmusic-navidrome://nav-source/song-2",
+                        "remoteFavoriteHint": true
+                      }
+                    ]
+                """.trimIndent(),
+                currentIndex = 1,
+                positionMs = 42_000L,
+                mode = PlaybackMode.ORDER.name,
+                updatedAt = 1L,
+            ),
+        )
+        val gateway = FakePlaybackGateway()
+        val playbackPreferencesStore = FakePlaybackPreferencesStore()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = playbackPreferencesStore,
+            scope = scope,
+        )
+
+        try {
+            advanceUntilIdle()
+
+            val snapshot = repository.snapshot.value
+            assertEquals(listOf("nav-track-1", "nav-track-2"), trackIds(snapshot.queue))
+            assertEquals(1, snapshot.currentIndex)
+            assertEquals("Online Two", snapshot.currentTrack?.title)
+            assertEquals("lynmusic-navidrome://nav-source/song-2", snapshot.currentTrack?.mediaLocator)
+            assertEquals("Remote Artist/Remote Album/Online Two.flac", snapshot.currentTrack?.relativePath)
+            assertEquals(
+                "lynmusic-navidrome://nav-source/song-2",
+                snapshot.orderedQueue.getOrNull(1)?.relativePath,
+            )
+            assertEquals("album-remote", snapshot.currentTrack?.albumId)
+            assertEquals("artist-remote", snapshot.currentTrack?.artistId)
+            assertEquals(true, snapshot.currentTrack?.remoteFavoriteHint)
+            assertEquals(42_000L, snapshot.positionMs)
+            assertEquals("nav-track-2", gateway.loadCalls.single().track.id)
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `restore queue snapshot uses legacy ordered json fallback when queue json is empty`() = runTest {
+        val database = createTestDatabase()
+        database.playbackQueueSnapshotDao().upsert(
+            PlaybackQueueSnapshotEntity(
+                queueTrackIds = "nav-track-1,nav-track-2",
+                orderedQueueTrackIds = "nav-track-1,nav-track-2",
+                queueTracksJson = "",
+                orderedQueueTracksJson = """
+                    [
+                      {
+                        "id": "nav-track-1",
+                        "sourceId": "nav-source",
+                        "title": "Online One",
+                        "durationMs": 181000,
+                        "mediaLocator": "lynmusic-navidrome://nav-source/song-1",
+                        "relativePath": "Remote Artist/Remote Album/Online One.flac"
+                      },
+                      {
+                        "id": "nav-track-2",
+                        "sourceId": "nav-source",
+                        "title": "Online Two",
+                        "durationMs": 182000,
+                        "mediaLocator": "lynmusic-navidrome://nav-source/song-2",
+                        "relativePath": "Remote Artist/Remote Album/Online Two.flac"
+                      }
+                    ]
+                """.trimIndent(),
+                currentIndex = 1,
+                positionMs = 42_000L,
+                mode = PlaybackMode.ORDER.name,
+                updatedAt = 1L,
+            ),
+        )
+        val gateway = FakePlaybackGateway()
+        val playbackPreferencesStore = FakePlaybackPreferencesStore()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = playbackPreferencesStore,
+            scope = scope,
+        )
+
+        try {
+            advanceUntilIdle()
+
+            val snapshot = repository.snapshot.value
+            assertEquals(listOf("nav-track-1", "nav-track-2"), trackIds(snapshot.queue))
+            assertEquals(1, snapshot.currentIndex)
+            assertEquals("Online Two", snapshot.currentTrack?.title)
+            assertEquals("Remote Artist/Remote Album/Online Two.flac", snapshot.currentTrack?.relativePath)
+            assertEquals("nav-track-2", gateway.loadCalls.single().track.id)
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `restore queue snapshot prefers database track over json fallback`() = runTest {
+        val database = createTestDatabase()
+        database.trackDao().upsertAll(listOf(sampleTrackEntity("track-1", "Fresh DB Title")))
+        database.playbackQueueSnapshotDao().upsert(
+            PlaybackQueueSnapshotEntity(
+                queueTrackIds = "track-1",
+                orderedQueueTrackIds = "track-1",
+                queueTracksJson = """
+                    [
+                      {
+                        "id": "track-1",
+                        "sourceId": "nav-source",
+                        "title": "Stale Snapshot Title",
+                        "durationMs": 999000,
+                        "mediaLocator": "lynmusic-navidrome://nav-source/song-stale"
+                      }
+                    ]
+                """.trimIndent(),
+                orderedQueueTracksJson = "",
+                currentIndex = 0,
+                positionMs = 8_000L,
+                mode = PlaybackMode.ORDER.name,
+                updatedAt = 1L,
+            ),
+        )
+        val gateway = FakePlaybackGateway()
+        val playbackPreferencesStore = FakePlaybackPreferencesStore()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = playbackPreferencesStore,
+            scope = scope,
+        )
+
+        try {
+            advanceUntilIdle()
+
+            assertEquals("Fresh DB Title", repository.snapshot.value.currentTrack?.title)
+            assertEquals("file:///music/track-1.mp3", gateway.loadCalls.single().track.mediaLocator)
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `restore queue snapshot ignores broken json while keeping restorable local tracks`() = runTest {
+        val database = createTestDatabase()
+        database.trackDao().upsertAll(listOf(sampleTrackEntity("track-1", "First Song")))
+        database.playbackQueueSnapshotDao().upsert(
+            PlaybackQueueSnapshotEntity(
+                queueTrackIds = "track-1,nav-missing",
+                orderedQueueTrackIds = "track-1,nav-missing",
+                queueTracksJson = "not-json",
+                orderedQueueTracksJson = "not-json",
+                currentIndex = 1,
+                positionMs = 8_000L,
+                mode = PlaybackMode.ORDER.name,
+                updatedAt = 1L,
+            ),
+        )
+        val gateway = FakePlaybackGateway()
+        val playbackPreferencesStore = FakePlaybackPreferencesStore()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = playbackPreferencesStore,
+            scope = scope,
+        )
+
+        try {
+            advanceUntilIdle()
+
+            assertEquals(listOf("track-1"), trackIds(repository.snapshot.value.queue))
+            assertEquals(0, repository.snapshot.value.currentIndex)
+            assertEquals("track-1", gateway.loadCalls.single().track.id)
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `restore queue snapshot maps current index after skipped tracks`() = runTest {
+        val database = createTestDatabase()
+        database.trackDao().upsertAll(
+            listOf(
+                sampleTrackEntity("track-1", "First Song"),
+                sampleTrackEntity("track-4", "Fourth Song"),
+                sampleTrackEntity("track-5", "Fifth Song"),
+            ),
+        )
+        database.playbackQueueSnapshotDao().upsert(
+            PlaybackQueueSnapshotEntity(
+                queueTrackIds = "track-1,missing-2,missing-3,track-4,track-5",
+                orderedQueueTrackIds = "track-1,missing-2,missing-3,track-4,track-5",
+                currentIndex = 4,
+                positionMs = 11_000L,
+                mode = PlaybackMode.ORDER.name,
+                updatedAt = 1L,
+            ),
+        )
+        val gateway = FakePlaybackGateway()
+        val playbackPreferencesStore = FakePlaybackPreferencesStore()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = playbackPreferencesStore,
+            scope = scope,
+        )
+
+        try {
+            advanceUntilIdle()
+
+            val snapshot = repository.snapshot.value
+            assertEquals(listOf("track-1", "track-4", "track-5"), trackIds(snapshot.queue))
+            assertEquals(2, snapshot.currentIndex)
+            assertEquals("track-5", snapshot.currentTrack?.id)
+            assertEquals("track-5", gateway.loadCalls.single().track.id)
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `restore queue snapshot falls forward when current track is missing`() = runTest {
+        val database = createTestDatabase()
+        database.trackDao().upsertAll(
+            listOf(
+                sampleTrackEntity("track-1", "First Song"),
+                sampleTrackEntity("track-3", "Third Song"),
+            ),
+        )
+        database.playbackQueueSnapshotDao().upsert(
+            PlaybackQueueSnapshotEntity(
+                queueTrackIds = "track-1,missing-2,track-3",
+                orderedQueueTrackIds = "track-1,missing-2,track-3",
+                currentIndex = 1,
+                positionMs = 8_000L,
+                mode = PlaybackMode.ORDER.name,
+                updatedAt = 1L,
+            ),
+        )
+        val gateway = FakePlaybackGateway()
+        val playbackPreferencesStore = FakePlaybackPreferencesStore()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = playbackPreferencesStore,
+            scope = scope,
+        )
+
+        try {
+            advanceUntilIdle()
+
+            val snapshot = repository.snapshot.value
+            assertEquals(listOf("track-1", "track-3"), trackIds(snapshot.queue))
+            assertEquals(1, snapshot.currentIndex)
+            assertEquals("track-3", snapshot.currentTrack?.id)
+            assertEquals("track-3", gateway.loadCalls.single().track.id)
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `restore queue snapshot falls backward when current track has no restorable successor`() = runTest {
+        val database = createTestDatabase()
+        database.trackDao().upsertAll(listOf(sampleTrackEntity("track-1", "First Song")))
+        database.playbackQueueSnapshotDao().upsert(
+            PlaybackQueueSnapshotEntity(
+                queueTrackIds = "track-1,missing-2,missing-3",
+                orderedQueueTrackIds = "track-1,missing-2,missing-3",
+                currentIndex = 2,
+                positionMs = 8_000L,
+                mode = PlaybackMode.ORDER.name,
+                updatedAt = 1L,
+            ),
+        )
+        val gateway = FakePlaybackGateway()
+        val playbackPreferencesStore = FakePlaybackPreferencesStore()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = playbackPreferencesStore,
+            scope = scope,
+        )
+
+        try {
+            advanceUntilIdle()
+
+            val snapshot = repository.snapshot.value
+            assertEquals(listOf("track-1"), trackIds(snapshot.queue))
+            assertEquals(0, snapshot.currentIndex)
+            assertEquals("track-1", snapshot.currentTrack?.id)
+            assertEquals("track-1", gateway.loadCalls.single().track.id)
         } finally {
             repository.close()
             scope.cancel()
@@ -1316,7 +2200,53 @@ class PlaybackRepositoriesTest {
             database.trackDao().upsertAll(listOf(trackEntity.copy(modifiedAt = 1L)))
             advanceUntilIdle()
 
-            assertEquals("/tmp/original.jpg", repository.snapshot.value.currentTrack?.artworkLocator)
+            var artworkLocator = repository.snapshot.value.currentTrack?.artworkLocator
+            var refreshAttempts = 0
+            while (artworkLocator != "/tmp/original.jpg" && refreshAttempts < 5) {
+                refreshAttempts += 1
+                advanceUntilIdle()
+                artworkLocator = repository.snapshot.value.currentTrack?.artworkLocator
+            }
+            assertEquals("/tmp/original.jpg", artworkLocator)
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `close cancels lifecycle collectors before database shutdown`() = runTest {
+        val database = createTestDatabase()
+        val gateway = FakePlaybackGateway()
+        val playbackPreferencesStore = FakePlaybackPreferencesStore()
+        val systemControls = FakeSystemPlaybackControlsPlatformService()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        database.trackDao().upsertAll(listOf(sampleTrackEntity("track-1", "First Song")))
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = playbackPreferencesStore,
+            scope = scope,
+            systemPlaybackControlsPlatformService = systemControls,
+            hydrateImmediately = false,
+        )
+
+        try {
+            repository.playTracks(listOf(sampleTrack("track-1", "First Song")), startIndex = 0)
+            advanceUntilIdle()
+
+            repository.close()
+            val closedSnapshot = repository.snapshot.value
+            database.trackDao().upsertAll(
+                listOf(sampleTrackEntity("track-1", "Updated Song").copy(modifiedAt = 1L)),
+            )
+            gateway.updateState { it.copy(positionMs = 12_345L) }
+            advanceUntilIdle()
+
+            assertEquals("First Song", repository.snapshot.value.currentTrack?.title)
+            assertEquals(closedSnapshot.positionMs, repository.snapshot.value.positionMs)
+            assertEquals(closedSnapshot, systemControls.lastSnapshot)
         } finally {
             repository.close()
             scope.cancel()
@@ -1902,13 +2832,18 @@ private fun sampleTrack(id: String, title: String): Track {
     )
 }
 
+private fun sampleTrackEntities(tracks: List<Track>): List<TrackEntity> {
+    return tracks.map { track -> sampleTrackEntity(track.id, track.title) }
+}
+
 private fun sampleNavidromeTrack(
     id: String = "nav-track-1",
+    sourceId: String = "nav-source",
     songId: String = "song-1",
 ): Track {
     return sampleTrack(id, "Remote Song").copy(
-        sourceId = "nav-source",
-        mediaLocator = buildNavidromeSongLocator("nav-source", songId),
+        sourceId = sourceId,
+        mediaLocator = buildNavidromeSongLocator(sourceId, songId),
     )
 }
 
@@ -1921,6 +2856,53 @@ private fun sampleExternalOpenTrack(locator: String): Track {
         durationMs = 120_000L,
         mediaLocator = locator,
         relativePath = "External Song.mp3",
+    )
+}
+
+private fun sampleTrackEntity(track: Track): TrackEntity {
+    return TrackEntity(
+        id = track.id,
+        sourceId = track.sourceId,
+        title = track.title,
+        artistId = track.artistId,
+        artistName = track.artistName,
+        albumId = track.albumId,
+        albumTitle = track.albumTitle,
+        durationMs = track.durationMs,
+        trackNumber = track.trackNumber,
+        discNumber = track.discNumber,
+        mediaLocator = track.mediaLocator,
+        relativePath = track.relativePath,
+        artworkLocator = track.artworkLocator,
+        sizeBytes = track.sizeBytes,
+        modifiedAt = track.modifiedAt,
+        addedAt = track.addedAt,
+        bitDepth = track.bitDepth,
+        samplingRate = track.samplingRate,
+        bitRate = track.bitRate,
+        channelCount = track.channelCount,
+    )
+}
+
+private fun sampleNavidromeSourceEntity(
+    sourceId: String,
+    indexMode: ImportSourceIndexMode,
+): ImportSourceEntity {
+    return ImportSourceEntity(
+        id = sourceId,
+        type = ImportSourceType.NAVIDROME.name,
+        label = "Navidrome $sourceId",
+        rootReference = "https://$sourceId.example.com",
+        server = null,
+        shareName = null,
+        directoryPath = null,
+        username = "demo",
+        credentialKey = "credential-$sourceId",
+        allowInsecureTls = false,
+        enabled = true,
+        lastScannedAt = 1L,
+        createdAt = 1L,
+        indexMode = indexMode.name,
     )
 }
 

@@ -72,6 +72,7 @@ import top.iwesley.lyn.music.core.model.LyricsHttpResponse
 import top.iwesley.lyn.music.core.model.LyricsRequest
 import top.iwesley.lyn.music.core.model.MenuBarLyricsControlsPreferencesStore
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
+import top.iwesley.lyn.music.core.model.NavidromeLibraryProbe
 import top.iwesley.lyn.music.core.model.NavidromeSourceDraft
 import top.iwesley.lyn.music.core.model.NavidromeLocatorRuntime
 import top.iwesley.lyn.music.core.model.NonNavidromeAudioScanResult
@@ -144,6 +145,7 @@ import top.iwesley.lyn.music.domain.readRemotePlaybackUrlCandidateWithFallback
 import top.iwesley.lyn.music.domain.scanEmbyLibrary
 import top.iwesley.lyn.music.domain.scanNavidromeLibrary
 import top.iwesley.lyn.music.domain.scanNavidromeLibraryStreaming
+import top.iwesley.lyn.music.domain.probeNavidromeLibrary
 import top.iwesley.lyn.music.domain.scanSubsonicLibrary
 import top.iwesley.lyn.music.domain.testEmbyConnection
 import top.iwesley.lyn.music.domain.testNavidromeConnection
@@ -379,6 +381,9 @@ private class JvmAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
     private val mutableAutoPlayOnStartup = MutableStateFlow(readAutoPlayOnStartup())
     private val mutableLibrarySourceFilter = MutableStateFlow(readLibrarySourceFilter(KEY_LIBRARY_SOURCE_FILTER))
     private val mutableFavoritesSourceFilter = MutableStateFlow(readLibrarySourceFilter(KEY_FAVORITES_SOURCE_FILTER))
+    private val mutableOnlineLibrarySourceId = MutableStateFlow(readNullablePreference(KEY_ONLINE_LIBRARY_SOURCE_ID))
+    private val mutableOnlineFavoritesSourceId = MutableStateFlow(readNullablePreference(KEY_ONLINE_FAVORITES_SOURCE_ID))
+    private val mutableOnlinePlaylistsSourceId = MutableStateFlow(readNullablePreference(KEY_ONLINE_PLAYLISTS_SOURCE_ID))
     private val mutableLibraryTrackSortMode = MutableStateFlow(
         readTrackSortMode(KEY_LIBRARY_TRACK_SORT_MODE, TrackSortMode.TITLE),
     )
@@ -415,6 +420,9 @@ private class JvmAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
     override val playerArtworkStyle: StateFlow<PlayerArtworkStyle> = mutablePlayerArtworkStyle.asStateFlow()
     override val librarySourceFilter: StateFlow<LibrarySourceFilter> = mutableLibrarySourceFilter.asStateFlow()
     override val favoritesSourceFilter: StateFlow<LibrarySourceFilter> = mutableFavoritesSourceFilter.asStateFlow()
+    override val onlineLibrarySourceId: StateFlow<String?> = mutableOnlineLibrarySourceId.asStateFlow()
+    override val onlineFavoritesSourceId: StateFlow<String?> = mutableOnlineFavoritesSourceId.asStateFlow()
+    override val onlinePlaylistsSourceId: StateFlow<String?> = mutableOnlinePlaylistsSourceId.asStateFlow()
     override val libraryTrackSortMode: StateFlow<TrackSortMode> = mutableLibraryTrackSortMode.asStateFlow()
     override val favoritesTrackSortMode: StateFlow<TrackSortMode> = mutableFavoritesTrackSortMode.asStateFlow()
 
@@ -480,6 +488,21 @@ private class JvmAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
         properties.setProperty(KEY_FAVORITES_SOURCE_FILTER, filter.name)
         persistProperties(properties)
         mutableFavoritesSourceFilter.value = filter
+    }
+
+    override suspend fun setOnlineLibrarySourceId(sourceId: String?) {
+        setNullablePreference(KEY_ONLINE_LIBRARY_SOURCE_ID, sourceId)
+        mutableOnlineLibrarySourceId.value = normalizeNullablePreference(sourceId)
+    }
+
+    override suspend fun setOnlineFavoritesSourceId(sourceId: String?) {
+        setNullablePreference(KEY_ONLINE_FAVORITES_SOURCE_ID, sourceId)
+        mutableOnlineFavoritesSourceId.value = normalizeNullablePreference(sourceId)
+    }
+
+    override suspend fun setOnlinePlaylistsSourceId(sourceId: String?) {
+        setNullablePreference(KEY_ONLINE_PLAYLISTS_SOURCE_ID, sourceId)
+        mutableOnlinePlaylistsSourceId.value = normalizeNullablePreference(sourceId)
     }
 
     override suspend fun setLibraryTrackSortMode(mode: TrackSortMode) {
@@ -586,6 +609,25 @@ private class JvmAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
     private fun readLibrarySourceFilter(key: String): LibrarySourceFilter {
         val name = loadProperties().getProperty(key)
         return LibrarySourceFilter.entries.firstOrNull { it.name == name } ?: LibrarySourceFilter.ALL
+    }
+
+    private fun readNullablePreference(key: String): String? {
+        return normalizeNullablePreference(loadProperties().getProperty(key))
+    }
+
+    private fun normalizeNullablePreference(value: String?): String? {
+        return value?.trim()?.takeIf { it.isNotBlank() }
+    }
+
+    private fun setNullablePreference(key: String, value: String?) {
+        val properties = loadProperties()
+        val normalizedValue = normalizeNullablePreference(value)
+        if (normalizedValue == null) {
+            properties.remove(key)
+        } else {
+            properties.setProperty(key, normalizedValue)
+        }
+        persistProperties(properties)
     }
 
     private fun readTrackSortMode(key: String, defaultMode: TrackSortMode): TrackSortMode {
@@ -1171,6 +1213,15 @@ private class JvmImportSourceGateway(
 
     override suspend fun testNavidrome(draft: NavidromeSourceDraft) {
         testNavidromeConnection(
+            draft = draft,
+            httpClient = navidromeHttpClient,
+            logger = logger,
+            timeoutMillis = IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS,
+        )
+    }
+
+    override suspend fun probeNavidrome(draft: NavidromeSourceDraft): NavidromeLibraryProbe {
+        return probeNavidromeLibrary(
             draft = draft,
             httpClient = navidromeHttpClient,
             logger = logger,
@@ -2903,6 +2954,9 @@ private const val KEY_AUTO_PLAY_ON_STARTUP = "auto_play_on_startup"
 private const val KEY_PLAYER_ARTWORK_STYLE = "player_artwork_style"
 private const val KEY_LIBRARY_SOURCE_FILTER = "library_source_filter"
 private const val KEY_FAVORITES_SOURCE_FILTER = "favorites_source_filter"
+private const val KEY_ONLINE_LIBRARY_SOURCE_ID = "online_library_source_id"
+private const val KEY_ONLINE_FAVORITES_SOURCE_ID = "online_favorites_source_id"
+private const val KEY_ONLINE_PLAYLISTS_SOURCE_ID = "online_playlists_source_id"
 private const val KEY_LIBRARY_TRACK_SORT_MODE = "library_track_sort_mode"
 private const val KEY_FAVORITES_TRACK_SORT_MODE = "favorites_track_sort_mode"
 private const val MAX_RECENT_VLC_LOGS = 8

@@ -17,6 +17,7 @@ import top.iwesley.lyn.music.core.model.Artist
 import top.iwesley.lyn.music.core.model.ImportScanSummary
 import top.iwesley.lyn.music.core.model.ImportSource
 import top.iwesley.lyn.music.core.model.ImportSourceType
+import top.iwesley.lyn.music.core.model.NavidromeLibraryProbe
 import top.iwesley.lyn.music.core.model.NavidromeSourceDraft
 import top.iwesley.lyn.music.core.model.OfflineDownloadStatus
 import top.iwesley.lyn.music.core.model.SambaSourceDraft
@@ -398,6 +399,10 @@ private class FakeImportSourceRepository(
 
     override suspend fun testNavidromeSource(draft: NavidromeSourceDraft): Result<Unit> = Result.success(Unit)
 
+    override suspend fun probeNavidromeSource(draft: NavidromeSourceDraft): Result<NavidromeLibraryProbe> {
+        return Result.success(NavidromeLibraryProbe(totalTrackCount = null))
+    }
+
     override suspend fun testUpdatedNavidromeSource(
         sourceId: String,
         draft: NavidromeSourceDraft,
@@ -405,6 +410,20 @@ private class FakeImportSourceRepository(
     ): Result<Unit> = Result.success(Unit)
 
     override suspend fun addNavidromeSource(draft: NavidromeSourceDraft): Result<ImportScanSummary> = Result.success(testScanSummary())
+
+    override suspend fun addNavidromeSourceOnline(
+        draft: NavidromeSourceDraft,
+        remoteTrackCount: Int?,
+    ): Result<ImportScanSummary> = Result.success(testScanSummary())
+
+    override suspend fun probeExistingNavidromeSource(sourceId: String): Result<NavidromeLibraryProbe> {
+        return Result.success(NavidromeLibraryProbe(totalTrackCount = null))
+    }
+
+    override suspend fun switchNavidromeSourceToOnline(
+        sourceId: String,
+        remoteTrackCount: Int?,
+    ): Result<ImportScanSummary> = Result.success(testScanSummary(sourceId))
 
     override suspend fun updateNavidromeSource(
         sourceId: String,
@@ -437,6 +456,9 @@ private class FakeLibrarySourceFilterPreferencesStore(
     override val favoritesSourceFilter = MutableStateFlow(favoritesSourceFilter)
     override val libraryTrackSortMode = MutableStateFlow(libraryTrackSortMode)
     override val favoritesTrackSortMode = MutableStateFlow(favoritesTrackSortMode)
+    override val onlineLibrarySourceId = MutableStateFlow<String?>(null)
+    override val onlineFavoritesSourceId = MutableStateFlow<String?>(null)
+    override val onlinePlaylistsSourceId = MutableStateFlow<String?>(null)
 
     override suspend fun setLibrarySourceFilter(filter: LibrarySourceFilter) {
         librarySourceFilter.value = filter
@@ -452,6 +474,18 @@ private class FakeLibrarySourceFilterPreferencesStore(
 
     override suspend fun setFavoritesTrackSortMode(mode: TrackSortMode) {
         favoritesTrackSortMode.value = mode
+    }
+
+    override suspend fun setOnlineLibrarySourceId(sourceId: String?) {
+        onlineLibrarySourceId.value = sourceId
+    }
+
+    override suspend fun setOnlineFavoritesSourceId(sourceId: String?) {
+        onlineFavoritesSourceId.value = sourceId
+    }
+
+    override suspend fun setOnlinePlaylistsSourceId(sourceId: String?) {
+        onlinePlaylistsSourceId.value = sourceId
     }
 }
 

@@ -22,11 +22,13 @@ import top.iwesley.lyn.music.core.model.ImportScanProgressSink
 import top.iwesley.lyn.music.core.model.ImportScanFailure
 import top.iwesley.lyn.music.core.model.ImportScanReport
 import top.iwesley.lyn.music.core.model.ImportStreamingScanReport
+import top.iwesley.lyn.music.core.model.ImportSourceIndexMode
 import top.iwesley.lyn.music.core.model.ImportSourceGateway
 import top.iwesley.lyn.music.core.model.ImportSourceType
 import top.iwesley.lyn.music.core.model.ImportTrackBatchSink
 import top.iwesley.lyn.music.core.model.ImportedTrackCandidate
 import top.iwesley.lyn.music.core.model.LocalFolderSelection
+import top.iwesley.lyn.music.core.model.NavidromeLibraryProbe
 import top.iwesley.lyn.music.core.model.NavidromeSourceDraft
 import top.iwesley.lyn.music.core.model.SambaSourceDraft
 import top.iwesley.lyn.music.core.model.SecureCredentialStore
@@ -465,6 +467,246 @@ class ImportSourceRepositoryTest {
         val updated = assertNotNull(database.importSourceDao().getById("nav-1"))
         assertEquals("https://nav2.example.com", updated.rootReference)
         assertEquals("demo2", updated.username)
+        assertEquals("old-password", credentials.get("credential-nav-1"))
+    }
+
+    @Test
+    fun `adding navidrome source online persists source and index state`() = runTest {
+        val database = createImportTestDatabase()
+        val credentials = ImportTestSecureCredentialStore()
+        val repository = createRepository(database = database, secureCredentialStore = credentials)
+
+        val summary = repository.addNavidromeSourceOnline(
+            draft = NavidromeSourceDraft(
+                label = "Navidrome Online",
+                baseUrl = "https://nav.example.com",
+                username = "demo",
+                password = "secret",
+            ),
+            remoteTrackCount = 42,
+        ).getOrThrow()
+
+        val stored = assertNotNull(database.importSourceDao().getById(summary.sourceId))
+        assertEquals(ImportSourceIndexMode.ONLINE.name, stored.indexMode)
+        assertEquals("https://nav.example.com", stored.rootReference)
+        assertEquals("demo", stored.username)
+        assertEquals("secret", credentials.get(stored.credentialKey.orEmpty()))
+        val indexState = assertNotNull(database.importIndexStateDao().getBySourceId(summary.sourceId))
+        assertEquals(0, indexState.trackCount)
+        assertEquals(42, indexState.remoteTrackCount)
+        assertEquals(42, summary.discoveredAudioFileCount)
+        assertEquals(0, summary.importedTrackCount)
+    }
+
+    @Test
+    fun `updating online navidrome source writes new credential key after db commit`() = runTest {
+        val database = createImportTestDatabase()
+        database.importSourceDao().upsert(
+            navidromeSourceEntity(
+                id = "nav-1",
+                rootReference = "https://old.example.com",
+                username = "demo",
+                credentialKey = "credential-nav-1",
+                indexMode = ImportSourceIndexMode.ONLINE.name,
+            ),
+        )
+        database.importIndexStateDao().upsert(
+            top.iwesley.lyn.music.data.db.ImportIndexStateEntity(
+                sourceId = "nav-1",
+                trackCount = 7,
+                remoteTrackCount = 11,
+                lastScannedAt = 1L,
+                lastError = "old error",
+            ),
+        )
+        val credentials = ImportTestSecureCredentialStore(mutableMapOf("credential-nav-1" to "old-password"))
+        val gateway = RecordingImportSourceGateway(navidromeProbe = NavidromeLibraryProbe(totalTrackCount = 77))
+        val repository = createRepository(database = database, gateway = gateway, secureCredentialStore = credentials)
+
+        val summary = repository.updateNavidromeSource(
+            sourceId = "nav-1",
+            draft = NavidromeSourceDraft(
+                label = "Navidrome",
+                baseUrl = "https://new.example.com",
+                username = "demo2",
+                password = "new-password",
+            ),
+            keepExistingCredentialWhenBlankPassword = true,
+        ).getOrThrow()
+
+        val stored = assertNotNull(database.importSourceDao().getById("nav-1"))
+        val newCredentialKey = assertNotNull(stored.credentialKey)
+        assertTrue(newCredentialKey != "credential-nav-1")
+        assertEquals(ImportSourceIndexMode.ONLINE.name, stored.indexMode)
+        assertEquals("https://new.example.com", stored.rootReference)
+        assertEquals("demo2", stored.username)
+        assertNull(credentials.get("credential-nav-1"))
+        assertEquals("new-password", credentials.get(newCredentialKey))
+        val indexState = assertNotNull(database.importIndexStateDao().getBySourceId("nav-1"))
+        assertEquals(7, indexState.trackCount)
+        assertEquals(77, indexState.remoteTrackCount)
+        assertNull(indexState.lastError)
+        assertEquals(1, gateway.navidromeProbeCount)
+        assertEquals("new-password", gateway.lastNavidromeProbeDraft?.password)
+        assertEquals(77, summary.discoveredAudioFileCount)
+    }
+
+    @Test
+    fun `updating online navidrome source rejects unsupported online paging without writing state`() = runTest {
+        val database = createImportTestDatabase()
+        database.importSourceDao().upsert(
+            navidromeSourceEntity(
+                id = "nav-1",
+                rootReference = "https://old.example.com",
+                username = "demo",
+                credentialKey = "credential-nav-1",
+                indexMode = ImportSourceIndexMode.ONLINE.name,
+            ),
+        )
+        database.importIndexStateDao().upsert(
+            top.iwesley.lyn.music.data.db.ImportIndexStateEntity(
+                sourceId = "nav-1",
+                trackCount = 7,
+                remoteTrackCount = 11,
+                lastScannedAt = 1L,
+                lastError = "old error",
+            ),
+        )
+        val credentials = ImportTestSecureCredentialStore(mutableMapOf("credential-nav-1" to "old-password"))
+        val gateway = RecordingImportSourceGateway(
+            navidromeProbe = NavidromeLibraryProbe(
+                totalTrackCount = null,
+                supportsOnlineLibraryPaging = false,
+            ),
+        )
+        val repository = createRepository(database = database, gateway = gateway, secureCredentialStore = credentials)
+
+        val result = repository.updateNavidromeSource(
+            sourceId = "nav-1",
+            draft = NavidromeSourceDraft(
+                label = "Navidrome",
+                baseUrl = "https://new.example.com",
+                username = "demo2",
+                password = "new-password",
+            ),
+            keepExistingCredentialWhenBlankPassword = true,
+        )
+
+        assertTrue(result.isFailure)
+        assertEquals(
+            "Navidrome 在线模式需要服务器支持 native 歌曲分页接口。",
+            result.exceptionOrNull()?.message,
+        )
+        val stored = assertNotNull(database.importSourceDao().getById("nav-1"))
+        assertEquals("https://old.example.com", stored.rootReference)
+        assertEquals("demo", stored.username)
+        assertEquals("credential-nav-1", stored.credentialKey)
+        assertEquals("old-password", credentials.get("credential-nav-1"))
+        val indexState = assertNotNull(database.importIndexStateDao().getBySourceId("nav-1"))
+        assertEquals(7, indexState.trackCount)
+        assertEquals(11, indexState.remoteTrackCount)
+        assertEquals("old error", indexState.lastError)
+    }
+
+    @Test
+    fun `updating online navidrome source accepts online paging without remote count`() = runTest {
+        val database = createImportTestDatabase()
+        database.importSourceDao().upsert(
+            navidromeSourceEntity(
+                id = "nav-1",
+                rootReference = "https://old.example.com",
+                username = "demo",
+                credentialKey = "credential-nav-1",
+                indexMode = ImportSourceIndexMode.ONLINE.name,
+            ),
+        )
+        database.importIndexStateDao().upsert(
+            top.iwesley.lyn.music.data.db.ImportIndexStateEntity(
+                sourceId = "nav-1",
+                trackCount = 7,
+                remoteTrackCount = 11,
+                lastScannedAt = 1L,
+                lastError = "old error",
+            ),
+        )
+        val credentials = ImportTestSecureCredentialStore(mutableMapOf("credential-nav-1" to "old-password"))
+        val gateway = RecordingImportSourceGateway(
+            navidromeProbe = NavidromeLibraryProbe(
+                totalTrackCount = null,
+                supportsOnlineLibraryPaging = true,
+            ),
+        )
+        val repository = createRepository(database = database, gateway = gateway, secureCredentialStore = credentials)
+
+        val summary = repository.updateNavidromeSource(
+            sourceId = "nav-1",
+            draft = NavidromeSourceDraft(
+                label = "Navidrome",
+                baseUrl = "https://new.example.com",
+                username = "demo2",
+                password = "",
+            ),
+            keepExistingCredentialWhenBlankPassword = true,
+        ).getOrThrow()
+
+        val stored = assertNotNull(database.importSourceDao().getById("nav-1"))
+        assertEquals(ImportSourceIndexMode.ONLINE.name, stored.indexMode)
+        assertEquals("https://new.example.com", stored.rootReference)
+        assertEquals("demo2", stored.username)
+        assertEquals("credential-nav-1", stored.credentialKey)
+        assertEquals("old-password", credentials.get("credential-nav-1"))
+        val indexState = assertNotNull(database.importIndexStateDao().getBySourceId("nav-1"))
+        assertEquals(7, indexState.trackCount)
+        assertNull(indexState.remoteTrackCount)
+        assertNull(indexState.lastError)
+        assertEquals(0, summary.discoveredAudioFileCount)
+    }
+
+    @Test
+    fun `rescanning online navidrome source rejects unsupported online paging without refreshing state`() = runTest {
+        val database = createImportTestDatabase()
+        database.importSourceDao().upsert(
+            navidromeSourceEntity(
+                id = "nav-1",
+                rootReference = "https://old.example.com",
+                username = "demo",
+                credentialKey = "credential-nav-1",
+                indexMode = ImportSourceIndexMode.ONLINE.name,
+            ),
+        )
+        database.importIndexStateDao().upsert(
+            top.iwesley.lyn.music.data.db.ImportIndexStateEntity(
+                sourceId = "nav-1",
+                trackCount = 7,
+                remoteTrackCount = 11,
+                lastScannedAt = 1L,
+                lastError = "old error",
+            ),
+        )
+        val credentials = ImportTestSecureCredentialStore(mutableMapOf("credential-nav-1" to "old-password"))
+        val gateway = RecordingImportSourceGateway(
+            navidromeProbe = NavidromeLibraryProbe(
+                totalTrackCount = null,
+                supportsOnlineLibraryPaging = false,
+            ),
+        )
+        val repository = createRepository(database = database, gateway = gateway, secureCredentialStore = credentials)
+
+        val result = repository.rescanSource("nav-1")
+
+        assertTrue(result.isFailure)
+        assertEquals(
+            "Navidrome 在线模式需要服务器支持 native 歌曲分页接口。",
+            result.exceptionOrNull()?.message,
+        )
+        val stored = assertNotNull(database.importSourceDao().getById("nav-1"))
+        assertEquals(ImportSourceIndexMode.ONLINE.name, stored.indexMode)
+        assertNull(stored.lastScannedAt)
+        val indexState = assertNotNull(database.importIndexStateDao().getBySourceId("nav-1"))
+        assertEquals(7, indexState.trackCount)
+        assertEquals(11, indexState.remoteTrackCount)
+        assertEquals(1L, indexState.lastScannedAt)
+        assertEquals("old error", indexState.lastError)
         assertEquals("old-password", credentials.get("credential-nav-1"))
     }
 
@@ -1130,6 +1372,7 @@ private fun navidromeSourceEntity(
     wanRootReference: String? = null,
     username: String,
     credentialKey: String,
+    indexMode: String = ImportSourceIndexMode.LOCAL_INDEX.name,
 ): ImportSourceEntity {
     return ImportSourceEntity(
         id = id,
@@ -1146,6 +1389,7 @@ private fun navidromeSourceEntity(
         lastScannedAt = null,
         createdAt = 1L,
         wanRootReference = wanRootReference,
+        indexMode = indexMode,
     )
 }
 
@@ -1154,6 +1398,7 @@ private class RecordingImportSourceGateway(
     private val scanReport: ImportScanReport = ImportScanReport(tracks = emptyList()),
     private val navidromeStreamingBatches: List<List<ImportedTrackCandidate>>? = null,
     private val navidromeStreamingError: Throwable? = null,
+    private val navidromeProbe: NavidromeLibraryProbe = NavidromeLibraryProbe(totalTrackCount = null),
     private val navidromeStreamingHandler: (suspend (
         NavidromeSourceDraft,
         String,
@@ -1171,7 +1416,9 @@ private class RecordingImportSourceGateway(
     var navidromeScanCount: Int = 0
     var navidromeProgressAwareScanCount: Int = 0
     var navidromeStreamingScanCount: Int = 0
+    var navidromeProbeCount: Int = 0
     var lastNavidromeScanDraft: NavidromeSourceDraft? = null
+    var lastNavidromeProbeDraft: NavidromeSourceDraft? = null
     var subsonicTestCount: Int = 0
     var subsonicScanCount: Int = 0
     var lastSubsonicScanDraft: SubsonicSourceDraft? = null
@@ -1214,6 +1461,12 @@ private class RecordingImportSourceGateway(
 
     override suspend fun testNavidrome(draft: NavidromeSourceDraft) {
         navidromeTestCount += 1
+    }
+
+    override suspend fun probeNavidrome(draft: NavidromeSourceDraft): NavidromeLibraryProbe {
+        navidromeProbeCount += 1
+        lastNavidromeProbeDraft = draft
+        return navidromeProbe
     }
 
     override suspend fun scanNavidrome(draft: NavidromeSourceDraft, sourceId: String): ImportScanReport {

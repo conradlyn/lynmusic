@@ -51,12 +51,14 @@ data class ImportSourceEntity(
     val createdAt: Long,
     val authMode: String = "PASSWORD",
     val wanRootReference: String? = null,
+    val indexMode: String = "LOCAL_INDEX",
 )
 
 @Entity(tableName = "import_index_state")
 data class ImportIndexStateEntity(
     @PrimaryKey val sourceId: String,
     val trackCount: Int,
+    val remoteTrackCount: Int? = null,
     val lastScannedAt: Long?,
     val lastError: String?,
 )
@@ -161,6 +163,8 @@ data class PlaybackQueueSnapshotEntity(
     @PrimaryKey val id: Int = 0,
     val queueTrackIds: String,
     val orderedQueueTrackIds: String = "",
+    val queueTracksJson: String = "",
+    val orderedQueueTracksJson: String = "",
     val currentIndex: Int,
     val positionMs: Long,
     val mode: String,
@@ -552,6 +556,23 @@ interface PlaybackQueueSnapshotDao {
 
     @Upsert
     suspend fun upsert(item: PlaybackQueueSnapshotEntity)
+
+    @Query(
+        """
+        UPDATE playback_queue_snapshot
+        SET currentIndex = :currentIndex,
+            positionMs = :positionMs,
+            mode = :mode,
+            updatedAt = :updatedAt
+        WHERE id = 0
+        """,
+    )
+    suspend fun updateCursor(
+        currentIndex: Int,
+        positionMs: Long,
+        mode: String,
+        updatedAt: Long,
+    ): Int
 }
 
 @Dao
@@ -820,7 +841,7 @@ interface OfflineDownloadDao {
         OfflineDownloadEntity::class,
         ImportTrackStageEntity::class,
     ],
-    version = 17,
+    version = 19,
 )
 @ConstructedBy(LynMusicDatabaseConstructor::class)
 abstract class LynMusicDatabase : RoomDatabase() {
@@ -869,6 +890,8 @@ fun buildLynMusicDatabase(builder: Builder<LynMusicDatabase>): LynMusicDatabase 
         .addMigrations(MIGRATION_14_15)
         .addMigrations(MIGRATION_15_16)
         .addMigrations(MIGRATION_16_17)
+        .addMigrations(MIGRATION_17_18)
+        .addMigrations(MIGRATION_18_19)
         .build()
 }
 
@@ -1146,6 +1169,40 @@ val MIGRATION_15_16: Migration = object : Migration(15, 16) {
 val MIGRATION_16_17: Migration = object : Migration(16, 17) {
     override fun migrate(connection: SQLiteConnection) {
         connection.createImportTrackStageTable()
+    }
+}
+
+val MIGRATION_17_18: Migration = object : Migration(17, 18) {
+    override fun migrate(connection: SQLiteConnection) {
+        connection.execSql(
+            """
+            ALTER TABLE import_source
+            ADD COLUMN indexMode TEXT NOT NULL DEFAULT 'LOCAL_INDEX'
+            """.trimIndent(),
+        )
+        connection.execSql(
+            """
+            ALTER TABLE import_index_state
+            ADD COLUMN remoteTrackCount INTEGER
+            """.trimIndent(),
+        )
+    }
+}
+
+val MIGRATION_18_19: Migration = object : Migration(18, 19) {
+    override fun migrate(connection: SQLiteConnection) {
+        connection.execSql(
+            """
+            ALTER TABLE playback_queue_snapshot
+            ADD COLUMN queueTracksJson TEXT NOT NULL DEFAULT ''
+            """.trimIndent(),
+        )
+        connection.execSql(
+            """
+            ALTER TABLE playback_queue_snapshot
+            ADD COLUMN orderedQueueTracksJson TEXT NOT NULL DEFAULT ''
+            """.trimIndent(),
+        )
     }
 }
 

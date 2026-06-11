@@ -79,7 +79,7 @@ class RoomFavoritesRepository(
         database.lyricsCacheDao().observeArtworkLocators(),
     ) { favorites, tracks, sources, artworkRows ->
         val enabledSourceIds = sources.asSequence()
-            .filter { it.enabled }
+            .filter { it.isLocalIndexedEnabled() }
             .map { it.id }
             .toSet()
         val artworkOverrides = effectiveArtworkOverridesByTrackId(artworkRows)
@@ -122,7 +122,10 @@ class RoomFavoritesRepository(
         return runCatching {
             val failures = mutableListOf<String>()
             database.importSourceDao().getAll()
-                .filter { (it.subsonicCompatibleSourceType() != null || it.isEmbySource()) && it.enabled }
+                .filter {
+                    (it.subsonicCompatibleSourceType() != null || it.isEmbySource()) &&
+                        it.isLocalIndexedEnabled()
+                }
                 .forEach { source ->
                     runCatching {
                         if (source.isEmbySource()) {
@@ -262,9 +265,11 @@ class RoomFavoritesRepository(
                     ?: nextNewFavoritedAt--,
             )
         }
-        database.favoriteTrackDao().deleteBySourceId(source.id)
-        if (favoriteRows.isNotEmpty()) {
-            database.favoriteTrackDao().upsertAll(favoriteRows)
+        database.immediateWriteTransaction {
+            database.favoriteTrackDao().deleteBySourceId(source.id)
+            if (favoriteRows.isNotEmpty()) {
+                database.favoriteTrackDao().upsertAll(favoriteRows)
+            }
         }
         logger.info(FAVORITES_LOG_TAG) { "refresh-emby-complete source=${source.id} favorites=${favoriteRows.size}" }
     }
@@ -306,16 +311,18 @@ class RoomFavoritesRepository(
                         ?: nextNewFavoritedAt--,
                 )
             }
-        database.favoriteTrackDao().deleteBySourceId(source.id)
-        if (favoriteRows.isNotEmpty()) {
-            database.favoriteTrackDao().upsertAll(favoriteRows)
+        database.immediateWriteTransaction {
+            database.favoriteTrackDao().deleteBySourceId(source.id)
+            if (favoriteRows.isNotEmpty()) {
+                database.favoriteTrackDao().upsertAll(favoriteRows)
+            }
         }
         logger.info(FAVORITES_LOG_TAG) { "refresh-complete source=${source.id} favorites=${favoriteRows.size}" }
     }
 
     private suspend fun resolveSubsonicCompatibleSource(sourceId: String): NavidromeResolvedSource? {
         val source = database.importSourceDao().getById(sourceId)
-            ?.takeIf { it.subsonicCompatibleSourceType() != null && it.enabled }
+            ?.takeIf { it.subsonicCompatibleSourceType() != null && it.isLocalIndexedEnabled() }
             ?: return null
         return source.toSubsonicCompatibleResolvedSource()
     }

@@ -161,7 +161,7 @@ class RoomMusicTagsRepository(
 internal suspend fun rebuildLibrarySummaries(database: LynMusicDatabase) {
     val enabledSourceIds = database.importSourceDao().getAll()
         .asSequence()
-        .filter { it.enabled }
+        .filter { it.isLocalIndexedEnabled() }
         .map { it.id }
         .toSet()
     val tracks = database.trackDao().getAll()

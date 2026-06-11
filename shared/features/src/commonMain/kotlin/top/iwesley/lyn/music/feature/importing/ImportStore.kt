@@ -7,6 +7,7 @@ import top.iwesley.lyn.music.core.model.ImportScanPhase
 import top.iwesley.lyn.music.core.model.ImportScanProgress
 import top.iwesley.lyn.music.core.model.ImportScanProgressSink
 import top.iwesley.lyn.music.core.model.ImportScanSummary
+import top.iwesley.lyn.music.core.model.ImportSourceIndexMode
 import top.iwesley.lyn.music.core.model.ImportSourceType
 import top.iwesley.lyn.music.core.model.LocalFolderPickerMode
 import top.iwesley.lyn.music.core.model.LocalFolderSelection
@@ -37,6 +38,16 @@ data class RemoteSourceEditorState(
     val subsonicAuthMode: SubsonicAuthMode = SubsonicAuthMode.PASSWORD,
     val hasStoredCredential: Boolean = false,
     val keepExistingCredential: Boolean = true,
+)
+
+sealed interface PendingLargeNavidromeAction {
+    data class Create(val draft: NavidromeSourceDraft) : PendingLargeNavidromeAction
+    data class Rescan(val sourceId: String, val sourceLabel: String) : PendingLargeNavidromeAction
+}
+
+data class PendingLargeNavidromeImport(
+    val action: PendingLargeNavidromeAction,
+    val remoteTrackCount: Int,
 )
 
 sealed interface ImportScanOperation {
@@ -82,6 +93,7 @@ data class ImportState(
     val activeScanOperation: ImportScanOperation? = null,
     val scanProgress: ImportScanProgress? = null,
     val latestScanSummariesBySourceId: Map<String, ImportScanSummary> = emptyMap(),
+    val pendingLargeNavidromeImport: PendingLargeNavidromeImport? = null,
     val message: String? = null,
     val testMessage: String? = null,
 )
@@ -96,6 +108,9 @@ sealed interface ImportIntent {
     data object AddWebDavSource : ImportIntent
     data object TestNavidromeSource : ImportIntent
     data object AddNavidromeSource : ImportIntent
+    data object ConfirmLargeNavidromeOnlineMode : ImportIntent
+    data object ConfirmLargeNavidromeFullImport : ImportIntent
+    data object DismissLargeNavidromeChoice : ImportIntent
     data object TestSubsonicSource : ImportIntent
     data object AddSubsonicSource : ImportIntent
     data object TestEmbySource : ImportIntent
@@ -287,26 +302,54 @@ class ImportStore(
                     password = state.value.navidromePassword,
                     allowBlankPassword = false,
                 ) ?: return
-                runScanningImport(ImportScanOperation.CreateRemote(ImportSourceType.NAVIDROME)) { progressSink ->
-                    repository.addNavidromeSource(draft, progressSink)
-                        .onSuccess { summary ->
-                            updateState {
-                                it.copy(
-                                    creatingSourceType = null,
-                                    navidromeLabel = "",
-                                    navidromeBaseUrl = "",
-                                    navidromeWanBaseUrl = "",
-                                    navidromeUsername = "",
-                                    navidromePassword = "",
-                                    testMessage = null,
-                                )
+                runImport(ImportScanOperation.CreateRemote(ImportSourceType.NAVIDROME)) {
+                    repository.probeNavidromeSource(draft)
+                        .onSuccess { probe ->
+                            val totalTrackCount = probe.totalTrackCount
+                            if (
+                                probe.supportsOnlineLibraryPaging &&
+                                totalTrackCount != null &&
+                                totalTrackCount > LARGE_NAVIDROME_LIBRARY_TRACK_THRESHOLD
+                            ) {
+                                updateState {
+                                    it.copy(
+                                        pendingLargeNavidromeImport = PendingLargeNavidromeImport(
+                                            action = PendingLargeNavidromeAction.Create(draft),
+                                            remoteTrackCount = totalTrackCount,
+                                        ),
+                                        testMessage = null,
+                                    )
+                                }
+                            } else {
+                                importNavidromeFull(draft)
                             }
-                            recordScanSummary(summary)
-                            setMessage(scanSuccessMessage("Navidrome 音乐源已导入。", summary))
                         }
                         .onFailure { setCreateOrPageMessage(ImportSourceType.NAVIDROME, "Navidrome 导入失败: ${it.message}") }
                 }
             }
+
+            ImportIntent.ConfirmLargeNavidromeOnlineMode -> {
+                val pending = state.value.pendingLargeNavidromeImport ?: return
+                when (val action = pending.action) {
+                    is PendingLargeNavidromeAction.Create -> importNavidromeOnline(pending)
+                    is PendingLargeNavidromeAction.Rescan -> switchNavidromeRescanToOnline(
+                        sourceId = action.sourceId,
+                        sourceLabel = action.sourceLabel,
+                        remoteTrackCount = pending.remoteTrackCount,
+                    )
+                }
+            }
+
+            ImportIntent.ConfirmLargeNavidromeFullImport -> {
+                val pending = state.value.pendingLargeNavidromeImport ?: return
+                updateState { it.copy(pendingLargeNavidromeImport = null) }
+                when (val action = pending.action) {
+                    is PendingLargeNavidromeAction.Create -> importNavidromeFull(action.draft)
+                    is PendingLargeNavidromeAction.Rescan -> rescanSourceFull(action.sourceId)
+                }
+            }
+
+            ImportIntent.DismissLargeNavidromeChoice -> updateState { it.copy(pendingLargeNavidromeImport = null) }
 
             ImportIntent.TestSubsonicSource -> {
                 val draft = subsonicDraftOrNull(
@@ -409,6 +452,7 @@ class ImportStore(
                     state.clearCreateDraft(intent.type).copy(
                         creatingSourceType = intent.type,
                         editingSource = null,
+                        pendingLargeNavidromeImport = null,
                         testMessage = null,
                     )
                 }
@@ -417,9 +461,13 @@ class ImportStore(
             ImportIntent.DismissRemoteSourceCreator -> updateState { state ->
                 val type = state.creatingSourceType
                 if (type == null) {
-                    state.copy(testMessage = null)
+                    state.copy(pendingLargeNavidromeImport = null, testMessage = null)
                 } else {
-                    state.clearCreateDraft(type).copy(creatingSourceType = null, testMessage = null)
+                    state.clearCreateDraft(type).copy(
+                        creatingSourceType = null,
+                        pendingLargeNavidromeImport = null,
+                        testMessage = null,
+                    )
                 }
             }
 
@@ -633,14 +681,7 @@ class ImportStore(
                 }
             }
 
-            is ImportIntent.RescanSource -> runScanningImport(ImportScanOperation.RescanSource(intent.sourceId)) { progressSink ->
-                repository.rescanSource(intent.sourceId, progressSink)
-                    .onSuccess { summary ->
-                        summary?.let(::recordScanSummary)
-                        setMessage(scanSuccessMessage("音乐源已重新扫描。", summary))
-                    }
-                    .onFailure { setMessage("重新扫描失败: ${it.message}") }
-            }
+            is ImportIntent.RescanSource -> rescanSourceWithLargeNavidromeCheck(intent.sourceId)
 
             is ImportIntent.ToggleSourceEnabled -> runImport {
                 repository.setSourceEnabled(intent.sourceId, intent.enabled)
@@ -749,6 +790,117 @@ class ImportStore(
                     }
                 }
                 .onFailure { setMessage("导入本地文件夹失败: ${it.message}") }
+        }
+    }
+
+    private suspend fun importNavidromeFull(draft: NavidromeSourceDraft) {
+        runScanningImport(ImportScanOperation.CreateRemote(ImportSourceType.NAVIDROME)) { progressSink ->
+            repository.addNavidromeSource(draft, progressSink)
+                .onSuccess { summary ->
+                    clearNavidromeCreator()
+                    recordScanSummary(summary)
+                    setMessage(scanSuccessMessage("Navidrome 音乐源已导入。", summary))
+                }
+                .onFailure { setCreateOrPageMessage(ImportSourceType.NAVIDROME, "Navidrome 导入失败: ${it.message}") }
+        }
+    }
+
+    private suspend fun importNavidromeOnline(pending: PendingLargeNavidromeImport) {
+        runImport(ImportScanOperation.CreateRemote(ImportSourceType.NAVIDROME)) {
+            val draft = (pending.action as? PendingLargeNavidromeAction.Create)?.draft
+                ?: return@runImport
+            repository.addNavidromeSourceOnline(
+                draft = draft,
+                remoteTrackCount = pending.remoteTrackCount,
+            ).onSuccess { summary ->
+                clearNavidromeCreator()
+                recordScanSummary(summary)
+                setMessage("Navidrome 在线模式已启用。远端共有 ${pending.remoteTrackCount} 首歌曲，未写入本地曲库索引。")
+            }.onFailure {
+                updateState { state -> state.copy(pendingLargeNavidromeImport = null) }
+                setCreateOrPageMessage(ImportSourceType.NAVIDROME, "Navidrome 在线模式保存失败: ${it.message}")
+            }
+        }
+    }
+
+    private suspend fun rescanSourceWithLargeNavidromeCheck(sourceId: String) {
+        val source = state.value.sources.firstOrNull { it.source.id == sourceId }?.source
+        if (source?.type == ImportSourceType.NAVIDROME && source.indexMode == ImportSourceIndexMode.LOCAL_INDEX) {
+            runImport(ImportScanOperation.RescanSource(sourceId)) {
+                repository.probeExistingNavidromeSource(sourceId)
+                    .onSuccess { probe ->
+                        val totalTrackCount = probe.totalTrackCount
+                        if (
+                            probe.supportsOnlineLibraryPaging &&
+                            totalTrackCount != null &&
+                            totalTrackCount > LARGE_NAVIDROME_LIBRARY_TRACK_THRESHOLD
+                        ) {
+                            updateState {
+                                it.copy(
+                                    pendingLargeNavidromeImport = PendingLargeNavidromeImport(
+                                        action = PendingLargeNavidromeAction.Rescan(
+                                            sourceId = sourceId,
+                                            sourceLabel = source.label,
+                                        ),
+                                        remoteTrackCount = totalTrackCount,
+                                    ),
+                                    testMessage = null,
+                                )
+                            }
+                        } else {
+                            rescanSourceFull(sourceId)
+                        }
+                    }
+                    .onFailure { setMessage("重新扫描失败: ${it.message}") }
+            }
+        } else {
+            rescanSourceFull(sourceId)
+        }
+    }
+
+    private suspend fun rescanSourceFull(sourceId: String) {
+        runScanningImport(ImportScanOperation.RescanSource(sourceId)) { progressSink ->
+            repository.rescanSource(sourceId, progressSink)
+                .onSuccess { summary ->
+                    summary?.let(::recordScanSummary)
+                    setMessage(scanSuccessMessage("音乐源已重新扫描。", summary))
+                }
+                .onFailure { setMessage("重新扫描失败: ${it.message}") }
+        }
+    }
+
+    private suspend fun switchNavidromeRescanToOnline(
+        sourceId: String,
+        sourceLabel: String,
+        remoteTrackCount: Int,
+    ) {
+        runImport(ImportScanOperation.RescanSource(sourceId)) {
+            repository.switchNavidromeSourceToOnline(
+                sourceId = sourceId,
+                remoteTrackCount = remoteTrackCount,
+            ).onSuccess { summary ->
+                updateState { it.copy(pendingLargeNavidromeImport = null) }
+                recordScanSummary(summary)
+                setMessage("“$sourceLabel”已切换为 Navidrome 在线模式。远端共有 $remoteTrackCount 首歌曲，旧本地索引已隐藏并保留。")
+            }.onFailure {
+                updateState { state -> state.copy(pendingLargeNavidromeImport = null) }
+                setMessage("切换在线模式失败: ${it.message}")
+            }
+        }
+    }
+
+    private fun clearNavidromeCreator() {
+        updateState {
+            it.copy(
+                creatingSourceType = null,
+                navidromeLabel = "",
+                navidromeBaseUrl = "",
+                navidromeWanBaseUrl = "",
+                navidromeUsername = "",
+                navidromePassword = "",
+                pendingLargeNavidromeImport = null,
+                testMessage = null,
+            )
         }
     }
 
@@ -1106,6 +1258,8 @@ fun formatImportScanSummary(summary: ImportScanSummary): String {
         "成功导入 ${summary.importedTrackCount} 首，" +
         "${summary.failedAudioFileCount} 个失败"
 }
+
+const val LARGE_NAVIDROME_LIBRARY_TRACK_THRESHOLD: Int = 100_000
 
 private fun scanSuccessMessage(prefix: String, summary: ImportScanSummary?): String {
     return summary?.let { "$prefix${formatImportScanSummary(it)}。" } ?: prefix

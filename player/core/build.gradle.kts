@@ -31,6 +31,7 @@ kotlin {
             implementation(project(":shared:data"))
             implementation(libs.androidx.room.runtime)
             implementation(libs.kotlinx.coroutines.core)
+            implementation(libs.kotlinx.serialization.json)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
