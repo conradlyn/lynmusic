@@ -291,6 +291,82 @@ class EnhancedLyricsEngineTest {
     }
 
     @Test
+    fun `navidrome structured lyrics parses inline enhanced lrc from line values`() {
+        val rawLyrics = """
+            {
+              "status": "ok",
+              "lyricsList": {
+                "structuredLyrics": [
+                  {
+                    "synced": true,
+                    "line": [
+                      { "start": 37570, "value": "<00:37.57>关<00:37.86>于<00:38.07>郑<00:38.29>州" }
+                    ]
+                  }
+                ]
+              }
+            }
+        """.trimIndent()
+
+        val document = parseCachedLyrics(sourceId = NAVIDROME_LYRICS_SOURCE_ID, rawPayload = rawLyrics)
+        val presentation = parseEnhancedLyricsPresentation(
+            rawPayload = rawLyrics,
+            fallbackDocument = requireNotNull(document),
+        )
+
+        assertNotNull(document)
+        assertEquals(listOf("关于郑州"), document.lines.map { it.text })
+        assertEquals(listOf(37_570L), document.lines.map { it.timestampMs })
+        assertNotNull(presentation)
+        assertEquals(listOf("关", "于", "郑", "州"), presentation.lines.single().segments.map { it.text })
+        assertEquals(listOf(37_570L, 37_860L, 38_070L, 38_290L), presentation.lines.single().segments.map { it.startTimeMs })
+    }
+
+    @Test
+    fun `navidrome structured cue lines take precedence over inline enhanced lrc line values`() {
+        val rawLyrics = """
+            {
+              "lyricsList": {
+                "structuredLyrics": [
+                  {
+                    "synced": true,
+                    "line": [
+                      { "start": 900, "value": "<00:01.00>错<00:01.20>误<00:01.40>" }
+                    ],
+                    "cueLine": [
+                      {
+                        "index": 0,
+                        "end": 1600,
+                        "value": "正确",
+                        "cue": [
+                          { "start": 1100, "end": 1300, "value": "正", "byteEnd": 2 },
+                          { "start": 1300, "end": 1600, "value": "确", "byteEnd": 5 }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+        """.trimIndent()
+
+        val document = parseCachedLyrics(sourceId = NAVIDROME_LYRICS_SOURCE_ID, rawPayload = rawLyrics)
+        val presentation = parseEnhancedLyricsPresentation(
+            rawPayload = rawLyrics,
+            fallbackDocument = requireNotNull(document),
+        )
+
+        assertNotNull(document)
+        assertEquals(listOf("正确"), document.lines.map { it.text })
+        assertEquals(listOf(1_100L), document.lines.map { it.timestampMs })
+        assertNotNull(presentation)
+        assertEquals("正确", presentation.lines.single().text)
+        assertEquals(1_100L, presentation.lines.single().lineStartTimeMs)
+        assertEquals(listOf("正", "确"), presentation.lines.single().segments.map { it.text })
+        assertEquals(listOf(1_100L, 1_300L), presentation.lines.single().segments.map { it.startTimeMs })
+    }
+
+    @Test
     fun `navidrome structured lyrics without cue lines stay line based`() {
         val rawLyrics = """
             {

@@ -398,6 +398,7 @@ private data class ParsedNavidromeLineDraft(
     val index: Int,
     val text: String,
     val startTimeMs: Long?,
+    val segments: List<ParsedSegmentDraft> = emptyList(),
 )
 
 private data class ParsedNavidromeCueLineDraft(
@@ -409,18 +410,33 @@ private data class ParsedNavidromeCueLineDraft(
     val agentId: String? = null,
 )
 
+private data class ResolvedNavidromeLineDraft(
+    val text: String,
+    val startTimeMs: Long?,
+    val endTimeMs: Long?,
+    val segments: List<ParsedSegmentDraft>,
+)
+
 private fun parseNavidromeStructuredLyricsEntry(entry: JsonObject): ParsedNavidromeStructuredLyricsEntry? {
     val kind = entry.string("kind")
     val synced = entry.boolean("synced") ?: false
     val offsetMs = entry.long("offset") ?: 0L
     val lineDrafts = entry["line"].asJsonObjectList()
         .mapIndexedNotNull { index, line ->
-            val text = line.string("value")?.trim().orEmpty()
-            if (text.isBlank()) return@mapIndexedNotNull null
+            val rawText = line.string("value")?.trim().orEmpty()
+            if (rawText.isBlank()) return@mapIndexedNotNull null
+            val inlineSegments = parseEnhancedSegmentDrafts(rawText).orEmpty()
+            val text = inlineSegments
+                .takeIf { it.isNotEmpty() }
+                ?.joinToString(separator = "") { it.text }
+                ?.ifBlank { "..." }
+                ?: rawText
             ParsedNavidromeLineDraft(
                 index = index,
                 text = text,
-                startTimeMs = if (synced) line.long("start") else null,
+                startTimeMs = (if (synced) line.long("start") else null)
+                    ?: inlineSegments.firstOrNull()?.startTimeMs,
+                segments = inlineSegments,
             )
         }
     if (lineDrafts.isEmpty()) return null
@@ -447,20 +463,28 @@ private fun parseNavidromeStructuredLyricsEntry(entry: JsonObject): ParsedNavidr
         emptyMap()
     }
 
-    val displayLineDrafts = lineDrafts.map { line ->
+    val resolvedLineDrafts = lineDrafts.map { line ->
         val cueLine = cueLinesByIndex[line.index]
-        ParsedDisplayLineDraft(
+        ResolvedNavidromeLineDraft(
             text = cueLine?.text ?: line.text,
-            lineStartTimeMs = line.startTimeMs ?: cueLine?.startTimeMs,
-            lineEndTimeMs = cueLine?.endTimeMs,
-            segments = cueLine?.segments.orEmpty(),
+            startTimeMs = cueLine?.startTimeMs ?: line.startTimeMs,
+            endTimeMs = cueLine?.endTimeMs,
+            segments = cueLine?.segments?.takeIf { it.isNotEmpty() } ?: line.segments,
+        )
+    }
+    val displayLineDrafts = resolvedLineDrafts.map { line ->
+        ParsedDisplayLineDraft(
+            text = line.text,
+            lineStartTimeMs = line.startTimeMs,
+            lineEndTimeMs = line.endTimeMs,
+            segments = line.segments,
         )
     }
     return ParsedNavidromeStructuredLyricsEntry(
         kind = kind,
         synced = synced,
         offsetMs = offsetMs,
-        lines = lineDrafts.map { line ->
+        lines = resolvedLineDrafts.map { line ->
             LyricsLine(
                 timestampMs = line.startTimeMs,
                 text = line.text,
@@ -484,7 +508,7 @@ private fun parseNavidromeCueLineDraft(entry: JsonObject): ParsedNavidromeCueLin
     return ParsedNavidromeCueLineDraft(
         index = index,
         text = value,
-        startTimeMs = startTimeMs,
+        startTimeMs = startTimeMs ?: cueDrafts.firstOrNull()?.startTimeMs,
         endTimeMs = endTimeMs,
         segments = cueDrafts,
         agentId = entry.string("agentId"),
