@@ -55,18 +55,36 @@ import top.iwesley.lyn.music.core.model.normalizedArtworkCacheLocator
 import top.iwesley.lyn.music.core.model.resolveArtworkCacheTargets
 import top.iwesley.lyn.music.core.model.stableArtworkCacheHash
 import top.iwesley.lyn.music.domain.readRemotePlaybackUrlCandidateWithFallback
+import top.iwesley.lyn.music.rememberLynArtworkModel
 import kotlin.math.roundToInt
 
 @Composable
 actual fun rememberPlatformArtworkBitmap(
     locator: String?,
+    artworkCacheKey: String?,
     cacheRemote: Boolean,
     maxDecodeSizePx: Int,
 ): ImageBitmap? {
     val fallbackBitmap = rememberBundledDefaultCoverBitmap()
     if (locator.isNullOrBlank()) return fallbackBitmap
-    val bitmap by produceState<ImageBitmap?>(initialValue = fallbackBitmap, locator, cacheRemote, maxDecodeSizePx, fallbackBitmap) {
-        value = loadNativeArtworkBitmap(locator, cacheRemote, maxDecodeSizePx)
+    val model = rememberLynArtworkModel(
+        artworkLocator = locator,
+        artworkCacheKey = artworkCacheKey,
+        cacheRemote = cacheRemote,
+        maxDecodeSizePx = maxDecodeSizePx,
+    )
+    val target = model.target
+    val bitmap by produceState<ImageBitmap?>(
+        initialValue = fallbackBitmap,
+        target,
+        model.targetVersion,
+        model.cacheVersion,
+        model.cacheKey,
+        cacheRemote,
+        maxDecodeSizePx,
+        fallbackBitmap,
+    ) {
+        value = target?.let { loadNativeArtworkBitmap(it, cacheRemote, maxDecodeSizePx) }
     }
     return bitmap ?: fallbackBitmap
 }

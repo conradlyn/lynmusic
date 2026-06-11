@@ -1164,8 +1164,10 @@ private fun PlayerOverlay(
     val defaultBackgroundColor = Color(0xFF232325)
     var isPureModeRequested by remember { mutableStateOf(false) }
     val artworkLocator = snapshot.currentDisplayArtworkLocator
+    val artworkCacheKey = trackArtworkCacheKey(track)
     val paletteArtworkBitmap = rememberPlatformArtworkBitmap(
         locator = artworkLocator,
+        artworkCacheKey = artworkCacheKey,
         maxDecodeSizePx = ArtworkDecodeSize.Palette,
     )
     val backgroundPalette = rememberPlaybackArtworkBackgroundPalette(
@@ -1197,7 +1199,7 @@ private fun PlayerOverlay(
                 LynArtworkImage(
                     artworkLocator = artworkLocator,
                     contentDescription = null,
-                    artworkCacheKey = trackArtworkCacheKey(track),
+                    artworkCacheKey = artworkCacheKey,
                     contentScale = ContentScale.Crop,
                     maxDecodeSizePx = ArtworkDecodeSize.Player,
                     retainPreviousWhileLoading = true,

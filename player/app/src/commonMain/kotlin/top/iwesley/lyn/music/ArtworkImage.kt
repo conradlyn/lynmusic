@@ -100,24 +100,11 @@ internal fun LynArtworkImage(
     maxDecodeSizePx: Int = ArtworkDecodeSize.Thumbnail,
     retainPreviousWhileLoading: Boolean = false,
 ) {
-    val artworkCacheStore = LocalArtworkCacheStore.current
-    val normalized = remember(artworkLocator) { normalizedArtworkCacheLocator(artworkLocator) }
-    val requestCacheKey = remember(artworkCacheKey, normalized) {
-        artworkCacheKey
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?: normalized
-    }
-    val cacheVersion by remember(artworkCacheStore, requestCacheKey) {
-        requestCacheKey?.let(artworkCacheStore::observeVersion) ?: flowOf(0L)
-    }.collectAsState(initial = 0L)
     val model = rememberLynArtworkModel(
-        normalized = normalized,
-        requestCacheKey = requestCacheKey,
+        artworkLocator = artworkLocator,
+        artworkCacheKey = artworkCacheKey,
         cacheRemote = cacheRemote,
         maxDecodeSizePx = maxDecodeSizePx,
-        cacheVersion = cacheVersion,
-        artworkCacheStore = artworkCacheStore,
     )
     LynArtworkAsyncImage(
         data = model.target?.let(::coilArtworkData),
@@ -167,6 +154,34 @@ internal fun LynArtworkImage(
         alignment = alignment,
         alpha = alpha,
         colorFilter = colorFilter,
+    )
+}
+
+@Composable
+internal fun rememberLynArtworkModel(
+    artworkLocator: String?,
+    artworkCacheKey: String?,
+    cacheRemote: Boolean,
+    maxDecodeSizePx: Int,
+): LynArtworkModel {
+    val artworkCacheStore = LocalArtworkCacheStore.current
+    val normalized = remember(artworkLocator) { normalizedArtworkCacheLocator(artworkLocator) }
+    val requestCacheKey = remember(artworkCacheKey, normalized) {
+        artworkCacheKey
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: normalized
+    }
+    val cacheVersion by remember(artworkCacheStore, requestCacheKey) {
+        requestCacheKey?.let(artworkCacheStore::observeVersion) ?: flowOf(0L)
+    }.collectAsState(initial = 0L)
+    return rememberLynArtworkModel(
+        normalized = normalized,
+        requestCacheKey = requestCacheKey,
+        cacheRemote = cacheRemote,
+        maxDecodeSizePx = maxDecodeSizePx,
+        cacheVersion = cacheVersion,
+        artworkCacheStore = artworkCacheStore,
     )
 }
 

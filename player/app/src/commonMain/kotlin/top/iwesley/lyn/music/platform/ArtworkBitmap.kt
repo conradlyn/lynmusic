@@ -7,6 +7,7 @@ import top.iwesley.lyn.music.ArtworkDecodeSize
 @Composable
 expect fun rememberPlatformArtworkBitmap(
     locator: String?,
+    artworkCacheKey: String? = null,
     cacheRemote: Boolean = true,
     maxDecodeSizePx: Int = ArtworkDecodeSize.Player,
 ): ImageBitmap?

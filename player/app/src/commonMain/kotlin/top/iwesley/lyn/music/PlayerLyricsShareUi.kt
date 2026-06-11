@@ -1246,15 +1246,16 @@ internal fun LyricsShareOverlay(
     val lyrics = state.lyrics ?: return
     val shellColors = mainShellColors
     val previewBytes = state.sharePreviewBytes
+    val artworkCacheKey = state.snapshot.currentTrack?.let(::trackArtworkCacheKey)
     val artworkPaletteBitmap = rememberPlatformArtworkBitmap(
         locator = state.snapshot.currentDisplayArtworkLocator,
+        artworkCacheKey = artworkCacheKey,
         maxDecodeSizePx = ArtworkDecodeSize.Palette,
     )
     val artworkBackgroundPalette = rememberPlaybackArtworkBackgroundPalette(
         artworkBitmap = artworkPaletteBitmap,
         enabled = state.selectedLyricsShareTemplate == LyricsShareTemplate.ARTWORK_TINT,
     )
-    val artworkCacheKey = state.snapshot.currentTrack?.let(::trackArtworkCacheKey)
     val visibleShareLyricsLines = remember(lyrics) {
         buildVisiblePlayerLyricsLines(lyrics)
     }
