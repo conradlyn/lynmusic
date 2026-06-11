@@ -83,6 +83,27 @@ class SourceCardLogicTest {
     }
 
     @Test
+    fun `scan summary presentation uses online mode wording for online source`() {
+        val presentation = buildSourceScanSummaryPresentation(
+            summary = ImportScanSummary(
+                sourceId = "nav-1",
+                discoveredAudioFileCount = 456_748,
+                importedTrackCount = 0,
+            ),
+            canShowFailures = true,
+            isOnlineSource = true,
+            remoteTrackCount = 456_748,
+        )
+
+        requireNotNull(presentation)
+        assertEquals(
+            "在线模式已启用，远端共有 456748 首歌曲，未写入本地曲库索引。",
+            presentation.summaryText,
+        )
+        assertFalse(presentation.showFailuresButton)
+    }
+
+    @Test
     fun `scan progress label omits total when source total is unknown`() {
         val progress = ImportScanProgress(
             sourceId = "nav-1",

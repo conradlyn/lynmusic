@@ -1304,9 +1304,13 @@ internal fun SourceCard(
 ) {
     val shellColors = mainShellColors
     val sourceEnabled = state.source.enabled
+    val sourceIndexMode = state.source.indexMode
+    val isOnlineSource = sourceIndexMode == ImportSourceIndexMode.ONLINE
     val scanSummaryPresentation = buildSourceScanSummaryPresentation(
         summary = scanSummary,
         canShowFailures = onShowScanFailures != null,
+        isOnlineSource = isOnlineSource,
+        remoteTrackCount = state.indexState?.remoteTrackCount,
     )
     ElevatedCard(
         shape = RoundedCornerShape(26.dp),
@@ -1359,8 +1363,6 @@ internal fun SourceCard(
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                val sourceIndexMode = state.source.indexMode
-                val isOnlineSource = sourceIndexMode == ImportSourceIndexMode.ONLINE
                 val trackCountLabel = importSourceTrackCountLabel(
                     indexMode = sourceIndexMode,
                     localTrackCount = state.indexState?.trackCount,
@@ -1667,13 +1669,35 @@ internal data class SourceScanSummaryPresentation(
 internal fun buildSourceScanSummaryPresentation(
     summary: ImportScanSummary?,
     canShowFailures: Boolean,
+    isOnlineSource: Boolean = false,
+    remoteTrackCount: Int? = null,
 ): SourceScanSummaryPresentation? {
     summary ?: return null
+    if (isOnlineSource) {
+        return SourceScanSummaryPresentation(
+            summary = summary,
+            summaryText = onlineSourceScanSummaryText(
+                remoteTrackCount = remoteTrackCount,
+                summaryDiscoveredTrackCount = summary.discoveredAudioFileCount,
+            ),
+            showFailuresButton = false,
+        )
+    }
     return SourceScanSummaryPresentation(
         summary = summary,
         summaryText = formatImportScanSummary(summary),
         showFailuresButton = summary.failedAudioFileCount > 0 && canShowFailures,
     )
+}
+
+private fun onlineSourceScanSummaryText(
+    remoteTrackCount: Int?,
+    summaryDiscoveredTrackCount: Int,
+): String {
+    val resolvedTrackCount = remoteTrackCount ?: summaryDiscoveredTrackCount.takeIf { it > 0 }
+    return resolvedTrackCount
+        ?.let { "在线模式已启用，需在曲库来源选择在线来源。远端共有 ${it.coerceAtLeast(0)} 首歌曲。" }
+        ?: "在线模式已启用，未写入本地曲库索引。"
 }
 
 @Composable

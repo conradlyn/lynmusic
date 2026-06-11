@@ -163,20 +163,13 @@ internal fun listAndroidStorageRoots(
             )
         }
 
-    val mountedUsbFallbackRoots = listMountedUsbFallbackRoots(logger)
-    if (roots.values.none { it.isRemovable }) {
-        mountedUsbFallbackRoots.forEach { root ->
-            addRoot(
-                root = root,
-                label = "U 盘 ${root.name}",
-                isRemovable = true,
-                source = "mnt-usb-fallback",
-            )
-        }
-    } else {
-        logger.info(LOCAL_IMPORT_LOG_TAG) {
-            "mnt-usb-fallback-skip reason=removable-root-already-found"
-        }
+    listMountedUsbFallbackRoots(logger).forEach { root ->
+        addRoot(
+            root = root,
+            label = "U 盘 ${root.name}",
+            isRemovable = true,
+            source = "mnt-usb-fallback",
+        )
     }
 
     return roots.values.sortedWith(
@@ -280,7 +273,7 @@ private fun listStorageVolumeRoots(
                 "removable=${volume.isRemovable} emulated=${volume.isEmulated} " +
                 "directory=${directory?.absolutePath ?: "null"} description=$description"
         }
-        if (volume.state != Environment.MEDIA_MOUNTED || !volume.isRemovable) return@mapNotNull null
+        if (!isReadableStorageVolumeState(volume.state) || !volume.isRemovable) return@mapNotNull null
         val root = directory ?: return@mapNotNull null
         AndroidStorageRoot(
             label = description.ifBlank { "U 盘 ${root.name}" },
@@ -295,12 +288,16 @@ private fun resolveStorageVolumeRootFromStorageManager(context: Context, volumeI
     val storageManager = context.getSystemService(StorageManager::class.java) ?: return null
     return storageManager.storageVolumes.firstNotNullOfOrNull { volume ->
         val uuidMatches = volume.uuid?.equals(volumeId, ignoreCase = true) == true
-        if (uuidMatches && volume.state == Environment.MEDIA_MOUNTED) {
+        if (uuidMatches && isReadableStorageVolumeState(volume.state)) {
             volume.directoryCompat()
         } else {
             null
         }
     }
+}
+
+internal fun isReadableStorageVolumeState(state: String?): Boolean {
+    return state == Environment.MEDIA_MOUNTED || state == Environment.MEDIA_MOUNTED_READ_ONLY
 }
 
 @TargetApi(Build.VERSION_CODES.N)

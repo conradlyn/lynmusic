@@ -815,7 +815,7 @@ class ImportStore(
             ).onSuccess { summary ->
                 clearNavidromeCreator()
                 recordScanSummary(summary)
-                setMessage("Navidrome 在线模式已启用。远端共有 ${pending.remoteTrackCount} 首歌曲，未写入本地曲库索引。")
+                setMessage("Navidrome 在线模式已启用，需在曲库来源选择在线来源。远端共有 ${pending.remoteTrackCount} 首歌曲。")
             }.onFailure {
                 updateState { state -> state.copy(pendingLargeNavidromeImport = null) }
                 setCreateOrPageMessage(ImportSourceType.NAVIDROME, "Navidrome 在线模式保存失败: ${it.message}")
