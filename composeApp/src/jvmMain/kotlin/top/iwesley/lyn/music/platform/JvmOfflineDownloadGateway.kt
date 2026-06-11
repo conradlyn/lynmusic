@@ -24,6 +24,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import top.iwesley.lyn.music.core.model.DEFAULT_SAMBA_PORT
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
+import top.iwesley.lyn.music.core.model.ImportSourceType
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.OfflineDownloadStatus
 import top.iwesley.lyn.music.core.model.OfflineDownloadGateway
@@ -71,9 +72,10 @@ private class JvmOfflineDownloadGateway(
         val finalFile = File(rootDirectory, offlineFileName(track, quality))
         val partFile = File(rootDirectory, "${finalFile.name}.part")
         partFile.delete()
+        val subsonicCompatible = parseSubsonicCompatibleSongLocator(track.mediaLocator)
         try {
             val totalBytes = when {
-                parseSubsonicCompatibleSongLocator(track.mediaLocator) != null -> {
+                subsonicCompatible != null -> {
                     val requestUrls = if (quality == NavidromeAudioQuality.Original) {
                         resolveNavidromeDownloadUrlCandidates(database, secureCredentialStore, track.mediaLocator, addressSelector)
                     } else {
@@ -84,6 +86,7 @@ private class JvmOfflineDownloadGateway(
                         authorizationHeader = null,
                         allowInsecureTls = false,
                         target = partFile,
+                        requestLogSource = subsonicCompatible.sourceType.offlineDownloadLogSourceName(),
                         onProgress = onProgress,
                     )
                 }
@@ -170,6 +173,7 @@ private class JvmOfflineDownloadGateway(
         authorizationHeader: String?,
         allowInsecureTls: Boolean,
         target: File,
+        requestLogSource: String? = null,
         onProgress: suspend (OfflineDownloadProgress) -> Unit,
     ): Long? {
         var lastFailure: Throwable? = null
@@ -181,6 +185,7 @@ private class JvmOfflineDownloadGateway(
                     authorizationHeader = authorizationHeader,
                     allowInsecureTls = allowInsecureTls,
                     target = target,
+                    requestLogSource = requestLogSource,
                     onProgress = onProgress,
                 )
                 if (requestUrl.sourceId.isNotBlank()) {
@@ -192,7 +197,7 @@ private class JvmOfflineDownloadGateway(
                 target.delete()
                 lastFailure = throwable
                 val hasFallback = index < requestUrls.lastIndex
-                if (!hasFallback || !isRemoteSourceAddressFallbackAllowed(throwable)) {
+                if (!hasFallback || !isOfflineDownloadAddressFallbackAllowed(throwable)) {
                     throw throwable
                 }
             }
@@ -267,6 +272,7 @@ private class JvmOfflineDownloadGateway(
         authorizationHeader: String?,
         allowInsecureTls: Boolean,
         target: File,
+        requestLogSource: String? = null,
         onProgress: suspend (OfflineDownloadProgress) -> Unit,
     ): Long? {
         val connection = (URL(requestUrl).openConnection() as HttpURLConnection).apply {
@@ -275,6 +281,14 @@ private class JvmOfflineDownloadGateway(
             readTimeout = 15_000
             instanceFollowRedirects = true
             authorizationHeader?.let { setRequestProperty("Authorization", it) }
+        }
+        requestLogSource?.let { source ->
+            logger.info(OFFLINE_LOG_TAG) {
+                buildOfflineDownloadRequestHeadersLog(
+                    source = source,
+                    headers = connection.requestProperties.formatOfflineDownloadHeaderBlock(),
+                )
+            }
         }
         if (allowInsecureTls && connection is HttpsURLConnection) {
             connection.sslSocketFactory = trustAllSslContext.socketFactory
@@ -288,7 +302,14 @@ private class JvmOfflineDownloadGateway(
             }
             val totalBytes = connection.contentLengthLong.takeIf { it > 0L }
             connection.inputStream.use { input ->
-                writeStream(input, target, totalBytes, onProgress)
+                writeStream(
+                    input = input,
+                    target = target,
+                    totalBytes = totalBytes,
+                    responseLogSource = requestLogSource,
+                    responseContentType = connection.contentType,
+                    onProgress = onProgress,
+                )
             }
             totalBytes
         } finally {
@@ -300,11 +321,38 @@ private class JvmOfflineDownloadGateway(
         input: InputStream,
         target: File,
         totalBytes: Long?,
+        responseLogSource: String? = null,
+        responseContentType: String? = null,
         onProgress: suspend (OfflineDownloadProgress) -> Unit,
     ) {
         target.outputStream().use { output ->
             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
             var downloadedBytes = 0L
+            val sniffPrefix = input.readOfflineDownloadSniffPrefix()
+            responseLogSource?.let { source ->
+                logger.info(OFFLINE_LOG_TAG) {
+                    buildOfflineDownloadResponseSniffLog(
+                        source = source,
+                        contentType = responseContentType,
+                        bytes = sniffPrefix.bytes,
+                        length = sniffPrefix.length,
+                    )
+                }
+                sniffPrefix.subsonicResponseFailureMessage(
+                    source = source,
+                    contentType = responseContentType,
+                )?.let { message -> throw OfflineDownloadAddressFallbackException(message) }
+            }
+            if (sniffPrefix.length > 0) {
+                output.write(sniffPrefix.bytes, 0, sniffPrefix.length)
+                downloadedBytes += sniffPrefix.length
+                onProgress(
+                    OfflineDownloadProgress(
+                        downloadedBytes = downloadedBytes,
+                        totalBytes = totalBytes,
+                    ),
+                )
+            }
             while (true) {
                 currentCoroutineContext().ensureActive()
                 val read = input.read(buffer)
@@ -377,3 +425,219 @@ private val trustAllManager = object : X509TrustManager {
 
 private val trustAllHostnameVerifier = HostnameVerifier { _, _ -> true }
 private const val OFFLINE_LOG_TAG = "OfflineDownload"
+
+private fun ImportSourceType.offlineDownloadLogSourceName(): String {
+    return when (this) {
+        ImportSourceType.NAVIDROME -> "Navidrome"
+        ImportSourceType.SUBSONIC -> "Subsonic"
+        else -> name
+    }
+}
+
+private fun buildOfflineDownloadRequestHeadersLog(source: String, headers: String): String {
+    return buildString {
+        append("download-request-headers source=")
+        append(source)
+        append('\n')
+        append("headers:\n")
+        append(headers)
+    }
+}
+
+private class OfflineDownloadAddressFallbackException(
+    message: String,
+) : IllegalStateException(message)
+
+private data class OfflineDownloadSniffPrefix(
+    val bytes: ByteArray,
+    val length: Int,
+) {
+    fun subsonicResponseFailureMessage(
+        source: String,
+        contentType: String?,
+    ): String? {
+        val preview = bytes.offlineDownloadTextPreview(length)
+        val response = preview.sniffSubsonicResponse()
+        if (response.looksLikeResponse) {
+            return response.failureMessage(source)
+        }
+        if (contentType.isOfflineDownloadXmlContentType()) {
+            return "$source 下载失败：服务器返回 XML 响应。"
+        }
+        return null
+    }
+}
+
+private fun isOfflineDownloadAddressFallbackAllowed(throwable: Throwable): Boolean {
+    return throwable is OfflineDownloadAddressFallbackException ||
+        isRemoteSourceAddressFallbackAllowed(throwable)
+}
+
+private suspend fun InputStream.readOfflineDownloadSniffPrefix(): OfflineDownloadSniffPrefix {
+    val bytes = ByteArray(OFFLINE_DOWNLOAD_SNIFF_PREVIEW_BYTES)
+    var totalRead = 0
+    while (totalRead < bytes.size) {
+        currentCoroutineContext().ensureActive()
+        val read = read(bytes, totalRead, bytes.size - totalRead)
+        if (read <= 0) break
+        totalRead += read
+    }
+    return OfflineDownloadSniffPrefix(bytes = bytes, length = totalRead)
+}
+
+private fun buildOfflineDownloadResponseSniffLog(
+    source: String,
+    contentType: String?,
+    bytes: ByteArray,
+    length: Int,
+): String {
+    val rawPreview = bytes.offlineDownloadTextPreview(length)
+    val subsonicResponse = rawPreview.sniffSubsonicResponse()
+    return buildString {
+        append("download-response-sniff source=")
+        append(source)
+        append(" contentType=")
+        append(contentType?.takeIf { it.isNotBlank() } ?: "<none>")
+        append(" bytes=")
+        append(length)
+        append(" looksLikeSubsonicResponse=")
+        append(subsonicResponse.looksLikeResponse)
+        subsonicResponse.status?.let {
+            append(" status=")
+            append(it)
+        }
+        subsonicResponse.errorCode?.let {
+            append(" errorCode=")
+            append(it)
+        }
+        subsonicResponse.errorMessage?.let {
+            append(" errorMessage=\"")
+            append(it)
+            append('"')
+        }
+        append('\n')
+        append("hexPrefix: ")
+        append(bytes.offlineDownloadHexPrefix(length))
+        append('\n')
+        append("preview:\n")
+        append(rawPreview.sanitizeOfflineDownloadPreview().ifBlank { "<empty>" })
+    }
+}
+
+private fun Map<String, List<String>>.formatOfflineDownloadHeaderBlock(): String {
+    if (isEmpty()) return "<empty>"
+    return entries.joinToString(separator = "\n") { (name, values) ->
+        val headerName = name.orEmpty()
+        val headerValue = values.joinToString(separator = ", ") { value ->
+            redactOfflineDownloadHeader(headerName, value)
+        }
+        "$headerName: $headerValue"
+    }
+}
+
+private fun redactOfflineDownloadHeader(name: String, value: String): String {
+    return if (name.equals("Authorization", ignoreCase = true) ||
+        name.equals("Cookie", ignoreCase = true) ||
+        name.equals("X-Emby-Authorization", ignoreCase = true)
+    ) {
+        "<redacted>"
+    } else {
+        value
+    }
+}
+
+private data class OfflineDownloadSubsonicResponseSniff(
+    val looksLikeResponse: Boolean,
+    val status: String? = null,
+    val errorCode: String? = null,
+    val errorMessage: String? = null,
+) {
+    fun failureMessage(source: String): String {
+        val detail = errorMessage
+            ?: status?.let { "status=$it" }
+            ?: "服务器返回 Subsonic XML 响应。"
+        return buildString {
+            append(source)
+            append(" 下载失败：")
+            append(detail)
+            errorCode?.let {
+                append(" (code=")
+                append(it)
+                append(')')
+            }
+        }
+    }
+}
+
+private fun String.sniffSubsonicResponse(): OfflineDownloadSubsonicResponseSniff {
+    val normalized = trimStart('\uFEFF', ' ', '\t', '\r', '\n')
+    val responseStart = normalized.indexOf("<subsonic-response", ignoreCase = true)
+    if (responseStart !in 0..128) {
+        return OfflineDownloadSubsonicResponseSniff(looksLikeResponse = false)
+    }
+    val responseText = normalized.substring(responseStart)
+    return OfflineDownloadSubsonicResponseSniff(
+        looksLikeResponse = true,
+        status = xmlAttributeValue(responseText, "status"),
+        errorCode = xmlAttributeValue(responseText, "code"),
+        errorMessage = xmlAttributeValue(responseText, "message"),
+    )
+}
+
+private fun xmlAttributeValue(text: String, name: String): String? {
+    return Regex("""\b$name\s*=\s*["']([^"']*)["']""", RegexOption.IGNORE_CASE)
+        .find(text)
+        ?.groupValues
+        ?.getOrNull(1)
+        ?.takeIf { it.isNotBlank() }
+}
+
+private fun ByteArray.offlineDownloadTextPreview(length: Int): String {
+    if (length <= 0) return ""
+    val sampleLength = minOf(length, OFFLINE_DOWNLOAD_SNIFF_PREVIEW_BYTES)
+    if (!isLikelyTextPayload(sampleLength)) return ""
+    return String(this, 0, sampleLength, Charsets.UTF_8)
+}
+
+private fun ByteArray.isLikelyTextPayload(length: Int): Boolean {
+    if (length <= 0) return true
+    for (index in 0 until length) {
+        val value = this[index].toInt() and 0xFF
+        if (value == 0) return false
+        if (value < 0x09 || value in 0x0E..0x1F) return false
+    }
+    return true
+}
+
+private fun ByteArray.offlineDownloadHexPrefix(length: Int): String {
+    if (length <= 0) return "<empty>"
+    val sampleLength = minOf(length, OFFLINE_DOWNLOAD_SNIFF_HEX_BYTES)
+    return (0 until sampleLength).joinToString(separator = " ") { index ->
+        (this[index].toInt() and 0xFF).toString(16).padStart(2, '0')
+    }
+}
+
+private fun String.sanitizeOfflineDownloadPreview(): String {
+    return buildString {
+        for (char in this@sanitizeOfflineDownloadPreview) {
+            when (char) {
+                '\r', '\n', '\t' -> append(' ')
+                else -> if (!char.isISOControl()) append(char)
+            }
+        }
+    }.trim()
+}
+
+private fun String?.isOfflineDownloadXmlContentType(): Boolean {
+    val type = this
+        ?.substringBefore(';')
+        ?.trim()
+        ?.lowercase()
+        ?: return false
+    return type == "application/xml" ||
+        type == "text/xml" ||
+        type.endsWith("+xml")
+}
+
+private const val OFFLINE_DOWNLOAD_SNIFF_PREVIEW_BYTES = 512
+private const val OFFLINE_DOWNLOAD_SNIFF_HEX_BYTES = 32
