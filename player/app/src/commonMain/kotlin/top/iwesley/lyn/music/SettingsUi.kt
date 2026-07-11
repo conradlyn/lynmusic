@@ -659,6 +659,8 @@ private fun GeneralSettingsPane(
     val isMobilePlatform = currentPlatformDescriptor.isMobilePlatform()
     val showAppDisplayScaleSetting =
         currentPlatformDescriptor.capabilities.supportsAppDisplayScaleAdjustment
+    val showMacOsWindowCloseBehaviorSetting =
+        shouldShowMacOsWindowCloseBehaviorSetting(currentPlatformDescriptor)
     val showCompactPlayerLyricsSetting = isMobilePlatform
     val showPlayerArtworkStyleSetting = shouldShowPlayerArtworkStyleSetting(currentPlatformDescriptor)
     val showDesktopLyricsSetting = currentPlatformDescriptor.capabilities.supportsDesktopLyrics
@@ -716,6 +718,40 @@ private fun GeneralSettingsPane(
                     },
                     colors = SwitchDefaults.colors(),
                 )
+            }
+        }
+        if (showMacOsWindowCloseBehaviorSetting) {
+            MainShellElevatedCard(shape = RoundedCornerShape(28.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = "点击关闭按钮时最小化",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = "开启后，关闭窗口会最小化到程序坞（Dock）；关闭此选项后会退出应用。仍可使用 ⌘Q 退出。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = shellColors.secondaryText,
+                        )
+                    }
+                    Switch(
+                        checked = state.minimizeWindowOnClose,
+                        onCheckedChange = { enabled ->
+                            onSettingsIntent(SettingsIntent.MinimizeWindowOnCloseChanged(enabled))
+                        },
+                        colors = SwitchDefaults.colors(),
+                    )
+                }
             }
         }
         if (showDesktopLyricsSetting) {
@@ -2440,6 +2476,10 @@ private fun playerArtworkStyleLabel(style: PlayerArtworkStyle): String {
 
 internal fun shouldShowPlayerArtworkStyleSetting(platform: PlatformDescriptor): Boolean {
     return platform.isMobilePlatform() || platform.isPCPlatform() || platform.isAndroidAutomotivePlatform()
+}
+
+internal fun shouldShowMacOsWindowCloseBehaviorSetting(platform: PlatformDescriptor): Boolean {
+    return platform.capabilities.supportsMacOsWindowCloseBehavior
 }
 
 internal fun navidromeAudioQualityLabel(quality: NavidromeAudioQuality): String {

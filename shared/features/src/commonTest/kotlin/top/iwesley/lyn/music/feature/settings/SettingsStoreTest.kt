@@ -2,8 +2,11 @@ package top.iwesley.lyn.music.feature.settings
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -13,6 +16,7 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -31,6 +35,7 @@ import top.iwesley.lyn.music.core.model.AppThemeTokens
 import top.iwesley.lyn.music.core.model.DeviceInfoGateway
 import top.iwesley.lyn.music.core.model.DeviceInfoSnapshot
 import top.iwesley.lyn.music.core.model.DesktopLyricsPlatformService
+import top.iwesley.lyn.music.core.model.DEFAULT_MINIMIZE_WINDOW_ON_CLOSE
 import top.iwesley.lyn.music.core.model.LyricsShareFontLibraryPlatformService
 import top.iwesley.lyn.music.core.model.LyricsShareFontKind
 import top.iwesley.lyn.music.core.model.LyricsShareFontOption
@@ -451,6 +456,162 @@ class SettingsStoreTest {
         assertFalse(store.state.value.autoPlayOnStartup)
         assertFalse(repository.currentAutoPlayOnStartup())
         scope.cancel()
+    }
+
+    @Test
+    fun `minimize window on close preference defaults to true immediately`() = runTest {
+        val repository = FakeSettingsRepository()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(repository, scope)
+
+        assertTrue(store.state.value.minimizeWindowOnClose)
+        scope.cancel()
+    }
+
+    @Test
+    fun `store loads persisted disabled minimize window on close preference immediately`() = runTest {
+        val repository = FakeSettingsRepository(minimizeWindowOnClose = false)
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(repository, scope)
+
+        assertFalse(store.state.value.minimizeWindowOnClose)
+        scope.cancel()
+    }
+
+    @Test
+    fun `updating minimize window on close preference writes through immediately`() = runTest {
+        val repository = FakeSettingsRepository()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(repository, scope)
+
+        store.dispatch(SettingsIntent.MinimizeWindowOnCloseChanged(false))
+        assertFalse(store.state.value.minimizeWindowOnClose)
+        assertTrue(repository.currentMinimizeWindowOnClose())
+
+        advanceUntilIdle()
+        assertFalse(repository.currentMinimizeWindowOnClose())
+
+        store.dispatch(SettingsIntent.MinimizeWindowOnCloseChanged(true))
+        assertTrue(store.state.value.minimizeWindowOnClose)
+        assertFalse(repository.currentMinimizeWindowOnClose())
+
+        advanceUntilIdle()
+        assertTrue(repository.currentMinimizeWindowOnClose())
+        scope.cancel()
+    }
+
+    @Test
+    fun `latest minimize window on close value wins while an older write is pending`() = runTest {
+        val firstWriteStarted = CompletableDeferred<Unit>()
+        val releaseFirstWrite = CompletableDeferred<Unit>()
+        var writeCount = 0
+        val repository = FakeSettingsRepository(
+            onSetMinimizeWindowOnClose = {
+                if (writeCount++ == 0) {
+                    firstWriteStarted.complete(Unit)
+                    releaseFirstWrite.await()
+                }
+            },
+        )
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(repository, scope)
+        var persistenceWait: Deferred<Unit>? = null
+
+        try {
+            store.dispatch(SettingsIntent.MinimizeWindowOnCloseChanged(false))
+            runCurrent()
+            assertTrue(firstWriteStarted.isCompleted)
+            val activePersistenceWait = async(start = CoroutineStart.UNDISPATCHED) {
+                store.awaitMinimizeWindowOnClosePersistence()
+            }
+            persistenceWait = activePersistenceWait
+            assertFalse(activePersistenceWait.isCompleted)
+
+            store.dispatch(SettingsIntent.MinimizeWindowOnCloseChanged(true))
+            assertTrue(store.state.value.minimizeWindowOnClose)
+
+            releaseFirstWrite.complete(Unit)
+            advanceUntilIdle()
+
+            assertTrue(store.state.value.minimizeWindowOnClose)
+            assertTrue(repository.currentMinimizeWindowOnClose())
+            activePersistenceWait.await()
+        } finally {
+            releaseFirstWrite.complete(Unit)
+            persistenceWait?.cancel()
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `stale failed minimize write cannot roll back an ABA sequence`() = runTest {
+        val firstWriteStarted = CompletableDeferred<Unit>()
+        val releaseFirstWrite = CompletableDeferred<Unit>()
+        var writeCount = 0
+        val repository = FakeSettingsRepository(
+            onSetMinimizeWindowOnClose = {
+                if (writeCount++ == 0) {
+                    firstWriteStarted.complete(Unit)
+                    releaseFirstWrite.await()
+                    error("first write failed")
+                }
+            },
+        )
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(repository, scope)
+
+        try {
+            store.dispatch(SettingsIntent.MinimizeWindowOnCloseChanged(false))
+            runCurrent()
+            assertTrue(firstWriteStarted.isCompleted)
+
+            store.dispatch(SettingsIntent.MinimizeWindowOnCloseChanged(true))
+            store.dispatch(SettingsIntent.MinimizeWindowOnCloseChanged(false))
+            assertFalse(store.state.value.minimizeWindowOnClose)
+
+            releaseFirstWrite.complete(Unit)
+            advanceUntilIdle()
+
+            assertEquals(2, writeCount)
+            assertFalse(store.state.value.minimizeWindowOnClose)
+            assertFalse(repository.currentMinimizeWindowOnClose())
+            assertEquals(null, store.state.value.message)
+        } finally {
+            releaseFirstWrite.complete(Unit)
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `failed minimize window on close write restores persisted value`() = runTest {
+        val repository = FakeSettingsRepository(
+            onSetMinimizeWindowOnClose = { error("disk unavailable") },
+        )
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(repository, scope)
+
+        store.dispatch(SettingsIntent.MinimizeWindowOnCloseChanged(false))
+        assertFalse(store.state.value.minimizeWindowOnClose)
+
+        advanceUntilIdle()
+
+        assertTrue(store.state.value.minimizeWindowOnClose)
+        assertEquals("关闭按钮行为保存失败。", store.state.value.message)
+        scope.cancel()
+    }
+
+    @Test
+    fun `cancelled store scope does not leave minimize persistence pending`() = runTest {
+        val repository = FakeSettingsRepository()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(repository, scope)
+        scope.cancel()
+
+        store.dispatch(SettingsIntent.MinimizeWindowOnCloseChanged(false))
+        store.awaitMinimizeWindowOnClosePersistence()
+
+        assertFalse(store.state.value.minimizeWindowOnClose)
+        assertTrue(repository.currentMinimizeWindowOnClose())
     }
 
     @Test
@@ -1678,6 +1839,7 @@ private class FakeSettingsRepository(
     showDesktopLyrics: Boolean = false,
     showMenuBarLyricsControls: Boolean = false,
     autoPlayOnStartup: Boolean = false,
+    minimizeWindowOnClose: Boolean = DEFAULT_MINIMIZE_WINDOW_ON_CLOSE,
     useAndroidExtensionDecoder: Boolean = false,
     playerArtworkStyle: PlayerArtworkStyle = PlayerArtworkStyle.VINYL,
     appDisplayScalePreset: AppDisplayScalePreset = AppDisplayScalePreset.Default,
@@ -1688,6 +1850,7 @@ private class FakeSettingsRepository(
     textPalettePreferences: AppThemeTextPalettePreferences = defaultThemeTextPalettePreferences(),
     desktopVlcAutoDetectedPath: String? = null,
     desktopVlcManualPath: String? = null,
+    private val onSetMinimizeWindowOnClose: suspend (Boolean) -> Unit = {},
 ) : SettingsRepository {
     private val mutableSources = MutableStateFlow(sources)
     private val mutableUseSambaCache = MutableStateFlow(false)
@@ -1695,6 +1858,7 @@ private class FakeSettingsRepository(
     private val mutableShowDesktopLyrics = MutableStateFlow(showDesktopLyrics)
     private val mutableShowMenuBarLyricsControls = MutableStateFlow(showMenuBarLyricsControls)
     private val mutableAutoPlayOnStartup = MutableStateFlow(autoPlayOnStartup)
+    private val mutableMinimizeWindowOnClose = MutableStateFlow(minimizeWindowOnClose)
     private val mutableUseAndroidExtensionDecoder = MutableStateFlow(useAndroidExtensionDecoder)
     private val mutablePlayerArtworkStyle = MutableStateFlow(playerArtworkStyle)
     private val mutableAppDisplayScalePreset = MutableStateFlow(appDisplayScalePreset)
@@ -1716,6 +1880,7 @@ private class FakeSettingsRepository(
     override val showMenuBarLyricsControls: StateFlow<Boolean> =
         mutableShowMenuBarLyricsControls.asStateFlow()
     override val autoPlayOnStartup: StateFlow<Boolean> = mutableAutoPlayOnStartup.asStateFlow()
+    override val minimizeWindowOnClose: StateFlow<Boolean> = mutableMinimizeWindowOnClose.asStateFlow()
     override val useAndroidExtensionDecoder: StateFlow<Boolean> =
         mutableUseAndroidExtensionDecoder.asStateFlow()
     override val playerArtworkStyle: StateFlow<PlayerArtworkStyle> = mutablePlayerArtworkStyle.asStateFlow()
@@ -1739,6 +1904,7 @@ private class FakeSettingsRepository(
     fun currentShowDesktopLyrics(): Boolean = mutableShowDesktopLyrics.value
     fun currentShowMenuBarLyricsControls(): Boolean = mutableShowMenuBarLyricsControls.value
     fun currentAutoPlayOnStartup(): Boolean = mutableAutoPlayOnStartup.value
+    fun currentMinimizeWindowOnClose(): Boolean = mutableMinimizeWindowOnClose.value
     fun currentUseAndroidExtensionDecoder(): Boolean = mutableUseAndroidExtensionDecoder.value
     fun currentPlayerArtworkStyle(): PlayerArtworkStyle = mutablePlayerArtworkStyle.value
     fun currentAppDisplayScalePreset(): AppDisplayScalePreset = mutableAppDisplayScalePreset.value
@@ -1769,6 +1935,11 @@ private class FakeSettingsRepository(
 
     override suspend fun setAutoPlayOnStartup(enabled: Boolean) {
         mutableAutoPlayOnStartup.value = enabled
+    }
+
+    override suspend fun setMinimizeWindowOnClose(enabled: Boolean) {
+        onSetMinimizeWindowOnClose(enabled)
+        mutableMinimizeWindowOnClose.value = enabled
     }
 
     override suspend fun setUseAndroidExtensionDecoder(enabled: Boolean) {

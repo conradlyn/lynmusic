@@ -51,6 +51,25 @@ class SettingsNavigationTest {
     }
 
     @Test
+    fun `macos window close behavior setting is shown when supported`() {
+        assertTrue(
+            shouldShowMacOsWindowCloseBehaviorSetting(
+                platformNamed("Desktop").copy(
+                    capabilities = platformNamed("Desktop").capabilities.copy(
+                        supportsMacOsWindowCloseBehavior = true,
+                    ),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `macos window close behavior setting is hidden when unsupported`() {
+        assertFalse(shouldShowMacOsWindowCloseBehaviorSetting(desktopPlatform()))
+        assertFalse(shouldShowMacOsWindowCloseBehaviorSetting(mobilePlatform()))
+    }
+
+    @Test
     fun `mobile navigation opens theme detail`() {
         val navigation = openSettingsMobileNavigation(SettingsSection.Theme)
 

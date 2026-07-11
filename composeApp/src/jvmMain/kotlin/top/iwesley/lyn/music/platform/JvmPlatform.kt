@@ -13,8 +13,10 @@ import io.ktor.http.HttpMethod
 import java.io.File
 import java.net.URI
 import java.net.URL
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.time.Duration
 import java.time.LocalDate
 import java.time.ZonedDateTime
@@ -45,12 +47,14 @@ import kotlinx.coroutines.sync.withLock
 import top.iwesley.lyn.music.SharedRuntimeServices
 import top.iwesley.lyn.music.buildPlayerAppComponent
 import top.iwesley.lyn.music.buildSharedGraph
+import top.iwesley.lyn.music.isJvmMacOs
 import top.iwesley.lyn.music.core.model.AudioTagGateway
 import top.iwesley.lyn.music.core.model.AudioTagEditorPlatformService
 import top.iwesley.lyn.music.core.model.AudioTagPatch
 import top.iwesley.lyn.music.core.model.AudioTagSnapshot
 import top.iwesley.lyn.music.core.model.ConsoleDiagnosticLogger
 import top.iwesley.lyn.music.core.model.CompactPlayerLyricsPreferencesStore
+import top.iwesley.lyn.music.core.model.DEFAULT_MINIMIZE_WINDOW_ON_CLOSE
 import top.iwesley.lyn.music.core.model.DEFAULT_SAMBA_PORT
 import top.iwesley.lyn.music.core.model.DesktopLyricsPreferencesStore
 import top.iwesley.lyn.music.core.model.DesktopVlcPreferencesStore
@@ -110,6 +114,7 @@ import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.VlcPathPickerPlatformService
 import top.iwesley.lyn.music.core.model.WebDavSourceDraft
 import top.iwesley.lyn.music.core.model.WifiNetworkConnectionTypeProvider
+import top.iwesley.lyn.music.core.model.WindowClosePreferencesStore
 import top.iwesley.lyn.music.core.model.buildSambaLocator
 import top.iwesley.lyn.music.core.model.debug
 import top.iwesley.lyn.music.core.model.error
@@ -177,6 +182,7 @@ import uk.co.caprica.vlcj.player.base.MediaPlayer
 import uk.co.caprica.vlcj.player.base.MediaPlayerEventAdapter
 
 fun createJvmAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
+    val osName = System.getProperty("os.name").orEmpty()
     val database = openLynMusicDatabase(
         Room.databaseBuilder<LynMusicDatabase>(
             name = File(File(System.getProperty("user.home")), ".lynmusic/lynmusic.db").apply {
@@ -219,6 +225,7 @@ fun createJvmAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
             supportsSystemMediaControls = systemPlaybackControls.isSupported,
             supportsDesktopLyrics = true,
             supportsMenuBarLyricsControls = menuBarLyricsControls.isSupported,
+            supportsMacOsWindowCloseBehavior = isJvmMacOs(osName),
         ),
     )
     val desktopLyricsPlatformService = JvmDesktopLyricsPlatformService()
@@ -234,6 +241,7 @@ fun createJvmAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
             desktopLyricsPreferencesStore = appPreferencesStore,
             menuBarLyricsControlsPreferencesStore = appPreferencesStore,
             autoPlayOnStartupPreferencesStore = appPreferencesStore,
+            windowClosePreferencesStore = appPreferencesStore,
             playerArtworkStylePreferencesStore = appPreferencesStore,
             desktopVlcPreferencesStore = appPreferencesStore,
             networkConnectionTypeProvider = WifiNetworkConnectionTypeProvider,
@@ -366,19 +374,20 @@ private class JvmLyricsHttpClient : LyricsHttpClient {
     }
 }
 
-private class JvmAppPreferencesStore : PlaybackPreferencesStore, SambaCachePreferencesStore, ThemePreferencesStore,
+internal class JvmAppPreferencesStore(
+    settingsFile: File = defaultJvmSettingsFile(),
+) : PlaybackPreferencesStore, SambaCachePreferencesStore, ThemePreferencesStore,
     CompactPlayerLyricsPreferencesStore, DesktopLyricsPreferencesStore, MenuBarLyricsControlsPreferencesStore,
     DesktopVlcPreferencesStore, LyricsShareFontPreferencesStore, PlayerArtworkStylePreferencesStore,
-    LibrarySourceFilterPreferencesStore {
-    private val settingsFile = File(File(System.getProperty("user.home")), ".lynmusic/settings.properties").apply {
-        parentFile?.mkdirs()
-    }
+    LibrarySourceFilterPreferencesStore, WindowClosePreferencesStore {
+    private val propertiesFile = JvmSettingsPropertiesFile(settingsFile)
     private val mutableUseSambaCache = MutableStateFlow(readUseSambaCache())
     private val mutablePlaybackVolume = MutableStateFlow(readPlaybackVolume())
     private val mutableShowCompactPlayerLyrics = MutableStateFlow(readShowCompactPlayerLyrics())
     private val mutableShowDesktopLyrics = MutableStateFlow(readShowDesktopLyrics())
     private val mutableShowMenuBarLyricsControls = MutableStateFlow(readShowMenuBarLyricsControls())
     private val mutableAutoPlayOnStartup = MutableStateFlow(readAutoPlayOnStartup())
+    private val mutableMinimizeWindowOnClose = MutableStateFlow(readMinimizeWindowOnClose())
     private val mutableLibrarySourceFilter = MutableStateFlow(readLibrarySourceFilter(KEY_LIBRARY_SOURCE_FILTER))
     private val mutableFavoritesSourceFilter = MutableStateFlow(readLibrarySourceFilter(KEY_FAVORITES_SOURCE_FILTER))
     private val mutableOnlineLibrarySourceId = MutableStateFlow(readNullablePreference(KEY_ONLINE_LIBRARY_SOURCE_ID))
@@ -410,6 +419,7 @@ private class JvmAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
     override val showDesktopLyrics: StateFlow<Boolean> = mutableShowDesktopLyrics.asStateFlow()
     override val showMenuBarLyricsControls: StateFlow<Boolean> = mutableShowMenuBarLyricsControls.asStateFlow()
     override val autoPlayOnStartup: StateFlow<Boolean> = mutableAutoPlayOnStartup.asStateFlow()
+    override val minimizeWindowOnClose: StateFlow<Boolean> = mutableMinimizeWindowOnClose.asStateFlow()
     override val selectedTheme: StateFlow<AppThemeId> = mutableSelectedTheme.asStateFlow()
     override val customThemeTokens: StateFlow<AppThemeTokens> = mutableCustomThemeTokens.asStateFlow()
     override val textPalettePreferences: StateFlow<AppThemeTextPalettePreferences> = mutableTextPalettePreferences.asStateFlow()
@@ -427,134 +437,162 @@ private class JvmAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
     override val favoritesTrackSortMode: StateFlow<TrackSortMode> = mutableFavoritesTrackSortMode.asStateFlow()
 
     override suspend fun setUseSambaCache(enabled: Boolean) {
-        val properties = loadProperties()
-        properties.setProperty(KEY_USE_SAMBA_CACHE, enabled.toString())
-        persistProperties(properties)
-        mutableUseSambaCache.value = enabled
+        updateProperties(
+            mutate = { setProperty(KEY_USE_SAMBA_CACHE, enabled.toString()) },
+            onPersisted = { mutableUseSambaCache.value = enabled },
+        )
     }
 
     override suspend fun setPlaybackVolume(volume: Float) {
         val normalizedVolume = normalizePlaybackVolume(volume)
-        val properties = loadProperties()
-        properties.setProperty(KEY_PLAYBACK_VOLUME, normalizedVolume.toString())
-        persistProperties(properties)
-        mutablePlaybackVolume.value = normalizedVolume
+        updateProperties(
+            mutate = { setProperty(KEY_PLAYBACK_VOLUME, normalizedVolume.toString()) },
+            onPersisted = { mutablePlaybackVolume.value = normalizedVolume },
+        )
     }
 
     override suspend fun setShowCompactPlayerLyrics(enabled: Boolean) {
-        val properties = loadProperties()
-        properties.setProperty(KEY_SHOW_COMPACT_PLAYER_LYRICS, enabled.toString())
-        persistProperties(properties)
-        mutableShowCompactPlayerLyrics.value = enabled
+        updateProperties(
+            mutate = { setProperty(KEY_SHOW_COMPACT_PLAYER_LYRICS, enabled.toString()) },
+            onPersisted = { mutableShowCompactPlayerLyrics.value = enabled },
+        )
     }
 
     override suspend fun setShowDesktopLyrics(enabled: Boolean) {
-        val properties = loadProperties()
-        properties.setProperty(KEY_SHOW_DESKTOP_LYRICS, enabled.toString())
-        persistProperties(properties)
-        mutableShowDesktopLyrics.value = enabled
+        updateProperties(
+            mutate = { setProperty(KEY_SHOW_DESKTOP_LYRICS, enabled.toString()) },
+            onPersisted = { mutableShowDesktopLyrics.value = enabled },
+        )
     }
 
     override suspend fun setShowMenuBarLyricsControls(enabled: Boolean) {
-        val properties = loadProperties()
-        properties.setProperty(KEY_SHOW_MENU_BAR_LYRICS_CONTROLS, enabled.toString())
-        persistProperties(properties)
-        mutableShowMenuBarLyricsControls.value = enabled
+        updateProperties(
+            mutate = { setProperty(KEY_SHOW_MENU_BAR_LYRICS_CONTROLS, enabled.toString()) },
+            onPersisted = { mutableShowMenuBarLyricsControls.value = enabled },
+        )
     }
 
     override suspend fun setAutoPlayOnStartup(enabled: Boolean) {
-        val properties = loadProperties()
-        properties.setProperty(KEY_AUTO_PLAY_ON_STARTUP, enabled.toString())
-        persistProperties(properties)
-        mutableAutoPlayOnStartup.value = enabled
+        updateProperties(
+            mutate = { setProperty(KEY_AUTO_PLAY_ON_STARTUP, enabled.toString()) },
+            onPersisted = { mutableAutoPlayOnStartup.value = enabled },
+        )
+    }
+
+    override suspend fun setMinimizeWindowOnClose(enabled: Boolean) {
+        updateProperties(
+            mutate = { setProperty(KEY_MACOS_MINIMIZE_WINDOW_ON_CLOSE, enabled.toString()) },
+            onPersisted = { mutableMinimizeWindowOnClose.value = enabled },
+        )
     }
 
     override suspend fun setPlayerArtworkStyle(style: PlayerArtworkStyle) {
-        val properties = loadProperties()
-        properties.setProperty(KEY_PLAYER_ARTWORK_STYLE, style.name)
-        persistProperties(properties)
-        mutablePlayerArtworkStyle.value = style
+        updateProperties(
+            mutate = { setProperty(KEY_PLAYER_ARTWORK_STYLE, style.name) },
+            onPersisted = { mutablePlayerArtworkStyle.value = style },
+        )
     }
 
     override suspend fun setLibrarySourceFilter(filter: LibrarySourceFilter) {
-        val properties = loadProperties()
-        properties.setProperty(KEY_LIBRARY_SOURCE_FILTER, filter.name)
-        persistProperties(properties)
-        mutableLibrarySourceFilter.value = filter
+        updateProperties(
+            mutate = { setProperty(KEY_LIBRARY_SOURCE_FILTER, filter.name) },
+            onPersisted = { mutableLibrarySourceFilter.value = filter },
+        )
     }
 
     override suspend fun setFavoritesSourceFilter(filter: LibrarySourceFilter) {
-        val properties = loadProperties()
-        properties.setProperty(KEY_FAVORITES_SOURCE_FILTER, filter.name)
-        persistProperties(properties)
-        mutableFavoritesSourceFilter.value = filter
+        updateProperties(
+            mutate = { setProperty(KEY_FAVORITES_SOURCE_FILTER, filter.name) },
+            onPersisted = { mutableFavoritesSourceFilter.value = filter },
+        )
     }
 
     override suspend fun setOnlineLibrarySourceId(sourceId: String?) {
-        setNullablePreference(KEY_ONLINE_LIBRARY_SOURCE_ID, sourceId)
-        mutableOnlineLibrarySourceId.value = normalizeNullablePreference(sourceId)
+        val normalizedSourceId = normalizeNullablePreference(sourceId)
+        updateNullablePreference(
+            key = KEY_ONLINE_LIBRARY_SOURCE_ID,
+            value = normalizedSourceId,
+            onPersisted = { mutableOnlineLibrarySourceId.value = normalizedSourceId },
+        )
     }
 
     override suspend fun setOnlineFavoritesSourceId(sourceId: String?) {
-        setNullablePreference(KEY_ONLINE_FAVORITES_SOURCE_ID, sourceId)
-        mutableOnlineFavoritesSourceId.value = normalizeNullablePreference(sourceId)
+        val normalizedSourceId = normalizeNullablePreference(sourceId)
+        updateNullablePreference(
+            key = KEY_ONLINE_FAVORITES_SOURCE_ID,
+            value = normalizedSourceId,
+            onPersisted = { mutableOnlineFavoritesSourceId.value = normalizedSourceId },
+        )
     }
 
     override suspend fun setOnlinePlaylistsSourceId(sourceId: String?) {
-        setNullablePreference(KEY_ONLINE_PLAYLISTS_SOURCE_ID, sourceId)
-        mutableOnlinePlaylistsSourceId.value = normalizeNullablePreference(sourceId)
+        val normalizedSourceId = normalizeNullablePreference(sourceId)
+        updateNullablePreference(
+            key = KEY_ONLINE_PLAYLISTS_SOURCE_ID,
+            value = normalizedSourceId,
+            onPersisted = { mutableOnlinePlaylistsSourceId.value = normalizedSourceId },
+        )
     }
 
     override suspend fun setLibraryTrackSortMode(mode: TrackSortMode) {
-        val properties = loadProperties()
-        properties.setProperty(KEY_LIBRARY_TRACK_SORT_MODE, mode.name)
-        persistProperties(properties)
-        mutableLibraryTrackSortMode.value = mode
+        updateProperties(
+            mutate = { setProperty(KEY_LIBRARY_TRACK_SORT_MODE, mode.name) },
+            onPersisted = { mutableLibraryTrackSortMode.value = mode },
+        )
     }
 
     override suspend fun setFavoritesTrackSortMode(mode: TrackSortMode) {
-        val properties = loadProperties()
-        properties.setProperty(KEY_FAVORITES_TRACK_SORT_MODE, mode.name)
-        persistProperties(properties)
-        mutableFavoritesTrackSortMode.value = mode
+        updateProperties(
+            mutate = { setProperty(KEY_FAVORITES_TRACK_SORT_MODE, mode.name) },
+            onPersisted = { mutableFavoritesTrackSortMode.value = mode },
+        )
     }
 
     override suspend fun setSelectedTheme(themeId: AppThemeId) {
-        val properties = loadProperties()
-        properties.setProperty(KEY_SELECTED_THEME, themeId.name)
-        persistProperties(properties)
-        mutableSelectedTheme.value = themeId
+        updateProperties(
+            mutate = { setProperty(KEY_SELECTED_THEME, themeId.name) },
+            onPersisted = { mutableSelectedTheme.value = themeId },
+        )
     }
 
     override suspend fun setCustomThemeTokens(tokens: AppThemeTokens) {
-        val properties = loadProperties()
-        properties.setProperty(KEY_CUSTOM_THEME_BACKGROUND_ARGB, tokens.backgroundArgb.toString())
-        properties.setProperty(KEY_CUSTOM_THEME_ACCENT_ARGB, tokens.accentArgb.toString())
-        properties.setProperty(KEY_CUSTOM_THEME_FOCUS_ARGB, tokens.focusArgb.toString())
-        persistProperties(properties)
-        mutableCustomThemeTokens.value = tokens
+        updateProperties(
+            mutate = {
+                setProperty(KEY_CUSTOM_THEME_BACKGROUND_ARGB, tokens.backgroundArgb.toString())
+                setProperty(KEY_CUSTOM_THEME_ACCENT_ARGB, tokens.accentArgb.toString())
+                setProperty(KEY_CUSTOM_THEME_FOCUS_ARGB, tokens.focusArgb.toString())
+            },
+            onPersisted = { mutableCustomThemeTokens.value = tokens },
+        )
     }
 
     override suspend fun setTextPalette(themeId: AppThemeId, palette: AppThemeTextPalette) {
-        val properties = loadProperties()
-        properties.setProperty(textPaletteKey(themeId), palette.name)
-        persistProperties(properties)
-        mutableTextPalettePreferences.value = mutableTextPalettePreferences.value.withThemePalette(themeId, palette)
+        updateProperties(
+            mutate = { setProperty(textPaletteKey(themeId), palette.name) },
+            onPersisted = {
+                mutableTextPalettePreferences.value =
+                    mutableTextPalettePreferences.value.withThemePalette(themeId, palette)
+            },
+        )
     }
 
     override suspend fun setDesktopVlcManualPath(path: String?) {
         val normalizedPath = path?.trim()?.takeIf { it.isNotBlank() }
-        val properties = loadProperties()
-        if (normalizedPath == null) {
-            properties.remove(KEY_DESKTOP_VLC_MANUAL_PATH)
-        } else {
-            properties.setProperty(KEY_DESKTOP_VLC_MANUAL_PATH, normalizedPath)
-        }
-        persistProperties(properties)
-        mutableDesktopVlcManualPath.value = normalizedPath
-        mutableDesktopVlcEffectivePath.value = resolveDesktopVlcEffectivePath(
-            manualPath = mutableDesktopVlcManualPath.value,
-            autoDetectedPath = mutableDesktopVlcAutoDetectedPath.value,
+        updateProperties(
+            mutate = {
+                if (normalizedPath == null) {
+                    remove(KEY_DESKTOP_VLC_MANUAL_PATH)
+                } else {
+                    setProperty(KEY_DESKTOP_VLC_MANUAL_PATH, normalizedPath)
+                }
+            },
+            onPersisted = {
+                mutableDesktopVlcManualPath.value = normalizedPath
+                mutableDesktopVlcEffectivePath.value = resolveDesktopVlcEffectivePath(
+                    manualPath = mutableDesktopVlcManualPath.value,
+                    autoDetectedPath = mutableDesktopVlcAutoDetectedPath.value,
+                )
+            },
         )
     }
 
@@ -568,14 +606,16 @@ private class JvmAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
 
     override suspend fun setSelectedLyricsShareFontKey(value: String?) {
         val normalizedValue = value?.trim()?.takeIf { it.isNotBlank() }
-        val properties = loadProperties()
-        if (normalizedValue == null) {
-            properties.remove(KEY_LYRICS_SHARE_FONT_KEY)
-        } else {
-            properties.setProperty(KEY_LYRICS_SHARE_FONT_KEY, normalizedValue)
-        }
-        persistProperties(properties)
-        mutableSelectedLyricsShareFontKey.value = normalizedValue
+        updateProperties(
+            mutate = {
+                if (normalizedValue == null) {
+                    remove(KEY_LYRICS_SHARE_FONT_KEY)
+                } else {
+                    setProperty(KEY_LYRICS_SHARE_FONT_KEY, normalizedValue)
+                }
+            },
+            onPersisted = { mutableSelectedLyricsShareFontKey.value = normalizedValue },
+        )
     }
 
     private fun readUseSambaCache(): Boolean {
@@ -602,6 +642,12 @@ private class JvmAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
         return loadProperties().getProperty(KEY_AUTO_PLAY_ON_STARTUP)?.toBooleanStrictOrNull() ?: false
     }
 
+    private fun readMinimizeWindowOnClose(): Boolean {
+        return minimizeWindowOnCloseOrDefault(
+            loadProperties().getProperty(KEY_MACOS_MINIMIZE_WINDOW_ON_CLOSE),
+        )
+    }
+
     private fun readPlayerArtworkStyle(): PlayerArtworkStyle {
         return playerArtworkStyleOrDefault(loadProperties().getProperty(KEY_PLAYER_ARTWORK_STYLE))
     }
@@ -619,15 +665,21 @@ private class JvmAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
         return value?.trim()?.takeIf { it.isNotBlank() }
     }
 
-    private fun setNullablePreference(key: String, value: String?) {
-        val properties = loadProperties()
-        val normalizedValue = normalizeNullablePreference(value)
-        if (normalizedValue == null) {
-            properties.remove(key)
-        } else {
-            properties.setProperty(key, normalizedValue)
-        }
-        persistProperties(properties)
+    private suspend fun updateNullablePreference(
+        key: String,
+        value: String?,
+        onPersisted: () -> Unit,
+    ) {
+        updateProperties(
+            mutate = {
+                if (value == null) {
+                    remove(key)
+                } else {
+                    setProperty(key, value)
+                }
+            },
+            onPersisted = onPersisted,
+        )
     }
 
     private fun readTrackSortMode(key: String, defaultMode: TrackSortMode): TrackSortMode {
@@ -690,6 +742,24 @@ private class JvmAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
     }
 
     private fun loadProperties(): Properties {
+        return propertiesFile.load()
+    }
+
+    private suspend fun updateProperties(
+        mutate: Properties.() -> Unit,
+        onPersisted: () -> Unit,
+    ) {
+        propertiesFile.update(mutate, onPersisted)
+    }
+}
+
+internal class JvmSettingsPropertiesFile(
+    settingsFile: File,
+) {
+    private val settingsFile = settingsFile.apply { parentFile?.mkdirs() }
+    private val updateMutex = Mutex()
+
+    fun load(): Properties {
         val properties = Properties()
         if (settingsFile.exists()) {
             settingsFile.inputStream().use { input -> properties.load(input) }
@@ -697,11 +767,51 @@ private class JvmAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
         return properties
     }
 
-    private fun persistProperties(properties: Properties) {
-        settingsFile.outputStream().use { output ->
-            properties.store(output, "LynMusic settings")
+    suspend fun update(
+        mutate: Properties.() -> Unit,
+        onPersisted: () -> Unit = {},
+    ) {
+        updateMutex.withLock {
+            val properties = load().apply(mutate)
+            persist(properties)
+            onPersisted()
         }
     }
+
+    private fun persist(properties: Properties) {
+        val parentDirectory = settingsFile.parentFile ?: File(".")
+        parentDirectory.mkdirs()
+        val temporaryFile = File.createTempFile("${settingsFile.name}.", ".tmp", parentDirectory)
+        try {
+            temporaryFile.outputStream().use { output ->
+                properties.store(output, "LynMusic settings")
+            }
+            try {
+                Files.move(
+                    temporaryFile.toPath(),
+                    settingsFile.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(
+                    temporaryFile.toPath(),
+                    settingsFile.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            }
+        } finally {
+            temporaryFile.delete()
+        }
+    }
+}
+
+private fun defaultJvmSettingsFile(): File {
+    return File(File(System.getProperty("user.home")), ".lynmusic/settings.properties")
+}
+
+internal fun minimizeWindowOnCloseOrDefault(value: String?): Boolean {
+    return value?.toBooleanStrictOrNull() ?: DEFAULT_MINIMIZE_WINDOW_ON_CLOSE
 }
 
 private const val KEY_SELECTED_THEME = "selected_theme"
@@ -2951,6 +3061,7 @@ private const val KEY_SHOW_COMPACT_PLAYER_LYRICS = "show_compact_player_lyrics"
 private const val KEY_SHOW_DESKTOP_LYRICS = "show_desktop_lyrics"
 private const val KEY_SHOW_MENU_BAR_LYRICS_CONTROLS = "show_menu_bar_lyrics_controls"
 private const val KEY_AUTO_PLAY_ON_STARTUP = "auto_play_on_startup"
+private const val KEY_MACOS_MINIMIZE_WINDOW_ON_CLOSE = "macos_minimize_window_on_close"
 private const val KEY_PLAYER_ARTWORK_STYLE = "player_artwork_style"
 private const val KEY_LIBRARY_SOURCE_FILTER = "library_source_filter"
 private const val KEY_FAVORITES_SOURCE_FILTER = "favorites_source_filter"

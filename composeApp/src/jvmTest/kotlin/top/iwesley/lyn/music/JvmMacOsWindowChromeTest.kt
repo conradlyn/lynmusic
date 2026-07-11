@@ -5,6 +5,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import androidx.compose.ui.unit.dp
+import top.iwesley.lyn.music.platform.minimizeWindowOnCloseOrDefault
 
 class JvmMacOsWindowChromeTest {
     @Test
@@ -35,5 +36,82 @@ class JvmMacOsWindowChromeTest {
             ),
             macOsImmersiveAwtClientProperties(),
         )
+    }
+
+    @Test
+    fun `macos close minimizes when setting is enabled`() {
+        assertTrue(
+            shouldMinimizeDesktopWindowOnClose(
+                supportsMacOsWindowCloseBehavior = true,
+                minimizeWindowOnClose = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `macos close exits when setting is disabled`() {
+        assertFalse(
+            shouldMinimizeDesktopWindowOnClose(
+                supportsMacOsWindowCloseBehavior = true,
+                minimizeWindowOnClose = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `non macos close exits even when minimize setting is enabled`() {
+        assertFalse(
+            shouldMinimizeDesktopWindowOnClose(
+                supportsMacOsWindowCloseBehavior = false,
+                minimizeWindowOnClose = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `completed persistence uses the final runtime close preference`() {
+        assertFalse(
+            resolveMinimizeWindowOnClosePreference(
+                persistenceCompleted = true,
+                currentValue = false,
+                persistedValue = true,
+            ),
+        )
+        assertTrue(
+            resolveMinimizeWindowOnClosePreference(
+                persistenceCompleted = true,
+                currentValue = true,
+                persistedValue = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `persistence timeout falls back to the committed close preference`() {
+        assertTrue(
+            resolveMinimizeWindowOnClosePreference(
+                persistenceCompleted = false,
+                currentValue = false,
+                persistedValue = true,
+            ),
+        )
+        assertFalse(
+            resolveMinimizeWindowOnClosePreference(
+                persistenceCompleted = false,
+                currentValue = true,
+                persistedValue = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `window close preference defaults to minimize for missing or invalid values`() {
+        assertTrue(minimizeWindowOnCloseOrDefault(null))
+        assertTrue(minimizeWindowOnCloseOrDefault("invalid"))
+    }
+
+    @Test
+    fun `window close preference preserves explicit false`() {
+        assertFalse(minimizeWindowOnCloseOrDefault("false"))
     }
 }

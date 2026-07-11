@@ -29,6 +29,7 @@ import top.iwesley.lyn.music.core.model.PlayerArtworkStylePreferencesStore
 import top.iwesley.lyn.music.core.model.RequestMethod
 import top.iwesley.lyn.music.core.model.SambaCachePreferencesStore
 import top.iwesley.lyn.music.core.model.ThemePreferencesStore
+import top.iwesley.lyn.music.core.model.WindowClosePreferencesStore
 import top.iwesley.lyn.music.core.model.WorkflowLyricsSourceConfig
 import top.iwesley.lyn.music.core.model.defaultCustomThemeTokens
 import top.iwesley.lyn.music.core.model.defaultThemeTextPalettePreferences
@@ -217,6 +218,44 @@ class SettingsRepositoryTest {
 
         assertEquals(false, preferences.autoPlayOnStartup.value)
         assertEquals(false, repository.autoPlayOnStartup.value)
+    }
+
+    @Test
+    fun `minimize window on close preference defaults to true`() = runTest {
+        val database = createSettingsTestDatabase()
+        val preferences = FakePreferencesStore()
+        val repository = DefaultSettingsRepository(
+            database = database,
+            sambaCachePreferencesStore = preferences,
+            themePreferencesStore = preferences,
+            desktopVlcPreferencesStore = preferences,
+            windowClosePreferencesStore = preferences,
+        )
+
+        assertEquals(true, repository.minimizeWindowOnClose.value)
+    }
+
+    @Test
+    fun `setting minimize window on close preference writes through to preference store`() = runTest {
+        val database = createSettingsTestDatabase()
+        val preferences = FakePreferencesStore()
+        val repository = DefaultSettingsRepository(
+            database = database,
+            sambaCachePreferencesStore = preferences,
+            themePreferencesStore = preferences,
+            desktopVlcPreferencesStore = preferences,
+            windowClosePreferencesStore = preferences,
+        )
+
+        repository.setMinimizeWindowOnClose(false)
+
+        assertEquals(false, preferences.minimizeWindowOnClose.value)
+        assertEquals(false, repository.minimizeWindowOnClose.value)
+
+        repository.setMinimizeWindowOnClose(true)
+
+        assertEquals(true, preferences.minimizeWindowOnClose.value)
+        assertEquals(true, repository.minimizeWindowOnClose.value)
     }
 
     @Test
@@ -640,7 +679,7 @@ private fun createSettingsTestDatabase(): LynMusicDatabase {
 }
 
 private class FakePreferencesStore : SambaCachePreferencesStore, ThemePreferencesStore, DesktopVlcPreferencesStore,
-    AutoPlayOnStartupPreferencesStore,
+    AutoPlayOnStartupPreferencesStore, WindowClosePreferencesStore,
     CompactPlayerLyricsPreferencesStore, DesktopLyricsPreferencesStore, MenuBarLyricsControlsPreferencesStore,
     NavidromeAudioQualityPreferencesStore, PlaybackDecoderPreferencesStore, PlayerArtworkStylePreferencesStore {
     override val useSambaCache = MutableStateFlow(true)
@@ -648,6 +687,7 @@ private class FakePreferencesStore : SambaCachePreferencesStore, ThemePreference
     override val showDesktopLyrics = MutableStateFlow(false)
     override val showMenuBarLyricsControls = MutableStateFlow(false)
     override val autoPlayOnStartup = MutableStateFlow(false)
+    override val minimizeWindowOnClose = MutableStateFlow(true)
     override val useAndroidExtensionDecoder = MutableStateFlow(false)
     override val playerArtworkStyle = MutableStateFlow(PlayerArtworkStyle.VINYL)
     override val navidromeWifiAudioQuality = MutableStateFlow(NavidromeAudioQuality.Original)
@@ -677,6 +717,10 @@ private class FakePreferencesStore : SambaCachePreferencesStore, ThemePreference
 
     override suspend fun setAutoPlayOnStartup(enabled: Boolean) {
         autoPlayOnStartup.value = enabled
+    }
+
+    override suspend fun setMinimizeWindowOnClose(enabled: Boolean) {
+        minimizeWindowOnClose.value = enabled
     }
 
     override suspend fun setUseAndroidExtensionDecoder(enabled: Boolean) {

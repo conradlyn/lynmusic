@@ -1,8 +1,14 @@
 package top.iwesley.lyn.music.feature.settings
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.random.Random
 import kotlin.time.Clock
 import top.iwesley.lyn.music.core.model.AppReleaseInfo
@@ -18,6 +24,7 @@ import top.iwesley.lyn.music.core.model.BuildMetadata
 import top.iwesley.lyn.music.core.model.DeviceInfoGateway
 import top.iwesley.lyn.music.core.model.DeviceInfoSnapshot
 import top.iwesley.lyn.music.core.model.DesktopLyricsPlatformService
+import top.iwesley.lyn.music.core.model.DEFAULT_MINIMIZE_WINDOW_ON_CLOSE
 import top.iwesley.lyn.music.core.model.LyricsShareFontLibraryPlatformService
 import top.iwesley.lyn.music.core.model.LyricsShareFontOption
 import top.iwesley.lyn.music.core.model.LyricsShareFontPreferencesStore
@@ -70,6 +77,7 @@ data class SettingsState(
     val showDesktopLyrics: Boolean = false,
     val showMenuBarLyricsControls: Boolean = false,
     val autoPlayOnStartup: Boolean = false,
+    val minimizeWindowOnClose: Boolean = DEFAULT_MINIMIZE_WINDOW_ON_CLOSE,
     val appDisplayScalePreset: AppDisplayScalePreset = AppDisplayScalePreset.Default,
     val navidromeWifiAudioQuality: NavidromeAudioQuality = NavidromeAudioQuality.Original,
     val navidromeMobileAudioQuality: NavidromeAudioQuality = NavidromeAudioQuality.Kbps192,
@@ -124,6 +132,10 @@ sealed interface SettingsIntent {
     data class ShowMenuBarLyricsControlsChanged(val value: Boolean) : SettingsIntent
     data object RecheckDesktopLyricsPermission : SettingsIntent
     data class AutoPlayOnStartupChanged(val value: Boolean) : SettingsIntent
+    data class MinimizeWindowOnCloseChanged(
+        val value: Boolean,
+        val revision: Long = 0L,
+    ) : SettingsIntent
     data class AppDisplayScalePresetChanged(val value: AppDisplayScalePreset) : SettingsIntent
     data class NavidromeWifiAudioQualityChanged(val value: NavidromeAudioQuality) : SettingsIntent
     data class NavidromeMobileAudioQualityChanged(val value: NavidromeAudioQuality) : SettingsIntent
@@ -194,6 +206,7 @@ class SettingsStore(
         UnsupportedDesktopLyricsPlatformService,
 ) : BaseStore<SettingsState, SettingsIntent, SettingsEffect>(
     initialState = SettingsState(
+        minimizeWindowOnClose = repository.minimizeWindowOnClose.value,
         supportsLyricsShareFontImport =
             lyricsShareFontLibraryPlatformService !== UnsupportedLyricsShareFontLibraryPlatformService,
     ),
@@ -201,6 +214,9 @@ class SettingsStore(
 ) {
     private var desktopLyricsPermissionRequestPending = false
     private val appUpdateCheckMutex = Mutex()
+    private val minimizeWindowOnCloseWriteMutex = Mutex()
+    private val minimizeWindowOnCloseRevision = MutableStateFlow(0L)
+    private val pendingMinimizeWindowOnCloseWrites = MutableStateFlow(0)
     private var silentAppUpdateCheckStarted = false
 
     init {
@@ -336,6 +352,32 @@ class SettingsStore(
         }
     }
 
+    override fun reduceStateImmediately(intent: SettingsIntent): SettingsIntent {
+        if (intent !is SettingsIntent.MinimizeWindowOnCloseChanged) return intent
+
+        val revision = minimizeWindowOnCloseRevision.updateAndGet { currentRevision ->
+            currentRevision + 1L
+        }
+        pendingMinimizeWindowOnCloseWrites.update { pendingWrites -> pendingWrites + 1 }
+        updateState { state -> state.copy(minimizeWindowOnClose = intent.value) }
+        return intent.copy(revision = revision)
+    }
+
+    val persistedMinimizeWindowOnClose: Boolean
+        get() = repository.minimizeWindowOnClose.value
+
+    suspend fun awaitMinimizeWindowOnClosePersistence() {
+        pendingMinimizeWindowOnCloseWrites.first { pendingWrites -> pendingWrites == 0 }
+    }
+
+    override fun onIntentHandlingCompleted(intent: SettingsIntent) {
+        if (intent is SettingsIntent.MinimizeWindowOnCloseChanged) {
+            pendingMinimizeWindowOnCloseWrites.update { pendingWrites ->
+                (pendingWrites - 1).coerceAtLeast(0)
+            }
+        }
+    }
+
     override suspend fun handleIntent(intent: SettingsIntent) {
         when (intent) {
             is SettingsIntent.UseSambaCacheChanged -> {
@@ -363,6 +405,10 @@ class SettingsStore(
             is SettingsIntent.AutoPlayOnStartupChanged -> {
                 repository.setAutoPlayOnStartup(intent.value)
                 updateState { it.copy(autoPlayOnStartup = intent.value) }
+            }
+
+            is SettingsIntent.MinimizeWindowOnCloseChanged -> {
+                persistMinimizeWindowOnClose(intent)
             }
 
             is SettingsIntent.AppDisplayScalePresetChanged -> {
@@ -777,6 +823,29 @@ class SettingsStore(
             }
 
             SettingsIntent.ClearMessage -> updateState { it.copy(message = null) }
+        }
+    }
+
+    private suspend fun persistMinimizeWindowOnClose(intent: SettingsIntent.MinimizeWindowOnCloseChanged) {
+        minimizeWindowOnCloseWriteMutex.withLock {
+            if (intent.revision != minimizeWindowOnCloseRevision.value) return@withLock
+
+            try {
+                repository.setMinimizeWindowOnClose(intent.value)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Throwable) {
+                updateState { currentState ->
+                    if (intent.revision != minimizeWindowOnCloseRevision.value) {
+                        currentState
+                    } else {
+                        currentState.copy(
+                            minimizeWindowOnClose = repository.minimizeWindowOnClose.value,
+                            message = "关闭按钮行为保存失败。",
+                        )
+                    }
+                }
+            }
         }
     }
 

@@ -27,8 +27,12 @@ abstract class BaseStore<S, I, E>(
     final override val effects: SharedFlow<E> = mutableEffects.asSharedFlow()
 
     final override fun dispatch(intent: I) {
-        scope.launch {
-            handleIntent(intent)
+        val intentToHandle = reduceStateImmediately(intent)
+        val handlingJob = scope.launch {
+            handleIntent(intentToHandle)
+        }
+        handlingJob.invokeOnCompletion {
+            onIntentHandlingCompleted(intentToHandle)
         }
     }
 
@@ -39,6 +43,16 @@ abstract class BaseStore<S, I, E>(
     protected suspend fun emitEffect(effect: E) {
         mutableEffects.emit(effect)
     }
+
+    /**
+     * Applies lightweight state changes that must be visible before [dispatch] returns.
+     * The returned intent may carry metadata needed by asynchronous handling.
+     * Long-running work and side effects must remain in [handleIntent].
+     */
+    protected open fun reduceStateImmediately(intent: I): I = intent
+
+    /** Called once after asynchronous handling completes or is cancelled before starting. */
+    protected open fun onIntentHandlingCompleted(intent: I) = Unit
 
     protected abstract suspend fun handleIntent(intent: I)
 }

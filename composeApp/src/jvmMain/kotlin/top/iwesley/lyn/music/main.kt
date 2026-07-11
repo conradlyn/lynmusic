@@ -9,6 +9,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import java.awt.Dimension
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import top.iwesley.lyn.music.platform.createJvmAppComponent
 
 @OptIn(ExperimentalComposeUiApi::class)
@@ -16,6 +18,7 @@ fun main() {
     installJvmUncaughtExceptionHandler()
     application {
         val appComponentResult = remember { runCatching { createJvmAppComponent() } }
+        val appComponent = appComponentResult.getOrNull()
         val desktopWindowChrome = remember {
             defaultDesktopWindowChrome(System.getProperty("os.name").orEmpty())
         }
@@ -23,7 +26,35 @@ fun main() {
             size = DpSize(1440.dp, 900.dp),
         )
         SwingWindow(
-            onCloseRequest = ::exitApplication,
+            onCloseRequest = {
+                val settingsStore = appComponent?.settingsStore
+                val supportsMacOsWindowCloseBehavior =
+                    appComponent?.platform?.capabilities?.supportsMacOsWindowCloseBehavior == true
+                val persistenceCompleted = if (supportsMacOsWindowCloseBehavior && settingsStore != null) {
+                    runBlocking {
+                        withTimeoutOrNull(WINDOW_CLOSE_PREFERENCE_FLUSH_TIMEOUT_MILLIS) {
+                            settingsStore.awaitMinimizeWindowOnClosePersistence()
+                            true
+                        } ?: false
+                    }
+                } else {
+                    true
+                }
+                val minimizeWindowOnClose = resolveMinimizeWindowOnClosePreference(
+                    persistenceCompleted = persistenceCompleted,
+                    currentValue = settingsStore?.state?.value?.minimizeWindowOnClose == true,
+                    persistedValue = settingsStore?.persistedMinimizeWindowOnClose == true,
+                )
+                val shouldMinimize = shouldMinimizeDesktopWindowOnClose(
+                    supportsMacOsWindowCloseBehavior = supportsMacOsWindowCloseBehavior,
+                    minimizeWindowOnClose = minimizeWindowOnClose,
+                )
+                if (shouldMinimize) {
+                    windowState.isMinimized = true
+                } else {
+                    exitApplication()
+                }
+            },
             title = "LynMusic",
             state = windowState,
             icon = painterResource("desktop-icon.png"),
@@ -32,7 +63,6 @@ fun main() {
                 applyDesktopWindowChrome(composeWindow, desktopWindowChrome)
             },
         ) {
-            val appComponent = appComponentResult.getOrNull()
             if (appComponent != null) {
                 App(
                     component = appComponent,
@@ -46,6 +76,23 @@ fun main() {
             }
         }
     }
+}
+
+private const val WINDOW_CLOSE_PREFERENCE_FLUSH_TIMEOUT_MILLIS = 2_000L
+
+internal fun resolveMinimizeWindowOnClosePreference(
+    persistenceCompleted: Boolean,
+    currentValue: Boolean,
+    persistedValue: Boolean,
+): Boolean {
+    return if (persistenceCompleted) currentValue else persistedValue
+}
+
+internal fun shouldMinimizeDesktopWindowOnClose(
+    supportsMacOsWindowCloseBehavior: Boolean,
+    minimizeWindowOnClose: Boolean,
+): Boolean {
+    return supportsMacOsWindowCloseBehavior && minimizeWindowOnClose
 }
 
 internal fun defaultDesktopWindowChrome(osName: String): DesktopWindowChrome {

@@ -55,8 +55,10 @@ import top.iwesley.lyn.music.core.model.UnsupportedOfflineDownloadGateway
 import top.iwesley.lyn.music.core.model.UnsupportedPlaybackDecoderPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedPlayerArtworkStylePreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedSameNameLyricsFileGateway
+import top.iwesley.lyn.music.core.model.UnsupportedWindowClosePreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedVlcPathPickerPlatformService
 import top.iwesley.lyn.music.core.model.VlcPathPickerPlatformService
+import top.iwesley.lyn.music.core.model.WindowClosePreferencesStore
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
 import top.iwesley.lyn.music.data.repository.DefaultDailyRecommendationDateChangeNotifier
 import top.iwesley.lyn.music.data.repository.DefaultAppUpdateRepository
@@ -117,6 +119,8 @@ data class SharedRuntimeServices(
         UnsupportedMenuBarLyricsControlsPreferencesStore,
     val autoPlayOnStartupPreferencesStore: AutoPlayOnStartupPreferencesStore =
         UnsupportedAutoPlayOnStartupPreferencesStore,
+    val windowClosePreferencesStore: WindowClosePreferencesStore =
+        UnsupportedWindowClosePreferencesStore,
     val navidromeAudioQualityPreferencesStore: NavidromeAudioQualityPreferencesStore =
         UnsupportedNavidromeAudioQualityPreferencesStore,
     val playbackDecoderPreferencesStore: PlaybackDecoderPreferencesStore =
@@ -214,6 +218,7 @@ fun buildSharedGraph(
         desktopLyricsPreferencesStore = runtimeServices.desktopLyricsPreferencesStore,
         menuBarLyricsControlsPreferencesStore = runtimeServices.menuBarLyricsControlsPreferencesStore,
         autoPlayOnStartupPreferencesStore = runtimeServices.autoPlayOnStartupPreferencesStore,
+        windowClosePreferencesStore = runtimeServices.windowClosePreferencesStore,
         navidromeAudioQualityPreferencesStore = runtimeServices.navidromeAudioQualityPreferencesStore,
         playbackDecoderPreferencesStore = runtimeServices.playbackDecoderPreferencesStore,
         playerArtworkStylePreferencesStore = runtimeServices.playerArtworkStylePreferencesStore,

@@ -29,6 +29,7 @@ enum class PlayerArtworkStyle {
 val DEFAULT_NAVIDROME_WIFI_AUDIO_QUALITY: NavidromeAudioQuality = NavidromeAudioQuality.Original
 val DEFAULT_NAVIDROME_MOBILE_AUDIO_QUALITY: NavidromeAudioQuality = NavidromeAudioQuality.Kbps192
 const val DEFAULT_ANDROID_EXTENSION_DECODER_ENABLED: Boolean = false
+const val DEFAULT_MINIMIZE_WINDOW_ON_CLOSE: Boolean = true
 val DEFAULT_PLAYER_ARTWORK_STYLE: PlayerArtworkStyle = PlayerArtworkStyle.VINYL
 
 fun appDisplayScalePresetOrDefault(name: String?): AppDisplayScalePreset {
@@ -92,6 +93,12 @@ interface AutoPlayOnStartupPreferencesStore {
     val autoPlayOnStartup: StateFlow<Boolean>
 
     suspend fun setAutoPlayOnStartup(enabled: Boolean)
+}
+
+interface WindowClosePreferencesStore {
+    val minimizeWindowOnClose: StateFlow<Boolean>
+
+    suspend fun setMinimizeWindowOnClose(enabled: Boolean)
 }
 
 interface AppDisplayPreferencesStore {
@@ -163,6 +170,16 @@ object UnsupportedAutoPlayOnStartupPreferencesStore : AutoPlayOnStartupPreferenc
 
     override suspend fun setAutoPlayOnStartup(enabled: Boolean) {
         mutableAutoPlayOnStartup.value = enabled
+    }
+}
+
+object UnsupportedWindowClosePreferencesStore : WindowClosePreferencesStore {
+    private val mutableMinimizeWindowOnClose = MutableStateFlow(DEFAULT_MINIMIZE_WINDOW_ON_CLOSE)
+
+    override val minimizeWindowOnClose: StateFlow<Boolean> = mutableMinimizeWindowOnClose
+
+    override suspend fun setMinimizeWindowOnClose(enabled: Boolean) {
+        mutableMinimizeWindowOnClose.value = enabled
     }
 }
 
