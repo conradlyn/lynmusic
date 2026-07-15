@@ -21,3 +21,8 @@ captures
 node_modules/
 debug_doc/
 design/
+
+# Local developer tooling and profiling output
+/.claude/
+/Caddyfile
+/*.perfetto-trace

@@ -1,6 +1,14 @@
 package top.iwesley.lyn.music
 
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.awt.SwingWindow
 import androidx.compose.ui.res.painterResource
@@ -9,73 +17,279 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import java.awt.Dimension
+import javax.swing.JOptionPane
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
+import top.iwesley.lyn.music.platform.JvmAppInstanceLock
+import top.iwesley.lyn.music.platform.JvmDataLocationManager
+import top.iwesley.lyn.music.platform.JvmDataLocationProgress
 import top.iwesley.lyn.music.platform.createJvmAppComponent
+import top.iwesley.lyn.music.platform.isJvmWindowsOs
 
 @OptIn(ExperimentalComposeUiApi::class)
 fun main() {
     installJvmUncaughtExceptionHandler()
-    application {
-        val appComponentResult = remember { runCatching { createJvmAppComponent() } }
-        val appComponent = appComponentResult.getOrNull()
-        val desktopWindowChrome = remember {
-            defaultDesktopWindowChrome(System.getProperty("os.name").orEmpty())
+    val osName = System.getProperty("os.name").orEmpty()
+    val instanceLock = if (isJvmWindowsOs(osName)) {
+        runCatching { JvmAppInstanceLock.tryAcquire() }.getOrElse { error ->
+            showDesktopStartupMessage("无法启动 LynMusic：${error.message ?: error}")
+            return
+        } ?: run {
+            showDesktopStartupMessage("LynMusic 已在运行")
+            return
         }
-        val windowState = rememberWindowState(
-            size = DpSize(1440.dp, 900.dp),
-        )
-        SwingWindow(
-            onCloseRequest = {
-                val settingsStore = appComponent?.settingsStore
-                val supportsMacOsWindowCloseBehavior =
-                    appComponent?.platform?.capabilities?.supportsMacOsWindowCloseBehavior == true
-                val persistenceCompleted = if (supportsMacOsWindowCloseBehavior && settingsStore != null) {
-                    runBlocking {
-                        withTimeoutOrNull(WINDOW_CLOSE_PREFERENCE_FLUSH_TIMEOUT_MILLIS) {
-                            settingsStore.awaitMinimizeWindowOnClosePersistence()
-                            true
-                        } ?: false
+    } else {
+        null
+    }
+    try {
+        application {
+            val dataLocationManager = remember { JvmDataLocationManager() }
+            val initialStartup = remember(dataLocationManager) {
+                initializeJvmDesktopStartup(dataLocationManager)
+            }
+            val applicationScope = rememberCoroutineScope()
+            var startupAttempt by remember { mutableIntStateOf(0) }
+            var requiresDataLocationOperation by remember {
+                mutableStateOf(initialStartup.requiresDataLocationOperation)
+            }
+            var startupState by remember {
+                mutableStateOf(initialStartup.state)
+            }
+            LaunchedEffect(startupAttempt, requiresDataLocationOperation) {
+                if (!requiresDataLocationOperation) return@LaunchedEffect
+                startupState = JvmDesktopStartupState.Preparing(
+                    JvmDataLocationProgress("正在读取数据位置…"),
+                )
+                val progressUpdates = Channel<JvmDataLocationProgress>(Channel.CONFLATED)
+                val progressJob = launch {
+                    for (progress in progressUpdates) {
+                        startupState = JvmDesktopStartupState.Preparing(progress)
                     }
-                } else {
-                    true
                 }
-                val minimizeWindowOnClose = resolveMinimizeWindowOnClosePreference(
-                    persistenceCompleted = persistenceCompleted,
-                    currentValue = settingsStore?.state?.value?.minimizeWindowOnClose == true,
-                    persistedValue = settingsStore?.persistedMinimizeWindowOnClose == true,
-                )
-                val shouldMinimize = shouldMinimizeDesktopWindowOnClose(
-                    supportsMacOsWindowCloseBehavior = supportsMacOsWindowCloseBehavior,
-                    minimizeWindowOnClose = minimizeWindowOnClose,
-                )
-                if (shouldMinimize) {
-                    windowState.isMinimized = true
-                } else {
-                    exitApplication()
+                val locationResult = dataLocationManager.applyPendingChange { progress ->
+                    progressUpdates.trySend(progress)
+                    Unit
+                }.onFailure { error ->
+                    logJvmStartupFailure(stage = "data-location", error = error)
                 }
-            },
-            title = "LynMusic",
-            state = windowState,
-            icon = painterResource("desktop-icon.png"),
-            init = { composeWindow ->
-                composeWindow.minimumSize = Dimension(1200, 720)
-                applyDesktopWindowChrome(composeWindow, desktopWindowChrome)
-            },
-        ) {
-            if (appComponent != null) {
-                App(
-                    component = appComponent,
-                    desktopWindowChrome = desktopWindowChrome,
-                )
-            } else {
-                StartupDatabaseErrorScreen(
-                    error = appComponentResult.exceptionOrNull(),
-                    showDetails = true,
+                progressUpdates.close()
+                progressJob.join()
+                startupState = locationResult.fold(
+                    onSuccess = {
+                        createJvmDesktopComponentState(dataLocationManager)
+                    },
+                    onFailure = { error ->
+                        JvmDesktopStartupState.DataLocationFailed(
+                            error = error,
+                            canCancelChange = dataLocationManager.hasPendingChangeSafely(),
+                        )
+                    },
                 )
             }
+
+            val latestStartupState by rememberUpdatedState(startupState)
+            val componentForDisposal = (startupState as? JvmDesktopStartupState.Ready)?.component
+            DisposableEffect(componentForDisposal) {
+                onDispose { componentForDisposal?.dispose() }
+            }
+            val desktopWindowChrome = remember {
+                defaultDesktopWindowChrome(System.getProperty("os.name").orEmpty())
+            }
+            val windowState = rememberWindowState(
+                size = DpSize(1440.dp, 900.dp),
+            )
+            SwingWindow(
+                onCloseRequest = closeRequest@{
+                    val currentStartupState = latestStartupState
+                    if (!shouldAllowDesktopWindowClose(currentStartupState is JvmDesktopStartupState.Preparing)) {
+                        return@closeRequest
+                    }
+                    val currentComponent = (currentStartupState as? JvmDesktopStartupState.Ready)?.component
+                    val settingsStore = currentComponent?.settingsStore
+                    val supportsMacOsWindowCloseBehavior =
+                        currentComponent?.platform?.capabilities?.supportsMacOsWindowCloseBehavior == true
+                    val persistenceCompleted = if (supportsMacOsWindowCloseBehavior && settingsStore != null) {
+                        runBlocking {
+                            withTimeoutOrNull(WINDOW_CLOSE_PREFERENCE_FLUSH_TIMEOUT_MILLIS) {
+                                settingsStore.awaitMinimizeWindowOnClosePersistence()
+                                true
+                            } ?: false
+                        }
+                    } else {
+                        true
+                    }
+                    val minimizeWindowOnClose = resolveMinimizeWindowOnClosePreference(
+                        persistenceCompleted = persistenceCompleted,
+                        currentValue = settingsStore?.state?.value?.minimizeWindowOnClose == true,
+                        persistedValue = settingsStore?.persistedMinimizeWindowOnClose == true,
+                    )
+                    val shouldMinimize = shouldMinimizeDesktopWindowOnClose(
+                        supportsMacOsWindowCloseBehavior = supportsMacOsWindowCloseBehavior,
+                        minimizeWindowOnClose = minimizeWindowOnClose,
+                    )
+                    if (shouldMinimize) {
+                        windowState.isMinimized = true
+                    } else {
+                        try {
+                            currentComponent?.dispose()
+                        } finally {
+                            exitApplication()
+                        }
+                    }
+                },
+                title = "LynMusic",
+                state = windowState,
+                icon = painterResource("desktop-icon.png"),
+                init = { composeWindow ->
+                    composeWindow.minimumSize = Dimension(1200, 720)
+                    applyDesktopWindowChrome(composeWindow, desktopWindowChrome)
+                },
+            ) {
+                when (val current = startupState) {
+                    is JvmDesktopStartupState.Preparing ->
+                        StartupDataLocationProgressScreen(
+                            message = current.progress.message,
+                            fraction = current.progress.fraction,
+                        )
+
+                    is JvmDesktopStartupState.DataLocationFailed ->
+                        StartupDataLocationErrorScreen(
+                            error = current.error,
+                            canCancelChange = current.canCancelChange,
+                            onRetry = retry@{
+                                if (startupState !is JvmDesktopStartupState.DataLocationFailed) return@retry
+                                val retryStartup = initializeJvmDesktopStartup(dataLocationManager)
+                                requiresDataLocationOperation = retryStartup.requiresDataLocationOperation
+                                startupState = retryStartup.state
+                                if (retryStartup.requiresDataLocationOperation) startupAttempt += 1
+                            },
+                            onCancelChange = cancel@{
+                                if (startupState !is JvmDesktopStartupState.DataLocationFailed) return@cancel
+                                startupState = JvmDesktopStartupState.Preparing(
+                                    JvmDataLocationProgress("正在取消数据位置切换…"),
+                                )
+                                applicationScope.launch {
+                                    dataLocationManager.cancelPendingChange().fold(
+                                        onSuccess = {
+                                            val resumedStartup = initializeJvmDesktopStartup(dataLocationManager)
+                                            requiresDataLocationOperation = resumedStartup.requiresDataLocationOperation
+                                            startupState = resumedStartup.state
+                                            if (resumedStartup.requiresDataLocationOperation) startupAttempt += 1
+                                        },
+                                        onFailure = { error ->
+                                            startupState = JvmDesktopStartupState.DataLocationFailed(
+                                                error = error,
+                                                canCancelChange = dataLocationManager.hasPendingChangeSafely(),
+                                            )
+                                        },
+                                    )
+                                }
+                            },
+                            onExitApplication = { exitApplication() },
+                        )
+
+                    is JvmDesktopStartupState.Ready ->
+                        App(
+                            component = current.component,
+                            desktopWindowChrome = desktopWindowChrome,
+                            onExitApplicationRequest = {
+                                try {
+                                    current.component.dispose()
+                                } finally {
+                                    exitApplication()
+                                }
+                            },
+                            startupWarning = current.startupWarning,
+                        )
+
+                    is JvmDesktopStartupState.ComponentFailed ->
+                        StartupDatabaseErrorScreen(
+                            error = current.error,
+                            showDetails = true,
+                        )
+                }
+            }
         }
+    } finally {
+        instanceLock?.close()
     }
+}
+
+private data class JvmDesktopStartupInitialization(
+    val requiresDataLocationOperation: Boolean,
+    val state: JvmDesktopStartupState,
+)
+
+private fun initializeJvmDesktopStartup(
+    dataLocationManager: JvmDataLocationManager,
+): JvmDesktopStartupInitialization = runCatching {
+    dataLocationManager.requiresStartupDataLocationOperation()
+}.fold(
+    onSuccess = { requiresDataLocationOperation ->
+        JvmDesktopStartupInitialization(
+            requiresDataLocationOperation = requiresDataLocationOperation,
+            state = if (requiresDataLocationOperation) {
+                JvmDesktopStartupState.Preparing(
+                    JvmDataLocationProgress("正在读取数据位置…"),
+                )
+            } else {
+                createJvmDesktopComponentState(dataLocationManager)
+            },
+        )
+    },
+    onFailure = { error ->
+        logJvmStartupFailure(stage = "data-location-config", error = error)
+        JvmDesktopStartupInitialization(
+            requiresDataLocationOperation = false,
+            state = JvmDesktopStartupState.DataLocationFailed(
+                error = error,
+                canCancelChange = false,
+            ),
+        )
+    },
+)
+
+private fun JvmDataLocationManager.hasPendingChangeSafely(): Boolean =
+    runCatching { hasPendingChange() }.getOrDefault(false)
+
+private fun createJvmDesktopComponentState(
+    dataLocationManager: JvmDataLocationManager,
+): JvmDesktopStartupState = runCatching {
+    createJvmAppComponent(dataLocationManager)
+}.fold(
+    onSuccess = { component ->
+        JvmDesktopStartupState.Ready(
+            component = component,
+            startupWarning = dataLocationManager.cleanupWarning,
+        )
+    },
+    onFailure = { error ->
+        logJvmStartupFailure(stage = "app-component", error = error)
+        JvmDesktopStartupState.ComponentFailed(error)
+    },
+)
+
+private fun showDesktopStartupMessage(message: String) {
+    runCatching {
+        JOptionPane.showMessageDialog(null, message, "LynMusic", JOptionPane.INFORMATION_MESSAGE)
+    }.onFailure {
+        System.err.println(message)
+    }
+}
+
+internal sealed interface JvmDesktopStartupState {
+    data class Preparing(val progress: JvmDataLocationProgress) : JvmDesktopStartupState
+    data class DataLocationFailed(
+        val error: Throwable,
+        val canCancelChange: Boolean,
+    ) : JvmDesktopStartupState
+    data class Ready(
+        val component: LynMusicAppComponent,
+        val startupWarning: String?,
+    ) : JvmDesktopStartupState
+    data class ComponentFailed(val error: Throwable) : JvmDesktopStartupState
 }
 
 private const val WINDOW_CLOSE_PREFERENCE_FLUSH_TIMEOUT_MILLIS = 2_000L
@@ -94,6 +308,9 @@ internal fun shouldMinimizeDesktopWindowOnClose(
 ): Boolean {
     return supportsMacOsWindowCloseBehavior && minimizeWindowOnClose
 }
+
+internal fun shouldAllowDesktopWindowClose(startupOperationInProgress: Boolean): Boolean =
+    !startupOperationInProgress
 
 internal fun defaultDesktopWindowChrome(osName: String): DesktopWindowChrome {
     return if (isJvmMacOs(osName)) {

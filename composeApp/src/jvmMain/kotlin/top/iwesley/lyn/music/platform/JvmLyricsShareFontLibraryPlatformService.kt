@@ -10,11 +10,12 @@ import top.iwesley.lyn.music.core.model.DEFAULT_LYRICS_SHARE_FONT_PREVIEW_TEXT
 import top.iwesley.lyn.music.core.model.LyricsShareFontKind
 import top.iwesley.lyn.music.core.model.LyricsShareFontLibraryPlatformService
 import top.iwesley.lyn.music.core.model.LyricsShareFontOption
+import top.iwesley.lyn.music.core.model.JvmAppDataDirectory
 import top.iwesley.lyn.music.core.model.buildLyricsShareImportedFontKey
 import top.iwesley.lyn.music.core.model.parseLyricsShareImportedFontHash
 
 class JvmLyricsShareFontLibraryPlatformService(
-    private val rootDirectory: File = File(File(System.getProperty("user.home")), ".lynmusic/lyrics-share-fonts"),
+    private val rootDirectory: File = JvmAppDataDirectory.resolve("lyrics-share-fonts"),
 ) : LyricsShareFontLibraryPlatformService {
     override suspend fun listImportedFonts(): Result<List<LyricsShareFontOption>> = withContext(Dispatchers.IO) {
         runCatching {

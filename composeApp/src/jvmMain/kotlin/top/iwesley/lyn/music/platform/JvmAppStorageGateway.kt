@@ -1,16 +1,19 @@
 package top.iwesley.lyn.music.platform
 
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import top.iwesley.lyn.music.core.model.AppStorageCategory
 import top.iwesley.lyn.music.core.model.AppStorageCategoryUsage
 import top.iwesley.lyn.music.core.model.AppStorageGateway
 import top.iwesley.lyn.music.core.model.AppStorageSnapshot
+import top.iwesley.lyn.music.core.model.JvmAppDataDirectory
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
 
 fun createJvmAppStorageGateway(
-    rootDirectory: File = File(File(System.getProperty("user.home")), ".lynmusic"),
+    rootDirectory: File = JvmAppDataDirectory.rootDirectory(),
     database: LynMusicDatabase? = null,
 ): AppStorageGateway = JvmAppStorageGateway(rootDirectory, database)
 
@@ -83,19 +86,19 @@ internal class JvmAppStorageGateway(
 }
 
 private fun directorySizeBytes(root: File): Long {
-    if (!root.exists()) return 0L
+    if (!Files.exists(root.toPath(), NOFOLLOW_LINKS)) return 0L
+    if (isJvmLinkOrReparsePoint(root.toPath())) return 0L
     if (root.isFile) return root.length()
     return root.listFiles().orEmpty().sumOf(::directorySizeBytes)
 }
 
 private fun clearDirectory(root: File) {
-    if (!root.exists()) return
-    root.listFiles().orEmpty().forEach(::deleteRecursively)
-}
-
-private fun deleteRecursively(target: File) {
-    if (target.isDirectory) {
-        target.listFiles().orEmpty().forEach(::deleteRecursively)
+    if (!Files.exists(root.toPath(), NOFOLLOW_LINKS)) return
+    if (isJvmLinkOrReparsePoint(root.toPath())) {
+        safeDeleteTree(root.toPath())
+        return
     }
-    target.delete()
+    Files.newDirectoryStream(root.toPath()).use { children ->
+        children.forEach(::safeDeleteTree)
+    }
 }

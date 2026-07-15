@@ -34,8 +34,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -44,6 +46,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
 import top.iwesley.lyn.music.SharedRuntimeServices
 import top.iwesley.lyn.music.buildPlayerAppComponent
 import top.iwesley.lyn.music.buildSharedGraph
@@ -89,6 +92,7 @@ import top.iwesley.lyn.music.core.model.PlaybackPreferencesStore
 import top.iwesley.lyn.music.core.model.PlayerArtworkStyle
 import top.iwesley.lyn.music.core.model.PlayerArtworkStylePreferencesStore
 import top.iwesley.lyn.music.core.model.LyricsShareFontPreferencesStore
+import top.iwesley.lyn.music.core.model.JvmAppDataDirectory
 import top.iwesley.lyn.music.core.model.DEFAULT_PLAYBACK_VOLUME
 import top.iwesley.lyn.music.core.model.SAME_NAME_LRC_MAX_BYTES
 import top.iwesley.lyn.music.core.model.SambaCachePreferencesStore
@@ -181,15 +185,21 @@ import uk.co.caprica.vlcj.media.callback.CallbackMedia
 import uk.co.caprica.vlcj.player.base.MediaPlayer
 import uk.co.caprica.vlcj.player.base.MediaPlayerEventAdapter
 
-fun createJvmAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
+fun createJvmAppComponent(
+    dataLocationManager: JvmDataLocationManager = JvmDataLocationManager(),
+): top.iwesley.lyn.music.LynMusicAppComponent {
     val osName = System.getProperty("os.name").orEmpty()
+    JvmAppDataDirectory.initialize(dataLocationManager.currentRootDirectory())
+    val resourceGuard = JvmDesktopResourceGuard()
     val database = openLynMusicDatabase(
         Room.databaseBuilder<LynMusicDatabase>(
-            name = File(File(System.getProperty("user.home")), ".lynmusic/lynmusic.db").apply {
+            name = JvmAppDataDirectory.resolve("lynmusic.db").apply {
                 parentFile?.mkdirs()
             }.absolutePath,
         ),
     ).getOrThrow()
+    resourceGuard.register { database.close() }
+    return try {
     val logger = ConsoleDiagnosticLogger(enabled = true, label = "Desktop")
     logger.info("Desktop") {
         "你好 process pid=${ProcessHandle.current().pid()}"
@@ -202,9 +212,11 @@ fun createJvmAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
         logger = logger,
         artworkCacheStore = artworkCacheStore,
     )
+    val systemPlaybackControlsToken = resourceGuard.register { systemPlaybackControls.service.close() }
     val menuBarLyricsControls = createJvmMenuBarLyricsControlsPlatformService(
         logger = logger,
     )
+    val menuBarLyricsControlsToken = resourceGuard.register { menuBarLyricsControls.service.close() }
     val remoteSourceAddressSelector = RemoteSourceAddressSelector(WifiNetworkConnectionTypeProvider)
     val playbackGateway = JvmPlaybackGateway(
         database = database,
@@ -214,7 +226,9 @@ fun createJvmAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
         logger = logger,
         addressSelector = remoteSourceAddressSelector,
     )
+    val playbackGatewayToken = resourceGuard.register { playbackGateway.release() }
     val navidromeHttpClient = JvmLyricsHttpClient()
+    resourceGuard.register { navidromeHttpClient.close() }
     val platform = PlatformDescriptor(
         name = "Desktop",
         capabilities = PlatformCapabilities(
@@ -226,9 +240,13 @@ fun createJvmAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
             supportsDesktopLyrics = true,
             supportsMenuBarLyricsControls = menuBarLyricsControls.isSupported,
             supportsMacOsWindowCloseBehavior = isJvmMacOs(osName),
+            supportsCustomDataLocation = isJvmWindowsOs(osName),
         ),
     )
     val desktopLyricsPlatformService = JvmDesktopLyricsPlatformService()
+    val desktopLyricsToken = resourceGuard.register { desktopLyricsPlatformService.release() }
+    val sharedScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val sharedScopeToken = resourceGuard.register { stopJvmAppScope(sharedScope) }
     val sharedGraph = buildSharedGraph(
         platform = platform,
         database = database,
@@ -252,6 +270,7 @@ fun createJvmAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
             lyricsHttpClient = navidromeHttpClient,
             artworkCacheStore = artworkCacheStore,
             appStorageGateway = createJvmAppStorageGateway(database = database),
+            appDataLocationPlatformService = JvmAppDataLocationPlatformService(dataLocationManager),
             offlineDownloadGateway = createJvmOfflineDownloadGateway(
                 database = database,
                 secureCredentialStore = secureStore,
@@ -278,8 +297,10 @@ fun createJvmAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
             desktopLyricsPlatformService = desktopLyricsPlatformService,
             logger = logger,
         ),
+        scope = sharedScope,
     )
-    return buildPlayerAppComponent(
+    check(sharedGraph.scope === sharedScope) { "SharedGraph 未保留 JVM 运行期 scope。" }
+    val component = buildPlayerAppComponent(
         sharedGraph = sharedGraph,
         playerRuntimeServices = PlayerRuntimeServices(
             playbackGateway = playbackGateway,
@@ -289,9 +310,31 @@ fun createJvmAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
             lyricsShareFontPreferencesStore = appPreferencesStore,
             systemPlaybackControlsPlatformService = systemPlaybackControls.service,
             menuBarLyricsControlsPlatformService = menuBarLyricsControls.service,
+            closeDesktopResources = { resourceGuard.closeAll().getOrThrow() },
         ),
     )
+    resourceGuard.transfer(sharedScopeToken)
+    resourceGuard.transfer(desktopLyricsToken)
+    resourceGuard.transfer(playbackGatewayToken)
+    resourceGuard.transfer(menuBarLyricsControlsToken)
+    resourceGuard.transfer(systemPlaybackControlsToken)
+    component
+    } catch (error: Throwable) {
+        resourceGuard.closeAllBlocking().exceptionOrNull()?.let { closeError ->
+            error.addSuppressedSafely(closeError)
+        }
+        throw error
+    }
 }
+
+private suspend fun stopJvmAppScope(scope: CoroutineScope) {
+    val job = scope.coroutineContext[Job] ?: return
+    withTimeout(JVM_APP_SCOPE_SHUTDOWN_TIMEOUT_MILLIS) {
+        job.cancelAndJoin()
+    }
+}
+
+private const val JVM_APP_SCOPE_SHUTDOWN_TIMEOUT_MILLIS = 2_000L
 
 private object JvmDailyRecommendationDateKeyProvider : DailyRecommendationDateKeyProvider {
     override fun currentDateKey(): String = LocalDate.now().toString()
@@ -335,7 +378,7 @@ private fun millisUntilNextLocalMidnight(): Long {
         .coerceAtLeast(1_000L)
 }
 
-private class JvmLyricsHttpClient : LyricsHttpClient {
+internal class JvmLyricsHttpClient : LyricsHttpClient {
     private val client = HttpClient(OkHttp) {
         install(HttpTimeout) {
             requestTimeoutMillis = 30_000L
@@ -371,6 +414,10 @@ private class JvmLyricsHttpClient : LyricsHttpClient {
                 },
             )
         }
+    }
+
+    internal fun close() {
+        client.close()
     }
 }
 
@@ -807,7 +854,7 @@ internal class JvmSettingsPropertiesFile(
 }
 
 private fun defaultJvmSettingsFile(): File {
-    return File(File(System.getProperty("user.home")), ".lynmusic/settings.properties")
+    return JvmAppDataDirectory.resolve("settings.properties")
 }
 
 internal fun minimizeWindowOnCloseOrDefault(value: String?): Boolean {
@@ -1685,7 +1732,7 @@ internal class JvmPlaybackGateway(
     private var runtimeState: JvmVlcRuntimeState = JvmVlcRuntimeState.Initializing
     private var pendingLoad: PendingVlcLoad? = null
     private var pendingInitialSeek: PendingInitialSeek? = null
-    private val sambaCacheDir = File(File(System.getProperty("user.home")), ".lynmusic/cache").apply {
+    private val sambaCacheDir = JvmAppDataDirectory.resolve("cache").apply {
         mkdirs()
     }
     private var currentCallbackMedia: CallbackMedia? = null
@@ -3077,8 +3124,8 @@ private fun buildSambaCacheFileName(sourceId: String, remotePath: String): Strin
     return "$sourceId-$sanitized"
 }
 
-private val jvmRemoteArtworkDirectory = File(File(System.getProperty("user.home")), ".lynmusic/artwork").apply {
-    mkdirs()
+private val jvmRemoteArtworkDirectory by lazy {
+    JvmAppDataDirectory.resolve("artwork").apply { mkdirs() }
 }
 
 internal const val SAMBA_LOG_TAG = "Samba"

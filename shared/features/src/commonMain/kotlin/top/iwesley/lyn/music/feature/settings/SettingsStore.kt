@@ -15,6 +15,8 @@ import top.iwesley.lyn.music.core.model.AppReleaseInfo
 import top.iwesley.lyn.music.core.model.AppStorageCategory
 import top.iwesley.lyn.music.core.model.AppStorageGateway
 import top.iwesley.lyn.music.core.model.AppStorageSnapshot
+import top.iwesley.lyn.music.core.model.AppDataLocationChangeMode
+import top.iwesley.lyn.music.core.model.AppDataLocationPlatformService
 import top.iwesley.lyn.music.core.model.AppDisplayScalePreset
 import top.iwesley.lyn.music.core.model.AppThemeId
 import top.iwesley.lyn.music.core.model.AppThemeTextPalette
@@ -35,6 +37,7 @@ import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.PlayerArtworkStyle
 import top.iwesley.lyn.music.core.model.RequestMethod
 import top.iwesley.lyn.music.core.model.UnsupportedAppStorageGateway
+import top.iwesley.lyn.music.core.model.UnsupportedAppDataLocationPlatformService
 import top.iwesley.lyn.music.core.model.UnsupportedDeviceInfoGateway
 import top.iwesley.lyn.music.core.model.UnsupportedDesktopLyricsPlatformService
 import top.iwesley.lyn.music.core.model.UnsupportedLyricsShareFontLibraryPlatformService
@@ -112,6 +115,12 @@ data class SettingsState(
     val storageLoading: Boolean = false,
     val storageLoaded: Boolean = false,
     val clearingStorageCategory: AppStorageCategory? = null,
+    val currentDataRootPath: String = "",
+    val pendingDataCleanupRootPath: String? = null,
+    val pendingDataRootPath: String? = null,
+    val dataLocationBusy: Boolean = false,
+    val dataLocationDiscardConfirmationRequired: Boolean = false,
+    val dataLocationRestartRequired: Boolean = false,
     val deviceInfoSnapshot: DeviceInfoSnapshot? = null,
     val deviceInfoLoading: Boolean = false,
     val deviceInfoLoaded: Boolean = false,
@@ -165,6 +174,13 @@ sealed interface SettingsIntent {
     data class WorkflowJsonChanged(val value: String) : SettingsIntent
     data class LoadStorageUsage(val force: Boolean = false) : SettingsIntent
     data class ClearStorageCategory(val category: AppStorageCategory) : SettingsIntent
+    data object PickDataLocation : SettingsIntent
+    data object CancelDataLocationSelection : SettingsIntent
+    data class RequestDataLocationChange(val mode: AppDataLocationChangeMode) : SettingsIntent
+    data object ConfirmDiscardDataLocation : SettingsIntent
+    data object CancelDiscardDataLocation : SettingsIntent
+    data object ConfirmDataLocationRestart : SettingsIntent
+    data object RetryDataLocationCleanup : SettingsIntent
     data class LoadDeviceInfo(val force: Boolean = false) : SettingsIntent
     data object CheckAppUpdate : SettingsIntent
     data object CheckAppUpdateSilently : SettingsIntent
@@ -188,12 +204,30 @@ sealed interface SettingsIntent {
 
 sealed interface SettingsEffect {
     data object LyricsShareFontsChanged : SettingsEffect
+    data object ExitApplicationRequested : SettingsEffect
 }
+
+private sealed interface DataLocationOperation {
+    data object Pick : DataLocationOperation
+    data object RetryCleanup : DataLocationOperation
+    data class Schedule(
+        val targetPath: String,
+        val mode: AppDataLocationChangeMode,
+    ) : DataLocationOperation
+}
+
+private data class ExecuteDataLocationOperation(
+    val operation: DataLocationOperation,
+) : SettingsIntent
+
+private data object DataLocationIntentConsumed : SettingsIntent
 
 class SettingsStore(
     private val repository: SettingsRepository,
     scope: CoroutineScope,
     private val appStorageGateway: AppStorageGateway = UnsupportedAppStorageGateway,
+    private val appDataLocationPlatformService: AppDataLocationPlatformService =
+        UnsupportedAppDataLocationPlatformService,
     private val deviceInfoGateway: DeviceInfoGateway = UnsupportedDeviceInfoGateway,
     private val lyricsShareFontLibraryPlatformService: LyricsShareFontLibraryPlatformService =
         UnsupportedLyricsShareFontLibraryPlatformService,
@@ -207,6 +241,8 @@ class SettingsStore(
 ) : BaseStore<SettingsState, SettingsIntent, SettingsEffect>(
     initialState = SettingsState(
         minimizeWindowOnClose = repository.minimizeWindowOnClose.value,
+        currentDataRootPath = appDataLocationPlatformService.currentDataRootPath,
+        pendingDataCleanupRootPath = appDataLocationPlatformService.pendingCleanupRootPath,
         supportsLyricsShareFontImport =
             lyricsShareFontLibraryPlatformService !== UnsupportedLyricsShareFontLibraryPlatformService,
     ),
@@ -215,6 +251,7 @@ class SettingsStore(
     private var desktopLyricsPermissionRequestPending = false
     private val appUpdateCheckMutex = Mutex()
     private val minimizeWindowOnCloseWriteMutex = Mutex()
+    private val dataLocationOperationMutex = Mutex()
     private val minimizeWindowOnCloseRevision = MutableStateFlow(0L)
     private val pendingMinimizeWindowOnCloseWrites = MutableStateFlow(0)
     private var silentAppUpdateCheckStarted = false
@@ -353,14 +390,124 @@ class SettingsStore(
     }
 
     override fun reduceStateImmediately(intent: SettingsIntent): SettingsIntent {
-        if (intent !is SettingsIntent.MinimizeWindowOnCloseChanged) return intent
+        return when (intent) {
+            is SettingsIntent.MinimizeWindowOnCloseChanged -> {
+                val revision = minimizeWindowOnCloseRevision.updateAndGet { currentRevision ->
+                    currentRevision + 1L
+                }
+                pendingMinimizeWindowOnCloseWrites.update { pendingWrites -> pendingWrites + 1 }
+                updateState { state -> state.copy(minimizeWindowOnClose = intent.value) }
+                intent.copy(revision = revision)
+            }
 
-        val revision = minimizeWindowOnCloseRevision.updateAndGet { currentRevision ->
-            currentRevision + 1L
+            SettingsIntent.PickDataLocation -> claimDataLocationOperation(
+                resolveOperation = { current ->
+                    DataLocationOperation.Pick.takeIf {
+                        !current.dataLocationBusy &&
+                            current.pendingDataCleanupRootPath == null &&
+                            current.pendingDataRootPath == null &&
+                            !current.dataLocationRestartRequired
+                    }
+                },
+            )
+
+            SettingsIntent.CancelDataLocationSelection -> consumeDataLocationStateIntent { current ->
+                current.copy(
+                    pendingDataRootPath = null,
+                    dataLocationDiscardConfirmationRequired = false,
+                )
+            }
+
+            is SettingsIntent.RequestDataLocationChange -> {
+                if (intent.mode == AppDataLocationChangeMode.Discard) {
+                    consumeDataLocationStateIntent { current ->
+                        if (
+                            current.pendingDataRootPath != null &&
+                            current.pendingDataCleanupRootPath == null &&
+                            !current.dataLocationRestartRequired
+                        ) {
+                            current.copy(dataLocationDiscardConfirmationRequired = true)
+                        } else {
+                            current
+                        }
+                    }
+                } else {
+                    claimScheduledDataLocationChange(AppDataLocationChangeMode.Migrate)
+                }
+            }
+
+            SettingsIntent.ConfirmDiscardDataLocation ->
+                claimScheduledDataLocationChange(
+                    mode = AppDataLocationChangeMode.Discard,
+                    requireDiscardConfirmation = true,
+                )
+
+            SettingsIntent.CancelDiscardDataLocation -> consumeDataLocationStateIntent { current ->
+                current.copy(dataLocationDiscardConfirmationRequired = false)
+            }
+
+            SettingsIntent.RetryDataLocationCleanup -> claimDataLocationOperation(
+                resolveOperation = { current ->
+                    DataLocationOperation.RetryCleanup.takeIf {
+                        !current.dataLocationBusy &&
+                            current.pendingDataCleanupRootPath != null &&
+                            !current.dataLocationRestartRequired
+                    }
+                },
+            )
+
+            else -> intent
         }
-        pendingMinimizeWindowOnCloseWrites.update { pendingWrites -> pendingWrites + 1 }
-        updateState { state -> state.copy(minimizeWindowOnClose = intent.value) }
-        return intent.copy(revision = revision)
+    }
+
+    private fun claimScheduledDataLocationChange(
+        mode: AppDataLocationChangeMode,
+        requireDiscardConfirmation: Boolean = false,
+    ): SettingsIntent = claimDataLocationOperation(
+        resolveOperation = { current ->
+            val targetPath = current.pendingDataRootPath
+            DataLocationOperation.Schedule(targetPath.orEmpty(), mode).takeIf {
+                !current.dataLocationBusy &&
+                    targetPath != null &&
+                    current.pendingDataCleanupRootPath == null &&
+                    !current.dataLocationRestartRequired &&
+                    (!requireDiscardConfirmation || current.dataLocationDiscardConfirmationRequired)
+            }
+        },
+        updateClaimedState = { current ->
+            current.copy(
+                dataLocationBusy = true,
+                dataLocationDiscardConfirmationRequired = false,
+            )
+        },
+    )
+
+    private fun claimDataLocationOperation(
+        resolveOperation: (SettingsState) -> DataLocationOperation?,
+        updateClaimedState: (SettingsState) -> SettingsState = { current ->
+            current.copy(dataLocationBusy = true)
+        },
+    ): SettingsIntent {
+        if (!dataLocationOperationMutex.tryLock()) return DataLocationIntentConsumed
+        val operation = resolveOperation(state.value)
+        if (operation == null) {
+            dataLocationOperationMutex.unlock()
+            return DataLocationIntentConsumed
+        }
+        updateState(updateClaimedState)
+        return ExecuteDataLocationOperation(operation)
+    }
+
+    private fun consumeDataLocationStateIntent(
+        transform: (SettingsState) -> SettingsState,
+    ): SettingsIntent {
+        if (!dataLocationOperationMutex.tryLock()) return DataLocationIntentConsumed
+        try {
+            updateState(transform)
+        } finally {
+            dataLocationOperationMutex.unlock()
+        }
+        return DataLocationIntentConsumed
     }
 
     val persistedMinimizeWindowOnClose: Boolean
@@ -374,6 +521,13 @@ class SettingsStore(
         if (intent is SettingsIntent.MinimizeWindowOnCloseChanged) {
             pendingMinimizeWindowOnCloseWrites.update { pendingWrites ->
                 (pendingWrites - 1).coerceAtLeast(0)
+            }
+        }
+        if (intent is ExecuteDataLocationOperation) {
+            try {
+                updateState { current -> current.copy(dataLocationBusy = false) }
+            } finally {
+                dataLocationOperationMutex.unlock()
             }
         }
     }
@@ -444,6 +598,31 @@ class SettingsStore(
             is SettingsIntent.LoadStorageUsage -> loadStorageUsage(force = intent.force)
 
             is SettingsIntent.ClearStorageCategory -> clearStorageCategory(intent.category)
+
+            is ExecuteDataLocationOperation -> {
+                when (val operation = intent.operation) {
+                    DataLocationOperation.Pick -> pickDataLocation()
+                    DataLocationOperation.RetryCleanup -> retryDataLocationCleanup()
+                    is DataLocationOperation.Schedule -> {
+                        scheduleDataLocationChange(
+                            targetPath = operation.targetPath,
+                            mode = operation.mode,
+                        )
+                    }
+                }
+            }
+
+            DataLocationIntentConsumed,
+            SettingsIntent.PickDataLocation,
+            SettingsIntent.CancelDataLocationSelection,
+            is SettingsIntent.RequestDataLocationChange,
+            SettingsIntent.ConfirmDiscardDataLocation,
+            SettingsIntent.CancelDiscardDataLocation,
+            SettingsIntent.RetryDataLocationCleanup,
+            -> Unit
+
+            SettingsIntent.ConfirmDataLocationRestart ->
+                emitEffect(SettingsEffect.ExitApplicationRequested)
 
             is SettingsIntent.LoadDeviceInfo -> loadDeviceInfo(force = intent.force)
 
@@ -991,6 +1170,66 @@ class SettingsStore(
                     latest.copy(
                         clearingStorageCategory = null,
                         message = error.message ?: "${category.displayName()}已清除，但刷新失败。",
+                    )
+                },
+            )
+        }
+    }
+
+    private suspend fun pickDataLocation() {
+        val result = appDataLocationPlatformService.pickTargetDataRoot()
+        updateState { current ->
+            result.fold(
+                onSuccess = { selectedPath ->
+                    current.copy(
+                        pendingDataRootPath = selectedPath?.takeIf { it.isNotBlank() },
+                    )
+                },
+                onFailure = { error ->
+                    current.copy(
+                        message = error.message ?: "选择数据位置失败。",
+                    )
+                },
+            )
+        }
+    }
+
+    private suspend fun retryDataLocationCleanup() {
+        val result = appDataLocationPlatformService.retryPendingCleanup()
+        updateState { current ->
+            result.fold(
+                onSuccess = {
+                    current.copy(
+                        pendingDataCleanupRootPath = appDataLocationPlatformService.pendingCleanupRootPath,
+                        message = "旧数据目录已清理。",
+                    )
+                },
+                onFailure = { error ->
+                    current.copy(
+                        pendingDataCleanupRootPath = appDataLocationPlatformService.pendingCleanupRootPath,
+                        message = error.message ?: "清理旧数据目录失败。",
+                    )
+                },
+            )
+        }
+    }
+
+    private suspend fun scheduleDataLocationChange(
+        targetPath: String,
+        mode: AppDataLocationChangeMode,
+    ) {
+        val result = appDataLocationPlatformService.scheduleChange(targetPath, mode)
+        updateState { current ->
+            result.fold(
+                onSuccess = {
+                    current.copy(
+                        pendingDataRootPath = null,
+                        dataLocationRestartRequired = true,
+                    )
+                },
+                onFailure = { error ->
+                    current.copy(
+                        message = error.message ?: "保存数据位置失败。",
                     )
                 },
             )

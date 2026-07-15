@@ -6,6 +6,7 @@ import kotlin.io.path.createDirectories
 import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import top.iwesley.lyn.music.core.model.AppStorageCategory
 import top.iwesley.lyn.music.platform.JvmAppStorageGateway
 
@@ -44,5 +45,21 @@ class JvmAppStorageGatewayTest {
         val offlineCleared = gateway.loadStorageSnapshot().getOrThrow()
         assertEquals(0L, offlineCleared.categories.first { it.category == AppStorageCategory.OfflineDownloads }.sizeBytes)
         assertEquals(6L, offlineCleared.totalSizeBytes)
+    }
+
+    @Test
+    fun `clearing cache does not follow a symbolic link outside data root`() = runTest {
+        val root = Files.createTempDirectory("lynmusic-storage-link-test")
+        val cache = root.resolve("cache").createDirectories()
+        val external = Files.createTempDirectory("lynmusic-storage-external")
+        val sentinel = external.resolve("keep.txt").apply { writeText("keep") }
+        val link = cache.resolve("external-link")
+        if (runCatching { Files.createSymbolicLink(link, external) }.isFailure) return@runTest
+        val gateway = JvmAppStorageGateway(root.toFile())
+
+        gateway.clearCategory(AppStorageCategory.PlaybackCache).getOrThrow()
+
+        assertEquals("keep", sentinel.toFile().readText())
+        assertFalse(Files.exists(link, java.nio.file.LinkOption.NOFOLLOW_LINKS))
     }
 }

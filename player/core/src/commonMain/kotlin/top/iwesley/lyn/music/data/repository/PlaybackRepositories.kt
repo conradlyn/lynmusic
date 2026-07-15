@@ -3,7 +3,12 @@ package top.iwesley.lyn.music.data.repository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -13,6 +18,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -107,6 +113,17 @@ class DefaultPlaybackRepository(
     private val playbackCommandMutex = Mutex()
     private val closeMutex = Mutex()
     private val lifecycleJobs = mutableListOf<Job>()
+    private val playbackStatsScope = CoroutineScope(
+        scope.coroutineContext.minusKey(Job) + SupervisorJob(),
+    )
+    private val playbackStatsCommands = Channel<PlaybackStatsCommand>(Channel.UNLIMITED)
+    private val playbackStatsJob by lazy {
+        playbackStatsScope.launch {
+            for (command in playbackStatsCommands) {
+                reportPlaybackStatsCommand(command)
+            }
+        }
+    }
     @Volatile
     private var latestLoadRequestId = 0L
     @Volatile
@@ -480,11 +497,36 @@ class DefaultPlaybackRepository(
     override suspend fun close() {
         closeMutex.withLock {
             if (hasClosed) return@withLock
-            updatePlaybackStats(mutableSnapshot.value)
-            lifecycleJobs.forEach { job -> job.cancelAndJoin() }
-            systemPlaybackControlsPlatformService.close()
-            gateway.release()
             hasClosed = true
+            val failures = mutableListOf<Throwable>()
+            suspend fun closeStep(name: String, block: suspend () -> Unit) {
+                runCatching { block() }.onFailure { error ->
+                    failures += error
+                    runCatching {
+                        logger.error(PLAYBACK_LOG_TAG, error) { "repository-close-failed step=$name" }
+                    }.exceptionOrNull()?.let { loggingError -> error.addSuppressedSafely(loggingError) }
+                }
+            }
+            closeStep("playback-stats-enqueue") { updatePlaybackStats(mutableSnapshot.value) }
+            closeStep("playback-stats-flush") {
+                playbackStatsCommands.close()
+                try {
+                    withTimeout(PLAYBACK_STATS_CLOSE_TIMEOUT_MS) {
+                        playbackStatsJob.join()
+                    }
+                } finally {
+                    playbackStatsScope.cancel()
+                }
+            }
+            lifecycleJobs.forEachIndexed { index, job ->
+                closeStep("lifecycle-job-$index") { job.cancelAndJoin() }
+            }
+            closeStep("system-controls") { systemPlaybackControlsPlatformService.close() }
+            closeStep("gateway") { gateway.release() }
+            failures.firstOrNull()?.let { primary ->
+                failures.drop(1).forEach { failure -> primary.addSuppressedSafely(failure) }
+                throw primary
+            }
         }
     }
 
@@ -789,19 +831,31 @@ class DefaultPlaybackRepository(
     }
 
     private fun dispatchPlaybackStatsCommand(command: PlaybackStatsCommand) {
-        scope.launch {
+        playbackStatsJob.start()
+        playbackStatsCommands.trySend(command).exceptionOrNull()?.let { error ->
             runCatching {
-                when (command) {
-                    is PlaybackStatsCommand.ReportNowPlaying -> {
-                        playbackStatsReporter.reportNowPlaying(command.track, command.atMillis)
-                    }
-
-                    is PlaybackStatsCommand.SubmitPlay -> {
-                        playbackStatsReporter.submitPlay(command.track, command.atMillis)
-                    }
+                logger.warn(PLAYBACK_LOG_TAG) {
+                    "stats-enqueue-failed track=${command.track.id} event=${command.eventName} " +
+                        "cause=${error.message.orEmpty()}"
                 }
-            }.onFailure { throwable ->
-                if (throwable is CancellationException) throw throwable
+            }
+        }
+    }
+
+    private suspend fun reportPlaybackStatsCommand(command: PlaybackStatsCommand) {
+        runCatching {
+            when (command) {
+                is PlaybackStatsCommand.ReportNowPlaying -> {
+                    playbackStatsReporter.reportNowPlaying(command.track, command.atMillis)
+                }
+
+                is PlaybackStatsCommand.SubmitPlay -> {
+                    playbackStatsReporter.submitPlay(command.track, command.atMillis)
+                }
+            }
+        }.onFailure { throwable ->
+            if (throwable is CancellationException) currentCoroutineContext().ensureActive()
+            runCatching {
                 logger.warn(PLAYBACK_LOG_TAG) {
                     "stats-report-failed track=${command.track.id} event=${command.eventName} " +
                         "cause=${throwable.message.orEmpty()}"
@@ -1022,6 +1076,11 @@ class DefaultPlaybackRepository(
     }
 }
 
+private fun Throwable.addSuppressedSafely(failure: Throwable) {
+    if (failure === this || suppressedExceptions.any { suppressed -> suppressed === failure }) return
+    runCatching { addSuppressed(failure) }
+}
+
 data class PlayerRuntimeServices(
     val playbackGateway: PlaybackGateway? = null,
     val playbackRepository: PlaybackRepository? = null,
@@ -1042,6 +1101,7 @@ data class PlayerRuntimeServices(
     val systemPlaybackControlsPlatformService: SystemPlaybackControlsPlatformService = UnsupportedSystemPlaybackControlsPlatformService,
     val menuBarLyricsControlsPlatformService: MenuBarLyricsControlsPlatformService =
         UnsupportedMenuBarLyricsControlsPlatformService,
+    val closeDesktopResources: suspend () -> Unit = {},
 )
 
 private fun now(): Long = Clock.System.now().toEpochMilliseconds()
@@ -1087,6 +1147,7 @@ private fun resolvePlaybackDurationMs(
 
 private const val PLAYBACK_LOG_TAG = "Playback"
 private const val PLAYBACK_STATS_FALLBACK_THRESHOLD_MS = 4 * 60 * 1000L
+private const val PLAYBACK_STATS_CLOSE_TIMEOUT_MS = 2_000L
 private const val PLAYBACK_QUEUE_TRACK_LOOKUP_CHUNK_SIZE = 500
 
 private data class PlaybackQueueTrackSnapshot(

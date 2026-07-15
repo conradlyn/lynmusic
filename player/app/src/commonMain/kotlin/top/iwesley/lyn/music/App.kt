@@ -29,11 +29,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
 import top.iwesley.lyn.music.cast.CastBackgroundRunSettingsOpener
 import top.iwesley.lyn.music.cast.CastNotificationPermissionRequester
 import top.iwesley.lyn.music.core.model.AppDisplayScalePreset
@@ -42,6 +46,7 @@ import top.iwesley.lyn.music.core.model.ArtworkCacheStore
 import top.iwesley.lyn.music.core.model.CompositeSystemPlaybackControlsPlatformService
 import top.iwesley.lyn.music.core.model.DesktopLyricsPlatformService
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
+import top.iwesley.lyn.music.core.model.error
 import top.iwesley.lyn.music.core.model.EqualizerPlatformService
 import top.iwesley.lyn.music.core.model.MenuBarLyricsControlsPlatformService
 import top.iwesley.lyn.music.core.model.PlatformDescriptor
@@ -106,15 +111,55 @@ class LynMusicAppComponent(
     private val scope: CoroutineScope,
     private val onDispose: suspend () -> Unit,
 ) {
-    private var disposed = false
+    private val resourceDisposer = AppResourceDisposer(
+        scope = scope,
+        logger = logger,
+        onDispose = onDispose,
+    )
 
-    fun dispose() {
-        if (disposed) return
-        disposed = true
-        runBlocking {
-            onDispose()
+    fun dispose(): Result<Unit> = resourceDisposer.dispose()
+}
+
+internal class AppResourceDisposer(
+    private val scope: CoroutineScope,
+    private val logger: DiagnosticLogger,
+    private val scopeShutdownTimeoutMillis: Long = APP_SCOPE_SHUTDOWN_TIMEOUT_MILLIS,
+    private val onDispose: suspend () -> Unit,
+) {
+    private val disposeMutex = Mutex()
+    private var disposeResult: Result<Unit>? = null
+
+    fun dispose(): Result<Unit> = runBlocking {
+        disposeMutex.withLock {
+            disposeResult ?: runCatching {
+                closeAppResourcesBestEffort(
+                    logger = logger,
+                    resources = listOf(
+                        AppCloseAction("shared-scope") {
+                            stopAppScope(scope, scopeShutdownTimeoutMillis)
+                        },
+                        AppCloseAction("owned-resources") { onDispose() },
+                    ),
+                )
+            }.also { result ->
+                disposeResult = result
+                result.exceptionOrNull()?.let { error ->
+                    runCatching {
+                        logger.error(APP_DISPOSE_LOG_TAG, error) { "应用资源释放未完全成功。" }
+                    }
+                }
+            }
         }
-        scope.cancel()
+    }
+}
+
+internal suspend fun stopAppScope(
+    scope: CoroutineScope,
+    timeoutMillis: Long = APP_SCOPE_SHUTDOWN_TIMEOUT_MILLIS,
+) {
+    val job = scope.coroutineContext[Job] ?: return
+    withTimeout(timeoutMillis.coerceAtLeast(1L)) {
+        job.cancelAndJoin()
     }
 }
 
@@ -187,14 +232,52 @@ fun buildPlayerAppComponent(
         equalizerPlatformService = playerRuntimeServices.equalizerPlatformService,
         scope = sharedGraph.scope,
         onDispose = {
-            playerRuntimeServices.castSessionForegroundPlatformService.close()
-            playerRuntimeServices.castGateway.release()
-            playerRuntimeServices.castMediaUrlResolver.release()
-            sharedGraph.desktopLyricsPlatformService.release()
-            playerRuntimeServices.menuBarLyricsControlsPlatformService.close()
-            playbackRepository.close()
+            closeAppResourcesBestEffort(
+                logger = sharedGraph.logger,
+                resources = listOf(
+                    AppCloseAction("cast-session") { playerRuntimeServices.castSessionForegroundPlatformService.close() },
+                    AppCloseAction("cast-gateway") { playerRuntimeServices.castGateway.release() },
+                    AppCloseAction("cast-media-resolver") { playerRuntimeServices.castMediaUrlResolver.release() },
+                    AppCloseAction("desktop-lyrics") { sharedGraph.desktopLyricsPlatformService.release() },
+                    AppCloseAction("menu-bar-controls") { playerRuntimeServices.menuBarLyricsControlsPlatformService.close() },
+                    AppCloseAction("playback-repository") { playbackRepository.close() },
+                    AppCloseAction("desktop-resources") { playerRuntimeServices.closeDesktopResources() },
+                ),
+            )
         },
     )
+}
+
+private const val APP_DISPOSE_LOG_TAG = "AppDispose"
+internal const val APP_SCOPE_SHUTDOWN_TIMEOUT_MILLIS = 2_000L
+
+internal data class AppCloseAction(
+    val name: String,
+    val close: suspend () -> Unit,
+)
+
+internal suspend fun closeAppResourcesBestEffort(
+    logger: DiagnosticLogger,
+    resources: List<AppCloseAction>,
+) {
+    val failures = mutableListOf<Throwable>()
+    resources.forEach { resource ->
+        runCatching { resource.close() }.onFailure { error ->
+            failures += error
+            runCatching {
+                logger.error(APP_DISPOSE_LOG_TAG, error) { "关闭资源失败：${resource.name}" }
+            }.exceptionOrNull()?.let { loggingError -> error.addSuppressedSafely(loggingError) }
+        }
+    }
+    failures.firstOrNull()?.let { primary ->
+        failures.drop(1).forEach { failure -> primary.addSuppressedSafely(failure) }
+        throw primary
+    }
+}
+
+private fun Throwable.addSuppressedSafely(failure: Throwable) {
+    if (failure === this || suppressedExceptions.any { suppressed -> suppressed === failure }) return
+    runCatching { addSuppressed(failure) }
 }
 
 private fun CoroutineScope.launchDesktopLyricsSync(
@@ -306,6 +389,8 @@ private fun resolveMenuBarLyricsFallbackText(player: PlayerState): String? {
 fun App(
     component: LynMusicAppComponent,
     desktopWindowChrome: DesktopWindowChrome = DesktopWindowChrome(),
+    onExitApplicationRequest: () -> Unit = {},
+    startupWarning: String? = null,
 ) {
     ConfigureLynArtworkImageLoader()
 
@@ -325,6 +410,7 @@ fun App(
     val offlineDownloadState by component.offlineDownloadStore.state.collectAsState()
     val playerState by component.playerStore.state.collectAsState()
     val settingsState by component.settingsStore.state.collectAsState()
+    var visibleStartupWarning by remember(startupWarning) { mutableStateOf(startupWarning) }
     var selectedTab by rememberSaveable { mutableStateOf(defaultSelectedAppTab) }
     var pendingPlaylistTrack by remember { mutableStateOf<Track?>(null) }
     var shouldRestoreOnlinePlaylistSource by remember { mutableStateOf(false) }
@@ -532,6 +618,8 @@ fun App(
                 when (effect) {
                     SettingsEffect.LyricsShareFontsChanged ->
                         component.playerStore.dispatch(PlayerIntent.InvalidateLyricsShareFontCache)
+
+                    SettingsEffect.ExitApplicationRequested -> onExitApplicationRequest()
                 }
             }
         }
@@ -539,6 +627,18 @@ fun App(
             themeTokens = shellThemeTokens,
             textPalette = shellTextPalette,
         ) {
+            visibleStartupWarning?.let { warning ->
+                AlertDialog(
+                    onDismissRequest = { visibleStartupWarning = null },
+                    title = { Text("旧数据清理未完成") },
+                    text = { Text(warning) },
+                    confirmButton = {
+                        TextButton(onClick = { visibleStartupWarning = null }) {
+                            Text("知道了")
+                        }
+                    },
+                )
+            }
             BoxWithConstraints(
                 modifier = Modifier.fillMaxSize(),
             ) {

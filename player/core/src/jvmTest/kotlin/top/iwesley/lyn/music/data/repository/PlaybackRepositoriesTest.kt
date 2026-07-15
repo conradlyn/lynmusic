@@ -7,6 +7,8 @@ import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertSame
+import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -20,6 +22,8 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import top.iwesley.lyn.music.core.model.DEFAULT_PLAYBACK_VOLUME
+import top.iwesley.lyn.music.core.model.DiagnosticLogLevel
+import top.iwesley.lyn.music.core.model.DiagnosticLogger
 import top.iwesley.lyn.music.core.model.EXTERNAL_OPEN_SOURCE_ID
 import top.iwesley.lyn.music.core.model.ImportSourceIndexMode
 import top.iwesley.lyn.music.core.model.ImportSourceType
@@ -210,6 +214,46 @@ class PlaybackRepositoriesTest {
             advanceUntilIdle()
 
             assertEquals(2, reporter.calls.size)
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `close flushes final playback stats after shared scope is cancelled`() = runTest {
+        val database = createTestDatabase()
+        val gateway = FakePlaybackGateway()
+        val playbackPreferencesStore = FakePlaybackPreferencesStore()
+        val reporter = FakePlaybackStatsReporter()
+        var nowMs = 0L
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = playbackPreferencesStore,
+            scope = scope,
+            hydrateImmediately = false,
+            playbackStatsReporter = reporter,
+            currentTimeMillis = { nowMs },
+        )
+
+        try {
+            repository.playTracks(listOf(sampleNavidromeTrack()), startIndex = 0)
+            advanceUntilIdle()
+
+            nowMs = 90_000L
+            scope.cancel()
+            repository.close()
+
+            assertEquals(
+                listOf(
+                    PlaybackStatsCall("now", "nav-track-1", 0L),
+                    PlaybackStatsCall("submit", "nav-track-1", 90_000L),
+                ),
+                reporter.calls,
+            )
         } finally {
             repository.close()
             scope.cancel()
@@ -2255,6 +2299,107 @@ class PlaybackRepositoriesTest {
     }
 
     @Test
+    fun `close releases gateway even when system controls close fails`() = runTest {
+        val database = createTestDatabase()
+        val gateway = FakePlaybackGateway()
+        val systemControls = FakeSystemPlaybackControlsPlatformService(
+            closeFailure = IllegalStateException("controls failed"),
+        )
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = FakePlaybackPreferencesStore(),
+            scope = scope,
+            systemPlaybackControlsPlatformService = systemControls,
+            hydrateImmediately = false,
+        )
+
+        try {
+            val result = runCatching { repository.close() }
+
+            assertTrue(result.isFailure)
+            assertEquals(1, systemControls.closeCalls)
+            assertEquals(1, gateway.releaseCalls)
+            repository.close()
+            assertEquals(1, gateway.releaseCalls)
+        } finally {
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `close releases gateway when failure logging also fails`() = runTest {
+        val database = createTestDatabase()
+        val gateway = FakePlaybackGateway()
+        val controlsFailure = IllegalStateException("controls failed")
+        val loggingFailure = IllegalStateException("logger failed")
+        val systemControls = FakeSystemPlaybackControlsPlatformService(closeFailure = controlsFailure)
+        val throwingLogger = object : DiagnosticLogger {
+            override fun log(
+                level: DiagnosticLogLevel,
+                tag: String,
+                message: String,
+                throwable: Throwable?,
+            ) {
+                if (throwable === controlsFailure) throw loggingFailure
+            }
+        }
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = FakePlaybackPreferencesStore(),
+            scope = scope,
+            systemPlaybackControlsPlatformService = systemControls,
+            logger = throwingLogger,
+            hydrateImmediately = false,
+        )
+
+        try {
+            val result = runCatching { repository.close() }
+
+            assertSame(controlsFailure, result.exceptionOrNull())
+            assertEquals(1, systemControls.closeCalls)
+            assertEquals(1, gateway.releaseCalls)
+            assertTrue(controlsFailure.suppressedExceptions.contains(loggingFailure))
+        } finally {
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `close preserves shared failure instance without self suppression`() = runTest {
+        val database = createTestDatabase()
+        val sharedFailure = IllegalStateException("shared failure")
+        val gateway = FakePlaybackGateway(releaseFailure = sharedFailure)
+        val systemControls = FakeSystemPlaybackControlsPlatformService(closeFailure = sharedFailure)
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = FakePlaybackPreferencesStore(),
+            scope = scope,
+            systemPlaybackControlsPlatformService = systemControls,
+            hydrateImmediately = false,
+        )
+
+        try {
+            val result = runCatching { repository.close() }
+
+            assertSame(sharedFailure, result.exceptionOrNull())
+            assertEquals(1, systemControls.closeCalls)
+            assertEquals(1, gateway.releaseCalls)
+            assertTrue(sharedFailure.suppressedExceptions.none { it === sharedFailure })
+        } finally {
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
     fun `current track artwork update clears stale playback metadata artwork`() = runTest {
         val database = createTestDatabase()
         val gateway = FakePlaybackGateway()
@@ -2975,6 +3120,7 @@ private class FakePlaybackPreferencesStore(
 
 private class FakePlaybackGateway(
     private val loadFailure: Throwable? = null,
+    private val releaseFailure: Throwable? = null,
 ) : PlaybackGateway {
     private val mutableState = MutableStateFlow(PlaybackGatewayState())
 
@@ -2984,6 +3130,7 @@ private class FakePlaybackGateway(
     val volumeCalls = mutableListOf<Float>()
     var nextNavidromeAudioQuality: NavidromeAudioQuality? = null
     var nextPlaybackAudioFormat: PlaybackAudioFormat? = null
+    var releaseCalls: Int = 0
 
     override val state: StateFlow<PlaybackGatewayState> = mutableState.asStateFlow()
 
@@ -3039,7 +3186,10 @@ private class FakePlaybackGateway(
         mutableState.value = mutableState.value.copy(volume = volume)
     }
 
-    override suspend fun release() = Unit
+    override suspend fun release() {
+        releaseCalls += 1
+        releaseFailure?.let { throw it }
+    }
 
     fun updateState(transform: (PlaybackGatewayState) -> PlaybackGatewayState) {
         mutableState.value = transform(mutableState.value)
@@ -3109,9 +3259,12 @@ private class BlockingPlaybackGateway : PlaybackGateway {
     }
 }
 
-private class FakeSystemPlaybackControlsPlatformService : SystemPlaybackControlsPlatformService {
+private class FakeSystemPlaybackControlsPlatformService(
+    private val closeFailure: Throwable? = null,
+) : SystemPlaybackControlsPlatformService {
     var callbacks: SystemPlaybackControlCallbacks = SystemPlaybackControlCallbacks()
     var lastSnapshot: PlaybackSnapshot? = null
+    var closeCalls: Int = 0
 
     override fun bind(callbacks: SystemPlaybackControlCallbacks) {
         this.callbacks = callbacks
@@ -3121,7 +3274,10 @@ private class FakeSystemPlaybackControlsPlatformService : SystemPlaybackControls
         lastSnapshot = snapshot
     }
 
-    override suspend fun close() = Unit
+    override suspend fun close() {
+        closeCalls += 1
+        closeFailure?.let { throw it }
+    }
 }
 
 private data class LoadCall(

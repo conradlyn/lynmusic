@@ -522,6 +522,7 @@ data class PlatformCapabilities(
     val supportsPlaybackBackgroundArtworkBlur: Boolean = true,
     val supportsSystemLocalFolderPicker: Boolean = false,
     val supportsMacOsWindowCloseBehavior: Boolean = false,
+    val supportsCustomDataLocation: Boolean = false,
 )
 
 data class PlatformDescriptor(

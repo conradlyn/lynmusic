@@ -78,6 +78,7 @@ import lynmusic.player.app.generated.resources.Res
 import lynmusic.player.app.generated.resources.about_app_wechat_qr
 import org.jetbrains.compose.resources.imageResource
 import top.iwesley.lyn.music.core.model.AppStorageCategory
+import top.iwesley.lyn.music.core.model.AppDataLocationChangeMode
 import top.iwesley.lyn.music.core.model.AppDisplayScalePreset
 import top.iwesley.lyn.music.core.model.AppThemeId
 import top.iwesley.lyn.music.core.model.AppThemeTextPalette
@@ -303,6 +304,7 @@ internal fun SettingsTab(
 
                         SettingsSection.Storage -> StorageSettingsPane(
                             state = state,
+                            supportsCustomDataLocation = shouldShowCustomDataLocation(platform),
                             onSettingsIntent = onSettingsIntent,
                             showHeading = true,
                             modifier = Modifier
@@ -397,6 +399,7 @@ internal fun SettingsTab(
 
                                 SettingsSection.Storage -> StorageSettingsPane(
                                     state = state,
+                                    supportsCustomDataLocation = shouldShowCustomDataLocation(platform),
                                     onSettingsIntent = onSettingsIntent,
                                     showHeading = false,
                                     modifier = detailModifier,
@@ -2147,6 +2150,7 @@ private fun AboutAppSettingsPane(
 @Composable
 private fun StorageSettingsPane(
     state: SettingsState,
+    supportsCustomDataLocation: Boolean,
     onSettingsIntent: (SettingsIntent) -> Unit,
     showHeading: Boolean,
     modifier: Modifier = Modifier,
@@ -2171,6 +2175,111 @@ private fun StorageSettingsPane(
     LaunchedEffect(Unit) {
         onSettingsIntent(SettingsIntent.LoadStorageUsage(force = true))
     }
+    val pendingDataRootPath = state.pendingDataRootPath
+    when {
+        state.dataLocationRestartRequired -> {
+            AlertDialog(
+                onDismissRequest = {},
+                title = { Text("需要重新打开应用") },
+                text = {
+                    Text("数据位置设置已保存。应用将退出，请重新打开 LynMusic 以完成数据位置切换。")
+                },
+                confirmButton = {
+                    Button(onClick = { onSettingsIntent(SettingsIntent.ConfirmDataLocationRestart) }) {
+                        Text("退出应用")
+                    }
+                },
+            )
+        }
+
+        state.dataLocationDiscardConfirmationRequired -> {
+            AlertDialog(
+                onDismissRequest = {
+                    if (!state.dataLocationBusy) {
+                        onSettingsIntent(SettingsIntent.CancelDiscardDataLocation)
+                    }
+                },
+                title = { Text("永久丢弃旧数据？") },
+                text = {
+                    Text("下次启动时将永久删除当前位置的数据库、设置、凭据、离线音乐和缓存。此操作不可恢复。")
+                },
+                confirmButton = {
+                    Button(
+                        onClick = { onSettingsIntent(SettingsIntent.ConfirmDiscardDataLocation) },
+                        enabled = !state.dataLocationBusy,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError,
+                        ),
+                    ) {
+                        Text("永久丢弃")
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = { onSettingsIntent(SettingsIntent.CancelDiscardDataLocation) },
+                        enabled = !state.dataLocationBusy,
+                    ) {
+                        Text("取消")
+                    }
+                },
+            )
+        }
+
+        pendingDataRootPath != null -> {
+            AlertDialog(
+                onDismissRequest = {
+                    if (!state.dataLocationBusy) {
+                        onSettingsIntent(SettingsIntent.CancelDataLocationSelection)
+                    }
+                },
+                title = { Text("更改数据位置") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("新的数据目录")
+                        Text(
+                            text = pendingDataRootPath,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                        Text("请选择如何处理当前位置中的全部应用数据。")
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            onSettingsIntent(
+                                SettingsIntent.RequestDataLocationChange(AppDataLocationChangeMode.Migrate),
+                            )
+                        },
+                        enabled = !state.dataLocationBusy,
+                    ) {
+                        Text("迁移旧数据")
+                    }
+                },
+                dismissButton = {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(
+                            onClick = {
+                                onSettingsIntent(
+                                    SettingsIntent.RequestDataLocationChange(AppDataLocationChangeMode.Discard),
+                                )
+                            },
+                            enabled = !state.dataLocationBusy,
+                        ) {
+                            Text("丢弃旧数据")
+                        }
+                        TextButton(
+                            onClick = { onSettingsIntent(SettingsIntent.CancelDataLocationSelection) },
+                            enabled = !state.dataLocationBusy,
+                        ) {
+                            Text("取消")
+                        }
+                    }
+                },
+            )
+        }
+    }
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -2181,8 +2290,60 @@ private fun StorageSettingsPane(
         if (showHeading) {
             SectionTitle(
                 title = "空间管理",
-                subtitle = "查看当前可管理空间，并按分类手动清除。",
+                subtitle = "查看占用、清理缓存，并管理应用数据位置。",
             )
+        }
+        if (supportsCustomDataLocation) {
+            MainShellElevatedCard(shape = RoundedCornerShape(28.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text("数据位置", fontWeight = FontWeight.Bold)
+                        Text(
+                            text = state.currentDataRootPath.ifBlank { "正在读取…" },
+                            color = shellColors.secondaryText,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                        Text(
+                            "更改后将在所选目录中创建 LynMusic 文件夹，并在下次启动时生效。",
+                            color = shellColors.secondaryText,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        state.pendingDataCleanupRootPath?.let { cleanupPath ->
+                            Text(
+                                "旧数据尚未清理：$cleanupPath",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = FontFamily.Monospace,
+                            )
+                        }
+                    }
+                    if (state.pendingDataCleanupRootPath != null) {
+                        OutlinedButton(
+                            onClick = { onSettingsIntent(SettingsIntent.RetryDataLocationCleanup) },
+                            enabled = !state.dataLocationBusy,
+                        ) {
+                            Text(if (state.dataLocationBusy) "清理中" else "重试清理")
+                        }
+                    } else {
+                        OutlinedButton(
+                            onClick = { onSettingsIntent(SettingsIntent.PickDataLocation) },
+                            enabled = !state.dataLocationBusy && !state.dataLocationRestartRequired,
+                        ) {
+                            Text(if (state.dataLocationBusy) "处理中" else "更改位置")
+                        }
+                    }
+                }
+            }
         }
         MainShellElevatedCard(shape = RoundedCornerShape(28.dp)) {
             Column(

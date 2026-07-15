@@ -25,6 +25,7 @@ import kotlinx.coroutines.withContext
 import top.iwesley.lyn.music.core.model.DEFAULT_SAMBA_PORT
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
 import top.iwesley.lyn.music.core.model.ImportSourceType
+import top.iwesley.lyn.music.core.model.JvmAppDataDirectory
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.OfflineDownloadStatus
 import top.iwesley.lyn.music.core.model.OfflineDownloadGateway
@@ -52,7 +53,7 @@ fun createJvmOfflineDownloadGateway(
     database: LynMusicDatabase,
     secureCredentialStore: SecureCredentialStore,
     logger: DiagnosticLogger,
-    rootDirectory: File = File(File(System.getProperty("user.home")), ".lynmusic/offline"),
+    rootDirectory: File = JvmAppDataDirectory.resolve("offline"),
     addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
 ): OfflineDownloadGateway = JvmOfflineDownloadGateway(database, secureCredentialStore, logger, rootDirectory, addressSelector)
 

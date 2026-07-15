@@ -11,6 +11,7 @@ import top.iwesley.lyn.music.core.model.ArtworkCachedTarget
 import top.iwesley.lyn.music.core.model.ArtworkCachedTargetRegistry
 import top.iwesley.lyn.music.core.model.ArtworkCacheStore
 import top.iwesley.lyn.music.core.model.ArtworkCacheVersionRegistry
+import top.iwesley.lyn.music.core.model.JvmAppDataDirectory
 import top.iwesley.lyn.music.core.model.NavidromeLocatorRuntime
 import top.iwesley.lyn.music.core.model.RemotePlaybackUrlCandidate
 import top.iwesley.lyn.music.core.model.inferArtworkFileExtension
@@ -23,7 +24,7 @@ import top.iwesley.lyn.music.domain.readRemotePlaybackUrlCandidateWithFallback
 fun createJvmArtworkCacheStore(): ArtworkCacheStore = JvmArtworkCacheStore()
 
 private class JvmArtworkCacheStore : ArtworkCacheStore {
-    private val directory = File(File(System.getProperty("user.home")), ".lynmusic/artwork-cache").apply {
+    private val directory = JvmAppDataDirectory.resolve("artwork-cache").apply {
         mkdirs()
     }
     private val versionRegistry = ArtworkCacheVersionRegistry()

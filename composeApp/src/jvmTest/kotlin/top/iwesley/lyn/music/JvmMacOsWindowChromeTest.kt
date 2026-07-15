@@ -69,6 +69,16 @@ class JvmMacOsWindowChromeTest {
     }
 
     @Test
+    fun `desktop close is blocked while startup operation is in progress`() {
+        assertFalse(shouldAllowDesktopWindowClose(startupOperationInProgress = true))
+    }
+
+    @Test
+    fun `desktop close is allowed after startup operation finishes`() {
+        assertTrue(shouldAllowDesktopWindowClose(startupOperationInProgress = false))
+    }
+
+    @Test
     fun `completed persistence uses the final runtime close preference`() {
         assertFalse(
             resolveMinimizeWindowOnClosePreference(

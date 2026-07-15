@@ -9,6 +9,7 @@ import java.awt.datatransfer.StringSelection
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.PrintWriter
+import java.io.PrintStream
 import java.io.StringWriter
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
@@ -27,6 +28,15 @@ internal fun installJvmUncaughtExceptionHandler() {
     val currentHandler = Thread.getDefaultUncaughtExceptionHandler()
     if (currentHandler is JvmUncaughtExceptionHandler) return
     Thread.setDefaultUncaughtExceptionHandler(JvmUncaughtExceptionHandler())
+}
+
+internal fun logJvmStartupFailure(
+    stage: String,
+    error: Throwable,
+    output: PrintStream = System.err,
+) {
+    output.println("LynMusic Desktop startup failure. stage=$stage")
+    error.printStackTrace(output)
 }
 
 private class JvmUncaughtExceptionHandler : Thread.UncaughtExceptionHandler {

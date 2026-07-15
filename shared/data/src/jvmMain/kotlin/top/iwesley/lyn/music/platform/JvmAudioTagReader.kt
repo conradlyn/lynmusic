@@ -16,6 +16,7 @@ import org.jaudiotagger.tag.id3.ID3v22Tag
 import org.jaudiotagger.tag.id3.ID3v23Tag
 import org.jaudiotagger.tag.id3.ID3v24Tag
 import top.iwesley.lyn.music.core.model.AudioTagSnapshot
+import top.iwesley.lyn.music.core.model.JvmAppDataDirectory
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
 import top.iwesley.lyn.music.core.model.ImportedTrackCandidate
 import top.iwesley.lyn.music.core.model.NoopDiagnosticLogger
@@ -25,7 +26,7 @@ import top.iwesley.lyn.music.core.model.stableArtworkBytesHash
 import top.iwesley.lyn.music.core.model.warn
 
 object JvmAudioTagReader {
-    private val artworkDirectory = File(File(System.getProperty("user.home")), ".lynmusic/artwork").apply {
+    private val artworkDirectory = JvmAppDataDirectory.resolve("artwork").apply {
         mkdirs()
     }
 

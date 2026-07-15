@@ -10,6 +10,16 @@ import kotlin.test.assertTrue
 
 class SettingsNavigationTest {
     @Test
+    fun `custom data location visibility follows dedicated platform capability`() {
+        val desktop = desktopPlatform()
+        assertTrue(
+            shouldShowCustomDataLocation(
+                desktop.copy(capabilities = desktop.capabilities.copy(supportsCustomDataLocation = true)),
+            ),
+        )
+        assertFalse(shouldShowCustomDataLocation(desktop))
+    }
+    @Test
     fun `desktop settings defaults to general section`() {
         assertEquals(SettingsSection.General, defaultSettingsSection(desktopPlatform()))
     }

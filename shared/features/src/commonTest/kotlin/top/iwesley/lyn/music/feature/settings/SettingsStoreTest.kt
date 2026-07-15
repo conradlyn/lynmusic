@@ -27,6 +27,8 @@ import top.iwesley.lyn.music.core.model.AppStorageCategory
 import top.iwesley.lyn.music.core.model.AppStorageCategoryUsage
 import top.iwesley.lyn.music.core.model.AppStorageGateway
 import top.iwesley.lyn.music.core.model.AppStorageSnapshot
+import top.iwesley.lyn.music.core.model.AppDataLocationChangeMode
+import top.iwesley.lyn.music.core.model.AppDataLocationPlatformService
 import top.iwesley.lyn.music.core.model.AppDisplayScalePreset
 import top.iwesley.lyn.music.core.model.AppThemeId
 import top.iwesley.lyn.music.core.model.AppThemeTextPalette
@@ -1389,6 +1391,195 @@ class SettingsStoreTest {
     }
 
     @Test
+    fun `pick data location exposes selected LynMusic directory`() = runTest {
+        val service = FakeAppDataLocationPlatformService(
+            currentDataRootPath = "C:\\Users\\tester\\.lynmusic",
+            nextPickedPath = Result.success("D:\\MusicData\\LynMusic"),
+        )
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(
+            repository = FakeSettingsRepository(),
+            scope = scope,
+            appDataLocationPlatformService = service,
+        )
+
+        store.dispatch(SettingsIntent.PickDataLocation)
+        advanceUntilIdle()
+
+        assertEquals("C:\\Users\\tester\\.lynmusic", store.state.value.currentDataRootPath)
+        assertEquals("D:\\MusicData\\LynMusic", store.state.value.pendingDataRootPath)
+        assertFalse(store.state.value.dataLocationBusy)
+        scope.cancel()
+    }
+
+    @Test
+    fun `duplicate pick data location intents start only one picker`() = runTest {
+        val pickerCompletion = CompletableDeferred<Unit>()
+        val service = FakeAppDataLocationPlatformService(
+            nextPickedPath = Result.success("D:\\MusicData\\LynMusic"),
+        ).apply {
+            this.pickerCompletion = pickerCompletion
+        }
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(
+            repository = FakeSettingsRepository(),
+            scope = scope,
+            appDataLocationPlatformService = service,
+        )
+
+        store.dispatch(SettingsIntent.PickDataLocation)
+        assertTrue(store.state.value.dataLocationBusy)
+        store.dispatch(SettingsIntent.PickDataLocation)
+        runCurrent()
+
+        assertEquals(1, service.pickCalls)
+        assertTrue(store.state.value.dataLocationBusy)
+
+        pickerCompletion.complete(Unit)
+        advanceUntilIdle()
+        assertEquals("D:\\MusicData\\LynMusic", store.state.value.pendingDataRootPath)
+        assertFalse(store.state.value.dataLocationBusy)
+        scope.cancel()
+    }
+
+    @Test
+    fun `migrate data location is scheduled and requests restart`() = runTest {
+        val service = FakeAppDataLocationPlatformService(
+            nextPickedPath = Result.success("D:\\LynMusic"),
+        )
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(
+            repository = FakeSettingsRepository(),
+            scope = scope,
+            appDataLocationPlatformService = service,
+        )
+
+        store.dispatch(SettingsIntent.PickDataLocation)
+        advanceUntilIdle()
+        store.dispatch(SettingsIntent.RequestDataLocationChange(AppDataLocationChangeMode.Migrate))
+        advanceUntilIdle()
+
+        assertEquals(listOf("D:\\LynMusic" to AppDataLocationChangeMode.Migrate), service.scheduledChanges)
+        assertTrue(store.state.value.dataLocationRestartRequired)
+        assertEquals(null, store.state.value.pendingDataRootPath)
+        scope.cancel()
+    }
+
+    @Test
+    fun `duplicate schedule and cancel intents cannot race an accepted migration`() = runTest {
+        val scheduleCompletion = CompletableDeferred<Unit>()
+        val service = FakeAppDataLocationPlatformService(
+            nextPickedPath = Result.success("D:\\LynMusic"),
+        ).apply {
+            this.scheduleCompletion = scheduleCompletion
+        }
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(
+            repository = FakeSettingsRepository(),
+            scope = scope,
+            appDataLocationPlatformService = service,
+        )
+
+        store.dispatch(SettingsIntent.PickDataLocation)
+        advanceUntilIdle()
+        store.dispatch(SettingsIntent.RequestDataLocationChange(AppDataLocationChangeMode.Migrate))
+        assertTrue(store.state.value.dataLocationBusy)
+        store.dispatch(SettingsIntent.RequestDataLocationChange(AppDataLocationChangeMode.Migrate))
+        store.dispatch(SettingsIntent.CancelDataLocationSelection)
+        runCurrent()
+
+        assertEquals(listOf("D:\\LynMusic" to AppDataLocationChangeMode.Migrate), service.scheduledChanges)
+        assertEquals("D:\\LynMusic", store.state.value.pendingDataRootPath)
+        assertTrue(store.state.value.dataLocationBusy)
+
+        scheduleCompletion.complete(Unit)
+        advanceUntilIdle()
+        assertTrue(store.state.value.dataLocationRestartRequired)
+        assertEquals(null, store.state.value.pendingDataRootPath)
+        assertEquals(null, store.state.value.message)
+        assertFalse(store.state.value.dataLocationBusy)
+        scope.cancel()
+    }
+
+    @Test
+    fun `cancelling store scope releases a claimed data location operation`() = runTest {
+        val service = FakeAppDataLocationPlatformService(
+            nextPickedPath = Result.success("D:\\LynMusic"),
+        )
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(
+            repository = FakeSettingsRepository(),
+            scope = scope,
+            appDataLocationPlatformService = service,
+        )
+
+        store.dispatch(SettingsIntent.PickDataLocation)
+        assertTrue(store.state.value.dataLocationBusy)
+        scope.cancel()
+        runCurrent()
+
+        assertFalse(store.state.value.dataLocationBusy)
+        assertEquals(0, service.pickCalls)
+    }
+
+    @Test
+    fun `discard data location requires confirmation before scheduling and exit effect`() = runTest {
+        val service = FakeAppDataLocationPlatformService(
+            nextPickedPath = Result.success("E:\\AppData\\LynMusic"),
+        )
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(
+            repository = FakeSettingsRepository(),
+            scope = scope,
+            appDataLocationPlatformService = service,
+        )
+        val effects = mutableListOf<SettingsEffect>()
+        val effectJob = launch { store.effects.collect { effects += it } }
+
+        store.dispatch(SettingsIntent.PickDataLocation)
+        advanceUntilIdle()
+        store.dispatch(SettingsIntent.RequestDataLocationChange(AppDataLocationChangeMode.Discard))
+        advanceUntilIdle()
+
+        assertTrue(store.state.value.dataLocationDiscardConfirmationRequired)
+        assertTrue(service.scheduledChanges.isEmpty())
+
+        store.dispatch(SettingsIntent.ConfirmDiscardDataLocation)
+        advanceUntilIdle()
+        store.dispatch(SettingsIntent.ConfirmDataLocationRestart)
+        advanceUntilIdle()
+
+        assertEquals(listOf("E:\\AppData\\LynMusic" to AppDataLocationChangeMode.Discard), service.scheduledChanges)
+        assertEquals(listOf<SettingsEffect>(SettingsEffect.ExitApplicationRequested), effects)
+        effectJob.cancel()
+        scope.cancel()
+    }
+
+    @Test
+    fun `pending cleanup disables location picker and retry clears residual path`() = runTest {
+        val service = FakeAppDataLocationPlatformService(
+            pendingCleanupRootPath = "C:\\Users\\tester\\.lynmusic.discarding",
+            nextPickedPath = Result.success("D:\\LynMusic"),
+        )
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(
+            repository = FakeSettingsRepository(),
+            scope = scope,
+            appDataLocationPlatformService = service,
+        )
+
+        store.dispatch(SettingsIntent.PickDataLocation)
+        advanceUntilIdle()
+        assertEquals(null, store.state.value.pendingDataRootPath)
+
+        store.dispatch(SettingsIntent.RetryDataLocationCleanup)
+        advanceUntilIdle()
+        assertEquals(null, store.state.value.pendingDataCleanupRootPath)
+        assertEquals("旧数据目录已清理。", store.state.value.message)
+        scope.cancel()
+    }
+
+    @Test
     fun `load device info snapshot writes snapshot into state`() = runTest {
         val repository = FakeSettingsRepository()
         val deviceInfoGateway = FakeDeviceInfoGateway(
@@ -2047,6 +2238,39 @@ private class FakeVlcPathPickerPlatformService(
     var nextResult: Result<String?> = Result.success(null),
 ) : VlcPathPickerPlatformService {
     override suspend fun pickVlcDirectory(): Result<String?> = nextResult
+}
+
+private class FakeAppDataLocationPlatformService(
+    override val currentDataRootPath: String = "C:\\Users\\tester\\.lynmusic",
+    override var pendingCleanupRootPath: String? = null,
+    var nextPickedPath: Result<String?> = Result.success(null),
+    var nextScheduleResult: Result<Unit> = Result.success(Unit),
+    var nextCleanupResult: Result<Unit> = Result.success(Unit),
+) : AppDataLocationPlatformService {
+    val scheduledChanges = mutableListOf<Pair<String, AppDataLocationChangeMode>>()
+    var pickCalls: Int = 0
+        private set
+    var pickerCompletion: CompletableDeferred<Unit>? = null
+    var scheduleCompletion: CompletableDeferred<Unit>? = null
+
+    override suspend fun pickTargetDataRoot(): Result<String?> {
+        pickCalls += 1
+        pickerCompletion?.await()
+        return nextPickedPath
+    }
+
+    override suspend fun scheduleChange(
+        targetDataRootPath: String,
+        mode: AppDataLocationChangeMode,
+    ): Result<Unit> {
+        scheduledChanges += targetDataRootPath to mode
+        scheduleCompletion?.await()
+        return nextScheduleResult
+    }
+
+    override suspend fun retryPendingCleanup(): Result<Unit> {
+        return nextCleanupResult.onSuccess { pendingCleanupRootPath = null }
+    }
 }
 
 private class FakeDesktopLyricsPlatformService(

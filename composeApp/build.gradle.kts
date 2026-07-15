@@ -96,6 +96,7 @@ kotlin {
                 implementation(libs.sardine)
                 implementation(libs.smbj)
                 implementation(libs.vlcj)
+                implementation(libs.androidx.sqlite.bundled)
             }
         }
         androidMain.dependencies {

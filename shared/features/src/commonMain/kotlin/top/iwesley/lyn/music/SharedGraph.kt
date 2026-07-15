@@ -7,6 +7,7 @@ import kotlinx.coroutines.launch
 import top.iwesley.lyn.music.core.model.ArtworkCacheStore
 import top.iwesley.lyn.music.core.model.AutoPlayOnStartupPreferencesStore
 import top.iwesley.lyn.music.core.model.AppStorageGateway
+import top.iwesley.lyn.music.core.model.AppDataLocationPlatformService
 import top.iwesley.lyn.music.core.model.CompositePlaybackStatsReporter
 import top.iwesley.lyn.music.core.model.AppDisplayPreferencesStore
 import top.iwesley.lyn.music.core.model.AppDisplayScalePreset
@@ -38,6 +39,7 @@ import top.iwesley.lyn.music.core.model.SecureCredentialStore
 import top.iwesley.lyn.music.core.model.SameNameLyricsFileGateway
 import top.iwesley.lyn.music.core.model.ThemePreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedAppStorageGateway
+import top.iwesley.lyn.music.core.model.UnsupportedAppDataLocationPlatformService
 import top.iwesley.lyn.music.core.model.UnsupportedAudioTagEditorPlatformService
 import top.iwesley.lyn.music.core.model.UnsupportedAudioTagGateway
 import top.iwesley.lyn.music.core.model.UnsupportedAppDisplayPreferencesStore
@@ -141,6 +143,8 @@ data class SharedRuntimeServices(
         override suspend fun cache(locator: String, cacheKey: String, replaceExisting: Boolean): String? = locator
     },
     val appStorageGateway: AppStorageGateway = UnsupportedAppStorageGateway,
+    val appDataLocationPlatformService: AppDataLocationPlatformService =
+        UnsupportedAppDataLocationPlatformService,
     val offlineDownloadGateway: OfflineDownloadGateway = UnsupportedOfflineDownloadGateway,
     val deviceInfoGateway: DeviceInfoGateway = UnsupportedDeviceInfoGateway,
     val lyricsShareFontLibraryPlatformService: LyricsShareFontLibraryPlatformService =
@@ -193,8 +197,8 @@ fun buildSharedGraph(
     platform: PlatformDescriptor,
     database: LynMusicDatabase,
     runtimeServices: SharedRuntimeServices,
+    scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
 ): SharedGraph {
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val libraryRepository = RoomLibraryRepository(database)
     val trackPlaybackStatsRepository = RoomTrackPlaybackStatsRepository(database)
     val offlineDownloadRepository = DefaultOfflineDownloadRepository(
@@ -439,6 +443,7 @@ fun buildSharedGraph(
             repository = settingsRepository,
             scope = scope,
             appStorageGateway = runtimeServices.appStorageGateway,
+            appDataLocationPlatformService = runtimeServices.appDataLocationPlatformService,
             deviceInfoGateway = runtimeServices.deviceInfoGateway,
             lyricsShareFontLibraryPlatformService = runtimeServices.lyricsShareFontLibraryPlatformService,
             lyricsShareFontPreferencesStore = runtimeServices.lyricsShareFontPreferencesStore,

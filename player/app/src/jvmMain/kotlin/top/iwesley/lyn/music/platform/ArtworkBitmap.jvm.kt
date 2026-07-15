@@ -17,6 +17,7 @@ import org.jetbrains.skia.Canvas
 import org.jetbrains.skia.Image
 import org.jetbrains.skia.Rect
 import top.iwesley.lyn.music.core.model.NavidromeLocatorRuntime
+import top.iwesley.lyn.music.core.model.JvmAppDataDirectory
 import top.iwesley.lyn.music.core.model.RemotePlaybackUrlCandidate
 import top.iwesley.lyn.music.core.model.inferArtworkFileExtension
 import top.iwesley.lyn.music.core.model.isCompleteArtworkPayload
@@ -86,7 +87,7 @@ internal fun decodeJvmArtworkImageBitmap(bytes: ByteArray, maxDecodeSizePx: Int)
 suspend fun loadJvmArtworkBytes(
     locator: String?,
     cacheRemote: Boolean = true,
-    userHomePath: String = System.getProperty("user.home"),
+    userHomePath: String? = null,
     remoteBytesLoader: suspend (String) -> ByteArray? = { target ->
         URI(target).toURL().openStream().use { it.readBytes() }
     },
@@ -97,7 +98,10 @@ suspend fun loadJvmArtworkBytes(
         val target = targets.firstOrNull()?.value ?: return@runCatching null
         when {
             isRemoteArtworkTarget(target) -> {
-                val cacheDirectory = File(File(userHomePath), ".lynmusic/artwork-cache").apply { mkdirs() }
+                val cacheDirectory = (userHomePath
+                    ?.let { File(File(it), ".lynmusic/artwork-cache") }
+                    ?: JvmAppDataDirectory.resolve("artwork-cache"))
+                    .apply { mkdirs() }
                 val cachePrefix = normalizedLocator.stableArtworkCacheHash()
                 val existingCacheFile = findValidJvmArtworkCacheFile(cacheDirectory, cachePrefix)
                 if (existingCacheFile != null) {

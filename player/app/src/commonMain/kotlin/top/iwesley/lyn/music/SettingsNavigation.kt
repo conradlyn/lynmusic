@@ -44,3 +44,7 @@ internal fun openSettingsMobileNavigation(section: SettingsSection): SettingsMob
 internal fun closeSettingsMobileNavigation(): SettingsMobileNavigation {
     return SettingsMobileNavigation.List
 }
+
+internal fun shouldShowCustomDataLocation(platform: PlatformDescriptor): Boolean {
+    return platform.capabilities.supportsCustomDataLocation
+}

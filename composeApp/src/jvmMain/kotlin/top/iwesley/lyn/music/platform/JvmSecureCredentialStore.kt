@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets.UTF_8
 import java.util.Base64
 import java.util.Properties
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
+import top.iwesley.lyn.music.core.model.JvmAppDataDirectory
 import top.iwesley.lyn.music.core.model.SecureCredentialStore
 import top.iwesley.lyn.music.core.model.warn
 
@@ -76,7 +77,7 @@ private class MacOsKeychainCredentialStore : SecureCredentialStore {
 }
 
 private class WindowsDpapiCredentialStore : SecureCredentialStore {
-    private val storeFile = File(File(System.getProperty("user.home")), ".lynmusic/credentials.secure.properties").apply {
+    private val storeFile = JvmAppDataDirectory.resolve("credentials.secure.properties").apply {
         parentFile?.mkdirs()
     }
     private val lock = Any()

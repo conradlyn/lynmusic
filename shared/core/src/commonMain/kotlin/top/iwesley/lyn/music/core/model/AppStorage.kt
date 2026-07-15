@@ -24,6 +24,40 @@ interface AppStorageGateway {
     suspend fun clearCategory(category: AppStorageCategory): Result<Unit>
 }
 
+enum class AppDataLocationChangeMode {
+    Migrate,
+    Discard,
+}
+
+interface AppDataLocationPlatformService {
+    val currentDataRootPath: String
+    val pendingCleanupRootPath: String?
+
+    suspend fun pickTargetDataRoot(): Result<String?>
+
+    suspend fun scheduleChange(
+        targetDataRootPath: String,
+        mode: AppDataLocationChangeMode,
+    ): Result<Unit>
+
+    suspend fun retryPendingCleanup(): Result<Unit>
+}
+
+object UnsupportedAppDataLocationPlatformService : AppDataLocationPlatformService {
+    override val currentDataRootPath: String = ""
+    override val pendingCleanupRootPath: String? = null
+    private val error = IllegalStateException("当前平台暂不支持修改数据位置。")
+
+    override suspend fun pickTargetDataRoot(): Result<String?> = Result.failure(error)
+
+    override suspend fun scheduleChange(
+        targetDataRootPath: String,
+        mode: AppDataLocationChangeMode,
+    ): Result<Unit> = Result.failure(error)
+
+    override suspend fun retryPendingCleanup(): Result<Unit> = Result.failure(error)
+}
+
 object UnsupportedAppStorageGateway : AppStorageGateway {
     private val error = IllegalStateException("当前平台暂不支持空间管理。")
 

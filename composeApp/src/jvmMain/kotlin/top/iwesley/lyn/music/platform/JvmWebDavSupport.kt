@@ -50,6 +50,7 @@ import top.iwesley.lyn.music.core.model.stableArtworkBytesHash
 import top.iwesley.lyn.music.core.model.unsupportedAudioImportFailure
 import top.iwesley.lyn.music.core.model.warn
 import top.iwesley.lyn.music.core.model.ImportSourceType
+import top.iwesley.lyn.music.core.model.JvmAppDataDirectory
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
 
 internal data class JvmWebDavPlaybackTarget(
@@ -902,8 +903,8 @@ private fun scanFailureReason(throwable: Throwable): String {
         ?: "读取失败。"
 }
 
-private val jvmWebDavArtworkDirectory = File(File(System.getProperty("user.home")), ".lynmusic/artwork").apply {
-    mkdirs()
+private val jvmWebDavArtworkDirectory by lazy {
+    JvmAppDataDirectory.resolve("artwork").apply { mkdirs() }
 }
 
 private const val WEBDAV_LOG_TAG = "WebDav"
