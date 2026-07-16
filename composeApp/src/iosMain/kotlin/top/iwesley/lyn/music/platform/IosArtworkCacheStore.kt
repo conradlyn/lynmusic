@@ -31,6 +31,20 @@ import top.iwesley.lyn.music.domain.readRemotePlaybackUrlCandidateWithFallback
 
 fun createIosArtworkCacheStore(): ArtworkCacheStore = IosArtworkCacheStore()
 
+internal fun storeIosImportedArtwork(cacheKey: String, payload: ByteArray): String? {
+    if (!isCompleteArtworkPayload(payload)) return null
+    val directory = iosArtworkCacheDirectory()
+    val cachePrefix = cacheKey.stableArtworkCacheHash()
+    val fileName = "$cachePrefix${artworkCacheExtension("embedded", payload)}"
+    return writeIosArtworkCacheFileAtomically(
+        directory = directory,
+        fileName = fileName,
+        payload = payload,
+        cachePrefix = cachePrefix,
+        replaceExisting = true,
+    )?.path
+}
+
 private class IosArtworkCacheStore : ArtworkCacheStore {
     private val directory: String by lazy { iosArtworkCacheDirectory() }
     private val versionRegistry = ArtworkCacheVersionRegistry()

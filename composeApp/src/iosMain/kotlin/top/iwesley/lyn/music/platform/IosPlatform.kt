@@ -63,6 +63,7 @@ import top.iwesley.lyn.music.core.model.AppThemeTextPalettePreferences
 import top.iwesley.lyn.music.core.model.AppThemeTokens
 import top.iwesley.lyn.music.core.model.defaultCustomThemeTokens
 import top.iwesley.lyn.music.core.model.defaultThemeTextPalettePreferences
+import top.iwesley.lyn.music.core.model.info
 import top.iwesley.lyn.music.core.model.navidromeAudioQualityOrDefault
 import top.iwesley.lyn.music.core.model.normalizePlaybackVolume
 import top.iwesley.lyn.music.core.model.playerArtworkStyleOrDefault
@@ -71,7 +72,6 @@ import top.iwesley.lyn.music.core.model.SambaSourceDraft
 import top.iwesley.lyn.music.core.model.SecureCredentialStore
 import top.iwesley.lyn.music.core.model.SubsonicSourceDraft
 import top.iwesley.lyn.music.core.model.UnsupportedAudioTagEditorPlatformService
-import top.iwesley.lyn.music.core.model.UnsupportedAudioTagGateway
 import top.iwesley.lyn.music.core.model.WebDavSourceDraft
 import top.iwesley.lyn.music.core.model.withSecureInMemoryCache
 import top.iwesley.lyn.music.data.db.LynMusicDatabase
@@ -136,14 +136,6 @@ import platform.Security.kSecValueData
 import platform.darwin.dispatch_get_main_queue
 import platform.posix.memcpy
 
-private val IOS_SUPPORTED_IMPORT_AUDIO_EXTENSIONS = setOf(
-    "mp3",
-    "m4a",
-    "aac",
-    "wav",
-    "flac",
-)
-
 fun createIosAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
     val database = openLynMusicDatabase(
         Room.databaseBuilder<LynMusicDatabase>(
@@ -156,14 +148,17 @@ fun createIosAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
     val remoteSourceAddressSelector = RemoteSourceAddressSelector(networkConnectionTypeProvider)
     val navidromeHttpClient = IosLyricsHttpClient()
     val logger = ConsoleDiagnosticLogger(enabled = true, label = "iOS")
+    val localFileAccessService = IosLocalFileAccessService(database)
     val platform = PlatformDescriptor(
         name = "iPhone / iPad",
         capabilities = PlatformCapabilities(
-            supportsLocalFolderImport = false,
+            supportsLocalFolderImport = true,
             supportsSambaImport = false,
             supportsWebDavImport = false,
             supportsNavidromeImport = true,
             supportsSystemMediaControls = true,
+            supportsSystemLocalFolderPicker = true,
+            supportsLocalFolderReauthorization = true,
         ),
     )
     val sharedGraph = buildSharedGraph(
@@ -185,8 +180,9 @@ fun createIosAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
             artworkCacheStore = createIosArtworkCacheStore(),
             appStorageGateway = createIosAppStorageGateway(),
             deviceInfoGateway = createIosDeviceInfoGateway(),
-            audioTagGateway = UnsupportedAudioTagGateway,
+            audioTagGateway = IosAudioTagGateway(localFileAccessService),
             audioTagEditorPlatformService = UnsupportedAudioTagEditorPlatformService,
+            sameNameLyricsFileGateway = IosSameNameLyricsFileGateway(localFileAccessService),
             dailyRecommendationDateKeyProvider = IosDailyRecommendationDateKeyProvider,
             dailyRecommendationDateChangeNotifier = IosDailyRecommendationDateChangeNotifier(
                 IosDailyRecommendationDateKeyProvider,
@@ -202,6 +198,7 @@ fun createIosAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
                 navidromeAudioQualityPreferencesStore = appPreferencesStore,
                 networkConnectionTypeProvider = networkConnectionTypeProvider,
                 addressSelector = remoteSourceAddressSelector,
+                localMediaAccessResolver = IosAppleLocalMediaAccessResolver(localFileAccessService),
             ),
             playbackPreferencesStore = appPreferencesStore,
             lyricsShareFontPreferencesStore = appPreferencesStore,
@@ -662,10 +659,22 @@ private class IosImportSourceGateway(
     private val navidromeHttpClient: LyricsHttpClient,
     private val logger: DiagnosticLogger,
 ) : ImportSourceGateway {
-    override suspend fun pickLocalFolder(): LocalFolderSelection? = null
+    private val localFolderPicker = IosLocalFolderPicker(logger)
+    private val localFolderScanner = IosLocalFolderScanner()
+
+    override suspend fun pickLocalFolder(): LocalFolderSelection? = localFolderPicker.pick()
 
     override suspend fun scanLocalFolder(selection: LocalFolderSelection, sourceId: String): ImportScanReport {
-        return ImportScanReport(emptyList(), warnings = listOf("当前 iOS 构建未实现应用内目录扫描，请通过 Files 接入后扩展。"))
+        return scanLocalFolder(selection, sourceId, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun scanLocalFolder(
+        selection: LocalFolderSelection,
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): ImportScanReport {
+        logger.info("LocalFolderImport") { "scan.gateway.begin source=$sourceId" }
+        return localFolderScanner.scan(selection, sourceId, progressSink)
     }
 
     override suspend fun testSamba(draft: SambaSourceDraft) {

@@ -108,6 +108,7 @@ import androidx.compose.ui.window.Dialog
 import top.iwesley.lyn.music.core.model.Album
 import top.iwesley.lyn.music.core.model.Artist
 import top.iwesley.lyn.music.core.model.ArtworkTintTheme
+import top.iwesley.lyn.music.core.model.displayLocalFolderReference
 import top.iwesley.lyn.music.core.model.ImportSourceType
 import top.iwesley.lyn.music.core.model.ImportSourceIndexMode
 import top.iwesley.lyn.music.core.model.ImportScanPhase
@@ -1294,6 +1295,7 @@ internal fun SourceCard(
     enabled: Boolean,
     compact: Boolean,
     onEdit: (() -> Unit)?,
+    editLabel: String = "编辑",
     onToggleEnabled: () -> Unit,
     onRescan: (() -> Unit)?,
     isRescanning: Boolean,
@@ -1329,7 +1331,8 @@ internal fun SourceCard(
                     Text(state.source.label, fontWeight = FontWeight.Bold)
                     Text(
                         when (state.source.type) {
-                            top.iwesley.lyn.music.core.model.ImportSourceType.LOCAL_FOLDER -> state.source.rootReference
+                            top.iwesley.lyn.music.core.model.ImportSourceType.LOCAL_FOLDER ->
+                                displayLocalFolderReference(state.source.rootReference)
                             top.iwesley.lyn.music.core.model.ImportSourceType.SAMBA -> top.iwesley.lyn.music.core.model.formatSambaEndpoint(
                                 server = state.source.server,
                                 port = state.source.port,
@@ -1355,6 +1358,7 @@ internal fun SourceCard(
                     sourceEnabled = sourceEnabled,
                     enabled = enabled,
                     onEdit = onEdit,
+                    editLabel = editLabel,
                     onToggleEnabled = onToggleEnabled,
                     onRescan = onRescan,
                     isRescanning = isRescanning,
@@ -1487,6 +1491,7 @@ private fun SourceCardActions(
     sourceEnabled: Boolean,
     enabled: Boolean,
     onEdit: (() -> Unit)?,
+    editLabel: String,
     onToggleEnabled: () -> Unit,
     onRescan: (() -> Unit)?,
     isRescanning: Boolean,
@@ -1498,6 +1503,7 @@ private fun SourceCardActions(
             sourceEnabled = sourceEnabled,
             enabled = enabled,
             onEdit = onEdit,
+            editLabel = editLabel,
             onToggleEnabled = onToggleEnabled,
             onRescan = onRescan,
             isRescanning = isRescanning,
@@ -1508,6 +1514,7 @@ private fun SourceCardActions(
             sourceEnabled = sourceEnabled,
             enabled = enabled,
             onEdit = onEdit,
+            editLabel = editLabel,
             onToggleEnabled = onToggleEnabled,
             onRescan = onRescan,
             isRescanning = isRescanning,
@@ -1521,6 +1528,7 @@ private fun SourceCardTextActions(
     sourceEnabled: Boolean,
     enabled: Boolean,
     onEdit: (() -> Unit)?,
+    editLabel: String,
     onToggleEnabled: () -> Unit,
     onRescan: (() -> Unit)?,
     isRescanning: Boolean,
@@ -1535,7 +1543,7 @@ private fun SourceCardTextActions(
                 OutlinedButton(onClick = edit, enabled = enabled) {
                     Icon(Icons.Rounded.Tune, null)
                     Spacer(Modifier.width(6.dp))
-                    Text("编辑")
+                    Text(editLabel)
                 }
             }
             if (sourceEnabled) {
@@ -1576,6 +1584,7 @@ private fun SourceCardCompactActions(
     sourceEnabled: Boolean,
     enabled: Boolean,
     onEdit: (() -> Unit)?,
+    editLabel: String,
     onToggleEnabled: () -> Unit,
     onRescan: (() -> Unit)?,
     isRescanning: Boolean,
@@ -1592,7 +1601,7 @@ private fun SourceCardCompactActions(
                         onClick = edit,
                         enabled = enabled,
                         imageVector = Icons.Rounded.Tune,
-                        contentDescription = "编辑来源",
+                        contentDescription = "$editLabel 来源",
                     )
                 }
                 if (sourceEnabled) {

@@ -255,6 +255,7 @@ data class ImportScanReport(
     val discoveredAudioFileCount: Int = tracks.size,
     val failures: List<ImportScanFailure> = emptyList(),
     val totalTrackCount: Int? = null,
+    val refreshedPersistentReference: String? = null,
 )
 
 data class ImportStreamingScanReport(
@@ -521,6 +522,7 @@ data class PlatformCapabilities(
     val supportsEqualizer: Boolean = false,
     val supportsPlaybackBackgroundArtworkBlur: Boolean = true,
     val supportsSystemLocalFolderPicker: Boolean = false,
+    val supportsLocalFolderReauthorization: Boolean = false,
     val supportsMacOsWindowCloseBehavior: Boolean = false,
     val supportsCustomDataLocation: Boolean = false,
 )

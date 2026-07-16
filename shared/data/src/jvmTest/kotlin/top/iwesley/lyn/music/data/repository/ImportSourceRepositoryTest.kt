@@ -35,6 +35,8 @@ import top.iwesley.lyn.music.core.model.SecureCredentialStore
 import top.iwesley.lyn.music.core.model.SubsonicAuthMode
 import top.iwesley.lyn.music.core.model.SubsonicSourceDraft
 import top.iwesley.lyn.music.core.model.WebDavSourceDraft
+import top.iwesley.lyn.music.core.model.buildIosLocalFolderReference
+import top.iwesley.lyn.music.core.model.buildIosLocalMediaLocator
 import top.iwesley.lyn.music.core.model.buildEmbySongLocator
 import top.iwesley.lyn.music.core.model.normalizeWebDavRootUrl
 import top.iwesley.lyn.music.data.db.ImportSourceEntity
@@ -98,7 +100,192 @@ class ImportSourceRepositoryTest {
     }
 
     @Test
-    fun `import local folder allows duplicate name when path differs`() = runTest {
+    fun `iOS folder duplicate detection uses identity instead of bookmark bytes`() = runTest {
+        val database = createImportTestDatabase()
+        database.importSourceDao().upsert(
+            importSourceEntity(
+                id = "local-1",
+                type = ImportSourceType.LOCAL_FOLDER,
+                label = "音乐",
+                rootReference = buildIosLocalFolderReference("file:///Music", byteArrayOf(1, 2)),
+            ),
+        )
+        val gateway = RecordingImportSourceGateway(
+            nextLocalFolderSelection = LocalFolderSelection(
+                label = "音乐",
+                persistentReference = buildIosLocalFolderReference("file:///Music", byteArrayOf(8, 9)),
+            ),
+        )
+
+        val result = createRepository(database, gateway).importLocalFolder()
+
+        assertEquals("该本地文件夹已导入。", result.exceptionOrNull()?.message)
+        assertEquals(0, gateway.localFolderScanCount)
+    }
+
+    @Test
+    fun `reauthorizing iOS folder preserves source id and label and atomically replaces reference and index`() = runTest {
+        val database = createImportTestDatabase()
+        val oldReference = buildIosLocalFolderReference("file:///Music", byteArrayOf(1))
+        val selectedReference = buildIosLocalFolderReference("file:///Music", byteArrayOf(2))
+        val refreshedReference = buildIosLocalFolderReference("file:///Music", byteArrayOf(3))
+        database.importSourceDao().upsert(
+            importSourceEntity("local-1", ImportSourceType.LOCAL_FOLDER, "音乐 (2)", oldReference),
+        )
+        database.trackDao().upsertAll(
+            listOf(
+                trackEntity(
+                    id = "track:local-1:old.mp3",
+                    sourceId = "local-1",
+                    title = "Old",
+                    mediaLocator = buildIosLocalMediaLocator("local-1", "old.mp3"),
+                    relativePath = "old.mp3",
+                ),
+            ),
+        )
+        val gateway = RecordingImportSourceGateway(
+            nextLocalFolderSelection = LocalFolderSelection("新目录", selectedReference),
+            scanReport = ImportScanReport(
+                tracks = listOf(
+                    ImportedTrackCandidate(
+                        title = "New",
+                        mediaLocator = buildIosLocalMediaLocator("local-1", "嵌套/new.mp3"),
+                        relativePath = "嵌套/new.mp3",
+                    ),
+                ),
+                refreshedPersistentReference = refreshedReference,
+            ),
+        )
+
+        val summary = createRepository(database, gateway).reauthorizeLocalFolder("local-1").getOrThrow()
+
+        assertEquals("local-1", summary?.sourceId)
+        val source = assertNotNull(database.importSourceDao().getById("local-1"))
+        assertEquals("音乐 (2)", source.label)
+        assertEquals(refreshedReference, source.rootReference)
+        val tracks = database.trackDao().getBySourceId("local-1")
+        assertEquals(listOf("New"), tracks.map { it.title })
+        assertEquals("track:local-1:嵌套/new.mp3", tracks.single().id)
+    }
+
+    @Test
+    fun `reauthorizing iOS folder cancellation keeps old source and index`() = runTest {
+        val database = createImportTestDatabase()
+        database.importSourceDao().upsert(
+            importSourceEntity("local-1", ImportSourceType.LOCAL_FOLDER, "旧目录", "old-reference"),
+        )
+        database.trackDao().upsertAll(listOf(trackEntity("track-1", "local-1", "Old")))
+
+        val summary = createRepository(database).reauthorizeLocalFolder("local-1").getOrThrow()
+
+        assertNull(summary)
+        assertEquals("old-reference", database.importSourceDao().getById("local-1")?.rootReference)
+        assertEquals(listOf("Old"), database.trackDao().getBySourceId("local-1").map { it.title })
+    }
+
+    @Test
+    fun `reauthorizing iOS folder rejects identity used by another source`() = runTest {
+        val database = createImportTestDatabase()
+        database.importSourceDao().upsert(
+            importSourceEntity("local-1", ImportSourceType.LOCAL_FOLDER, "旧目录", "old-reference"),
+        )
+        database.importSourceDao().upsert(
+            importSourceEntity(
+                "local-2",
+                ImportSourceType.LOCAL_FOLDER,
+                "冲突目录",
+                buildIosLocalFolderReference("file:///Conflict", byteArrayOf(1)),
+            ),
+        )
+        val gateway = RecordingImportSourceGateway(
+            nextLocalFolderSelection = LocalFolderSelection(
+                "新目录",
+                buildIosLocalFolderReference("file:///Conflict", byteArrayOf(9)),
+            ),
+        )
+
+        val result = createRepository(database, gateway).reauthorizeLocalFolder("local-1")
+
+        assertEquals("该本地文件夹已导入。", result.exceptionOrNull()?.message)
+        assertEquals("old-reference", database.importSourceDao().getById("local-1")?.rootReference)
+        assertEquals(0, gateway.localFolderScanCount)
+    }
+
+    @Test
+    fun `reauthorizing iOS folder rejects a different identity and keeps old source and index`() = runTest {
+        val database = createImportTestDatabase()
+        val oldReference = buildIosLocalFolderReference("file:///OldMusic", byteArrayOf(1))
+        database.importSourceDao().upsert(
+            importSourceEntity("local-1", ImportSourceType.LOCAL_FOLDER, "旧目录", oldReference),
+        )
+        database.trackDao().upsertAll(
+            listOf(trackEntity("track:local-1:same.mp3", "local-1", "Old")),
+        )
+        val gateway = RecordingImportSourceGateway(
+            nextLocalFolderSelection = LocalFolderSelection(
+                "新目录",
+                buildIosLocalFolderReference("file:///NewMusic", byteArrayOf(2)),
+            ),
+        )
+
+        val result = createRepository(database, gateway).reauthorizeLocalFolder("local-1")
+
+        assertEquals(
+            "所选文件夹与原来源不一致；如需更换目录，请新建来源。",
+            result.exceptionOrNull()?.message,
+        )
+        val source = assertNotNull(database.importSourceDao().getById("local-1"))
+        assertEquals("旧目录", source.label)
+        assertEquals(oldReference, source.rootReference)
+        assertEquals(listOf("Old"), database.trackDao().getBySourceId("local-1").map { it.title })
+        assertEquals(0, gateway.localFolderScanCount)
+    }
+
+    @Test
+    fun `reauthorizing iOS folder scan failure rolls back source and old index`() = runTest {
+        val database = createImportTestDatabase()
+        val oldReference = buildIosLocalFolderReference("file:///Music", byteArrayOf(1))
+        val selectedReference = buildIosLocalFolderReference("file:///Music", byteArrayOf(2))
+        database.importSourceDao().upsert(
+            importSourceEntity("local-1", ImportSourceType.LOCAL_FOLDER, "旧目录", oldReference),
+        )
+        database.trackDao().upsertAll(listOf(trackEntity("track-1", "local-1", "Old")))
+        val gateway = RecordingImportSourceGateway(
+            nextLocalFolderSelection = LocalFolderSelection("新目录", selectedReference),
+            localFolderScanHandler = { _, _ -> error("权限失效") },
+        )
+
+        val result = createRepository(database, gateway).reauthorizeLocalFolder("local-1")
+
+        assertEquals("权限失效", result.exceptionOrNull()?.message)
+        val source = assertNotNull(database.importSourceDao().getById("local-1"))
+        assertEquals("旧目录", source.label)
+        assertEquals(oldReference, source.rootReference)
+        assertEquals(listOf("Old"), database.trackDao().getBySourceId("local-1").map { it.title })
+    }
+
+    @Test
+    fun `rescanning iOS folder persists refreshed bookmark reference`() = runTest {
+        val database = createImportTestDatabase()
+        val oldReference = buildIosLocalFolderReference("file:///Music", byteArrayOf(1))
+        val refreshedReference = buildIosLocalFolderReference("file:///Music", byteArrayOf(2))
+        database.importSourceDao().upsert(
+            importSourceEntity("local-1", ImportSourceType.LOCAL_FOLDER, "音乐", oldReference),
+        )
+        val gateway = RecordingImportSourceGateway(
+            scanReport = ImportScanReport(
+                tracks = emptyList(),
+                refreshedPersistentReference = refreshedReference,
+            ),
+        )
+
+        createRepository(database, gateway).rescanSource("local-1").getOrThrow()
+
+        assertEquals(refreshedReference, database.importSourceDao().getById("local-1")?.rootReference)
+    }
+
+    @Test
+    fun `import local folder disambiguates duplicate name when path differs`() = runTest {
         val database = createImportTestDatabase()
         database.importSourceDao().upsert(
             importSourceEntity(
@@ -125,12 +312,12 @@ class ImportSourceRepositoryTest {
         val sources = database.importSourceDao().getAll()
         assertEquals(2, sources.size)
         val imported = assertNotNull(sources.firstOrNull { it.rootReference == "folder://new-downloads" })
-        assertEquals("下载目录", imported.label)
+        assertEquals("下载目录 (2)", imported.label)
         assertEquals(1, gateway.localFolderScanCount)
     }
 
     @Test
-    fun `import local folder allows name matching remote sources`() = runTest {
+    fun `import local folder disambiguates names matching remote sources`() = runTest {
         val database = createImportTestDatabase()
         listOf(
             importSourceEntity(
@@ -166,7 +353,41 @@ class ImportSourceRepositoryTest {
         val sources = database.importSourceDao().getAll()
         assertEquals(4, sources.size)
         val imported = assertNotNull(sources.firstOrNull { it.type == ImportSourceType.LOCAL_FOLDER.name })
-        assertEquals("下载目录", imported.label)
+        assertEquals("下载目录 (2)", imported.label)
+        assertEquals(1, gateway.localFolderScanCount)
+    }
+
+    @Test
+    fun `import local folder advances past existing numeric suffixes ignoring case and whitespace`() = runTest {
+        val database = createImportTestDatabase()
+        listOf(
+            importSourceEntity(
+                id = "local-1",
+                type = ImportSourceType.LOCAL_FOLDER,
+                label = " Music ",
+                rootReference = "folder://music-1",
+            ),
+            importSourceEntity(
+                id = "local-2",
+                type = ImportSourceType.LOCAL_FOLDER,
+                label = "MUSIC (2)",
+                rootReference = "folder://music-2",
+            ),
+        ).forEach { database.importSourceDao().upsert(it) }
+        val gateway = RecordingImportSourceGateway(
+            nextLocalFolderSelection = LocalFolderSelection(
+                label = "music",
+                persistentReference = "folder://music-3",
+            ),
+        )
+
+        val result = createRepository(database = database, gateway = gateway).importLocalFolder()
+
+        assertTrue(result.isSuccess)
+        val imported = assertNotNull(
+            database.importSourceDao().getAll().firstOrNull { it.rootReference == "folder://music-3" },
+        )
+        assertEquals("music (3)", imported.label)
         assertEquals(1, gateway.localFolderScanCount)
     }
 
@@ -1396,6 +1617,7 @@ private fun navidromeSourceEntity(
 private class RecordingImportSourceGateway(
     var nextLocalFolderSelection: LocalFolderSelection? = null,
     private val scanReport: ImportScanReport = ImportScanReport(tracks = emptyList()),
+    private val localFolderScanHandler: (suspend (LocalFolderSelection, String) -> ImportScanReport)? = null,
     private val navidromeStreamingBatches: List<List<ImportedTrackCandidate>>? = null,
     private val navidromeStreamingError: Throwable? = null,
     private val navidromeProbe: NavidromeLibraryProbe = NavidromeLibraryProbe(totalTrackCount = null),
@@ -1438,7 +1660,7 @@ private class RecordingImportSourceGateway(
 
     override suspend fun scanLocalFolder(selection: LocalFolderSelection, sourceId: String): ImportScanReport {
         localFolderScanCount += 1
-        return scanReport
+        return localFolderScanHandler?.invoke(selection, sourceId) ?: scanReport
     }
 
     override suspend fun testSamba(draft: SambaSourceDraft) {

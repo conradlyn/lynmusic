@@ -3285,10 +3285,15 @@ internal fun SourcesTab(
                         enabled = !state.isWorking,
                         compact = compact,
                         onEdit = if (source.source.type == ImportSourceType.LOCAL_FOLDER) {
-                            null
+                            if (state.capabilities.supportsLocalFolderReauthorization) {
+                                { onImportIntent(ImportIntent.ReauthorizeLocalFolder(source.source.id)) }
+                            } else {
+                                null
+                            }
                         } else {
                             { onImportIntent(ImportIntent.OpenRemoteSourceEditor(source.source.id)) }
                         },
+                        editLabel = if (source.source.type == ImportSourceType.LOCAL_FOLDER) "重新授权" else "编辑",
                         onToggleEnabled = {
                             onImportIntent(
                                 ImportIntent.ToggleSourceEnabled(
@@ -3306,7 +3311,8 @@ internal fun SourcesTab(
                         onDelete = { pendingDeleteSourceId = source.source.id },
                         scanSummary = state.latestScanSummariesBySourceId[source.source.id],
                         scanProgress = state.scanProgress?.takeIf {
-                            activeScanOperation == ImportScanOperation.RescanSource(source.source.id) &&
+                            (activeScanOperation == ImportScanOperation.RescanSource(source.source.id) ||
+                                activeScanOperation == ImportScanOperation.ReauthorizeLocalFolder(source.source.id)) &&
                                 it.sourceId == source.source.id
                         },
                         onShowScanFailures = { failureDetailSummary = it },

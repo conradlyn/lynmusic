@@ -98,6 +98,7 @@ import top.iwesley.lyn.music.core.model.error
 import top.iwesley.lyn.music.core.model.formatSambaEndpoint
 import top.iwesley.lyn.music.core.model.info
 import top.iwesley.lyn.music.core.model.joinSambaPath
+import top.iwesley.lyn.music.core.model.localFolderPersistentIdentity
 import top.iwesley.lyn.music.core.model.normalizeSambaPath
 import top.iwesley.lyn.music.core.model.normalizeArtworkLocator
 import top.iwesley.lyn.music.core.model.normalizeWebDavRootUrl
@@ -211,6 +212,15 @@ interface ImportSourceRepository {
         progressSink: ImportScanProgressSink,
     ): Result<ImportScanSummary> {
         return importSelectedLocalFolder(selection)
+    }
+    suspend fun reauthorizeLocalFolder(sourceId: String): Result<ImportScanSummary?> {
+        return Result.failure(UnsupportedOperationException("Reauthorizing a local folder is not supported."))
+    }
+    suspend fun reauthorizeLocalFolder(
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary?> {
+        return reauthorizeLocalFolder(sourceId)
     }
     suspend fun testSambaSource(draft: SambaSourceDraft): Result<Unit>
     suspend fun testUpdatedSambaSource(
@@ -554,6 +564,7 @@ class RoomImportSourceRepository(
     private val secureCredentialStore: SecureCredentialStore,
     private val offlineDownloadGateway: OfflineDownloadGateway = UnsupportedOfflineDownloadGateway,
     private val addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
+    private val logger: DiagnosticLogger = NoopDiagnosticLogger,
 ) : ImportSourceRepository {
     private val navidromeScanLocks = mutableMapOf<String, Mutex>()
     private val navidromeScanLocksMutex = Mutex()
@@ -600,17 +611,61 @@ class RoomImportSourceRepository(
         progressSink: ImportScanProgressSink,
     ): Result<ImportScanSummary> {
         return runCatching {
-            validateLocalFolderImportSourceCreation(rootReference = selection.persistentReference)
             val sourceId = newId("local")
-            val source = ImportSource(
-                id = sourceId,
-                type = ImportSourceType.LOCAL_FOLDER,
-                label = selection.label,
-                rootReference = selection.persistentReference,
-                createdAt = now(),
-            )
-            database.importSourceDao().upsert(source.toEntity())
+            logger.info(LOCAL_FOLDER_IMPORT_LOG_TAG) {
+                "source-transaction.begin source=$sourceId"
+            }
+            val source = database.immediateWriteTransaction {
+                val existing = database.importSourceDao().getAll()
+                if (hasLocalFolderPathConflict(
+                        rootReference = selection.persistentReference,
+                        existing = existing,
+                    )
+                ) {
+                    error("该本地文件夹已导入。")
+                }
+                ImportSource(
+                    id = sourceId,
+                    type = ImportSourceType.LOCAL_FOLDER,
+                    label = uniqueImportSourceLabel(selection.label, existing),
+                    rootReference = selection.persistentReference,
+                    createdAt = now(),
+                ).also { database.importSourceDao().upsert(it.toEntity()) }
+            }
+            logger.info(LOCAL_FOLDER_IMPORT_LOG_TAG) {
+                "source-transaction.completed source=$sourceId"
+            }
             runScan(source, progressSink) {
+                gateway.scanLocalFolder(selection, source.id, progressSink)
+            }
+        }
+    }
+
+    override suspend fun reauthorizeLocalFolder(sourceId: String): Result<ImportScanSummary?> {
+        return reauthorizeLocalFolder(sourceId, ImportScanProgressSink.NoOp)
+    }
+
+    override suspend fun reauthorizeLocalFolder(
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary?> {
+        return runCatching {
+            val existing = database.importSourceDao().getById(sourceId)?.toDomain()
+                ?.takeIf { it.type == ImportSourceType.LOCAL_FOLDER }
+                ?: error("本地文件夹来源不存在。")
+            val selection = gateway.pickLocalFolder(LocalFolderPickerMode.System) ?: return@runCatching null
+            validateLocalFolderImportSourceCreation(
+                rootReference = selection.persistentReference,
+                excludingId = sourceId,
+            )
+            check(
+                localFolderPersistentIdentity(selection.persistentReference) ==
+                    localFolderPersistentIdentity(existing.rootReference),
+            ) { "所选文件夹与原来源不一致；如需更换目录，请新建来源。" }
+            val updated = existing.copy(
+                rootReference = selection.persistentReference,
+            )
+            runScan(updated, progressSink) {
                 gateway.scanLocalFolder(selection, sourceId, progressSink)
             }
         }
@@ -1909,54 +1964,69 @@ class RoomImportSourceRepository(
 
     private suspend fun persistScan(source: ImportSource, report: ImportScanReport): ImportScanSummary {
         val scannedAt = now()
-        val existingAddedAtByTrackId = database.trackDao()
-            .getAddedAtBySourceId(source.id)
-            .associate { it.id to it.addedAt }
-        database.trackDao().deleteBySourceId(source.id)
-        database.lyricsCacheDao().deleteByTrackIdPrefixAndSourceId(trackIdPrefix(source.id), EMBEDDED_LYRICS_SOURCE_ID)
-        val trackEntities = report.tracks.map { candidate ->
-            candidate.toTrackEntity(source.id, scannedAt, existingAddedAtByTrackId)
-        }
+        val persistedSource = report.refreshedPersistentReference
+            ?.takeIf { source.type == ImportSourceType.LOCAL_FOLDER && it.isNotBlank() }
+            ?.also { refreshedReference ->
+                check(
+                    localFolderPersistentIdentity(refreshedReference) ==
+                        localFolderPersistentIdentity(source.rootReference),
+                ) { "刷新的本地文件夹授权与当前来源不匹配。" }
+            }
+            ?.let { source.copy(rootReference = it) }
+            ?: source
+        return database.immediateWriteTransaction {
+            val existingAddedAtByTrackId = database.trackDao()
+                .getAddedAtBySourceId(source.id)
+                .associate { it.id to it.addedAt }
+            database.trackDao().deleteBySourceId(source.id)
+            database.lyricsCacheDao().deleteByTrackIdPrefixAndSourceId(
+                trackIdPrefix(source.id),
+                EMBEDDED_LYRICS_SOURCE_ID,
+            )
+            val trackEntities = report.tracks.map { candidate ->
+                candidate.toTrackEntity(source.id, scannedAt, existingAddedAtByTrackId)
+            }
 
-        if (trackEntities.isNotEmpty()) {
-            database.trackDao().upsertAll(trackEntities)
-        }
-        report.tracks.zip(trackEntities).forEach { (candidate, entity) ->
-            candidate.embeddedLyrics
-                ?.trim()
-                ?.takeIf { it.isNotBlank() }
-                ?.let { lyrics ->
-                    database.lyricsCacheDao().upsert(
-                        LyricsCacheEntity(
-                            trackId = entity.id,
-                            sourceId = EMBEDDED_LYRICS_SOURCE_ID,
-                            rawPayload = lyrics,
-                            updatedAt = scannedAt,
-                        ),
-                    )
-                }
-        }
-        if (!isSubsonicCompatibleSourceType(source.type)) {
-            database.favoriteTrackDao().deleteOrphansBySourceId(source.id)
-        }
-        rebuildLibrarySummaries()
+            if (trackEntities.isNotEmpty()) {
+                database.trackDao().upsertAll(trackEntities)
+            }
+            report.tracks.zip(trackEntities).forEach { (candidate, entity) ->
+                candidate.embeddedLyrics
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { lyrics ->
+                        database.lyricsCacheDao().upsert(
+                            LyricsCacheEntity(
+                                trackId = entity.id,
+                                sourceId = EMBEDDED_LYRICS_SOURCE_ID,
+                                rawPayload = lyrics,
+                                updatedAt = scannedAt,
+                            ),
+                        )
+                    }
+            }
+            if (!isSubsonicCompatibleSourceType(source.type)) {
+                database.favoriteTrackDao().deleteOrphansBySourceId(source.id)
+            }
+            rebuildLibrarySummaries()
 
-        database.importSourceDao().upsert(source.copy(lastScannedAt = scannedAt).toEntity())
-        database.importIndexStateDao().upsert(
-            ImportIndexStateEntity(
+            database.importSourceDao().upsert(persistedSource.copy(lastScannedAt = scannedAt).toEntity())
+            database.importIndexStateDao().upsert(
+                ImportIndexStateEntity(
+                    sourceId = source.id,
+                    trackCount = trackEntities.size,
+                    remoteTrackCount = report.totalTrackCount,
+                    lastScannedAt = scannedAt,
+                    lastError = report.warnings.joinToString("\n").ifBlank { null },
+                ),
+            )
+            ImportScanSummary(
                 sourceId = source.id,
-                trackCount = trackEntities.size,
-                remoteTrackCount = report.totalTrackCount,
-                lastScannedAt = scannedAt,
-                lastError = report.warnings.joinToString("\n").ifBlank { null },
-            ),
-        )
-        return ImportScanSummary(
-            sourceId = source.id,
-            discoveredAudioFileCount = report.discoveredAudioFileCount,
-            importedTrackCount = trackEntities.size,
-            failures = report.failures,
-        )
+                discoveredAudioFileCount = report.discoveredAudioFileCount,
+                importedTrackCount = trackEntities.size,
+                failures = report.failures,
+            )
+        }
     }
 
     private suspend fun persistScanWithProgress(
@@ -2197,9 +2267,17 @@ class RoomImportSourceRepository(
         }
     }
 
-    private suspend fun validateLocalFolderImportSourceCreation(rootReference: String) {
+    private suspend fun validateLocalFolderImportSourceCreation(
+        rootReference: String,
+        excludingId: String? = null,
+    ) {
         val existing = database.importSourceDao().getAll()
-        if (hasLocalFolderPathConflict(rootReference = rootReference, existing = existing)) {
+        if (hasLocalFolderPathConflict(
+                rootReference = rootReference,
+                existing = existing,
+                excludingId = excludingId,
+            )
+        ) {
             error("该本地文件夹已导入。")
         }
     }
@@ -3947,6 +4025,7 @@ private fun Throwable.throwIfCancellation() {
 }
 
 private const val LYRICS_LOG_TAG = "Lyrics"
+private const val LOCAL_FOLDER_IMPORT_LOG_TAG = "LocalFolderImport"
 private const val NETWORK_LYRICS_LOOKUP_SOURCE_ID = "network-lyrics"
 const val MANUAL_LYRICS_OVERRIDE_SOURCE_ID = "manual-override"
 const val SAME_NAME_LRC_SOURCE_ID = "same-name-lrc"
@@ -4339,6 +4418,23 @@ private fun normalizeImportSourceLabel(name: String): String {
     return name.trim().lowercase()
 }
 
+private fun uniqueImportSourceLabel(
+    preferredLabel: String,
+    existing: List<ImportSourceEntity>,
+): String {
+    val baseLabel = preferredLabel.trim().ifBlank { "本地音乐" }
+    val normalizedExistingLabels = existing
+        .mapTo(mutableSetOf()) { normalizeImportSourceLabel(it.label) }
+    if (normalizeImportSourceLabel(baseLabel) !in normalizedExistingLabels) return baseLabel
+
+    var suffix = 2
+    while (true) {
+        val candidate = "$baseLabel ($suffix)"
+        if (normalizeImportSourceLabel(candidate) !in normalizedExistingLabels) return candidate
+        suffix += 1
+    }
+}
+
 private fun hasImportSourceNameConflict(
     name: String,
     existing: List<ImportSourceEntity>,
@@ -4355,10 +4451,11 @@ private fun hasLocalFolderPathConflict(
     existing: List<ImportSourceEntity>,
     excludingId: String? = null,
 ): Boolean {
+    val identity = localFolderPersistentIdentity(rootReference)
     return existing.any { entity ->
         entity.id != excludingId &&
             entity.type == ImportSourceType.LOCAL_FOLDER.name &&
-            entity.rootReference == rootReference
+            localFolderPersistentIdentity(entity.rootReference) == identity
     }
 }
 

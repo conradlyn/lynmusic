@@ -31,16 +31,31 @@ private data class AppleRemotePlaybackFallback(
     fun currentCandidate(): RemotePlaybackUrlCandidate? = candidates.getOrNull(selectedIndex)
 }
 
+internal data class AppleLocalMediaAccess(
+    val locator: AppleResolvedMediaLocator,
+    val release: () -> Unit,
+)
+
+internal fun interface AppleLocalMediaAccessResolver {
+    suspend fun resolve(locator: String): AppleLocalMediaAccess?
+
+    companion object {
+        val None: AppleLocalMediaAccessResolver = AppleLocalMediaAccessResolver { null }
+    }
+}
+
 internal class ApplePlaybackGateway(
     private val platformLabel: String,
     private val navidromeAudioQualityPreferencesStore: NavidromeAudioQualityPreferencesStore =
         UnsupportedNavidromeAudioQualityPreferencesStore,
     private val networkConnectionTypeProvider: NetworkConnectionTypeProvider = WifiNetworkConnectionTypeProvider,
     private val addressSelector: RemoteSourceAddressSelector? = null,
+    private val localMediaAccessResolver: AppleLocalMediaAccessResolver = AppleLocalMediaAccessResolver.None,
 ) : PlaybackGateway {
     private val player = AppleNativePlayer(platformLabel)
     private val mutableState = MutableStateFlow(PlaybackGatewayState(volume = 1f))
     private var currentRemotePlaybackFallback: AppleRemotePlaybackFallback? = null
+    private var currentLocalMediaAccess: AppleLocalMediaAccess? = null
 
     override val state: StateFlow<PlaybackGatewayState> = mutableState.asStateFlow()
 
@@ -48,6 +63,7 @@ internal class ApplePlaybackGateway(
         AppleAudioSessionCoordinator.configureForPlayback()
         player.onProgress = { publishState() }
         player.onCompleted = {
+            releaseCurrentLocalMediaAccess()
             mutableState.update {
                 it.copy(
                     isPlaying = false,
@@ -62,6 +78,7 @@ internal class ApplePlaybackGateway(
             if (tryApplyRemoteAddressFallback(errorMessage)) {
                 return@onFailed
             }
+            releaseCurrentLocalMediaAccess()
             publishState(errorOverride = errorMessage ?: "$platformLabel 播放失败。")
         }
     }
@@ -106,7 +123,21 @@ internal class ApplePlaybackGateway(
         if (!loadToken.isCurrent()) {
             return
         }
-        when (val resolved = AppleMediaLocatorResolver.resolve(effectiveLocator)) {
+        val localAccess = runCatching { localMediaAccessResolver.resolve(effectiveLocator) }
+            .getOrElse { throwable ->
+                mutableState.update {
+                    it.copy(
+                        canSeek = false,
+                        errorMessage = throwable.message ?: "$platformLabel 无法访问本地歌曲。",
+                    )
+                }
+                return
+            }
+        if (!loadToken.isCurrent()) {
+            localAccess?.let { access -> runCatching(access.release) }
+            return
+        }
+        when (val resolved = localAccess?.locator ?: AppleMediaLocatorResolver.resolve(effectiveLocator)) {
             is AppleResolvedMediaLocator.Unsupported -> {
                 if (!loadToken.isCurrent()) {
                     return
@@ -130,7 +161,19 @@ internal class ApplePlaybackGateway(
                         playWhenReady = playWhenReady,
                     )
                 }
-                player.load(resolved)
+                currentLocalMediaAccess = localAccess
+                try {
+                    player.load(resolved)
+                } catch (throwable: Throwable) {
+                    releaseCurrentLocalMediaAccess()
+                    mutableState.update {
+                        it.copy(
+                            canSeek = false,
+                            errorMessage = throwable.message ?: "$platformLabel 播放失败。",
+                        )
+                    }
+                    return
+                }
                 if (startPositionMs > 0L) {
                     player.seekTo(startPositionMs)
                 }
@@ -187,6 +230,7 @@ internal class ApplePlaybackGateway(
 
     override suspend fun release() {
         currentRemotePlaybackFallback = null
+        releaseCurrentLocalMediaAccess()
         player.release()
         AppleAudioSessionCoordinator.deactivate()
     }
@@ -194,9 +238,15 @@ internal class ApplePlaybackGateway(
     private fun stopAndResetForTrackSwitch() {
         player.stopAndClear()
         currentRemotePlaybackFallback = null
+        releaseCurrentLocalMediaAccess()
         mutableState.update {
             it.resetForTrackSwitch(volumeOverride = player.volume())
         }
+    }
+
+    private fun releaseCurrentLocalMediaAccess() {
+        currentLocalMediaAccess?.let { access -> runCatching(access.release) }
+        currentLocalMediaAccess = null
     }
 
     private fun publishState(errorOverride: String? = null) {

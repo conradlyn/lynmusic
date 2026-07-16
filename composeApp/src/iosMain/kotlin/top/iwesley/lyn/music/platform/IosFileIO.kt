@@ -16,8 +16,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import platform.Foundation.NSData
 import platform.Foundation.NSError
+import platform.Foundation.NSFileHandle
 import platform.Foundation.NSURL
 import platform.Foundation.create
+import platform.Foundation.fileHandleForReadingFromURL
 import platform.posix.SEEK_END
 import platform.posix.SEEK_SET
 import platform.posix.fclose
@@ -74,6 +76,34 @@ internal fun readIosLocalBytes(path: String): ByteArray? {
     }
 }
 
+@OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
+internal fun readIosFileBytesUpTo(url: NSURL, maxBytes: Long): ByteArray? {
+    require(maxBytes in 1 until Int.MAX_VALUE.toLong())
+    val capacity = (maxBytes + 1L).toInt()
+    val output = ByteArray(capacity)
+    return memScoped {
+        val error = alloc<ObjCObjectVar<NSError?>>()
+        val handle = NSFileHandle.fileHandleForReadingFromURL(url, error = error.ptr) ?: return@memScoped null
+        try {
+            var totalBytesRead = 0
+            while (totalBytesRead < capacity) {
+                error.value = null
+                val requestedBytes = minOf(IOS_BOUNDED_READ_CHUNK_BYTES, capacity - totalBytesRead)
+                val data = handle.readDataUpToLength(requestedBytes.toULong(), error = error.ptr)
+                    ?: return@memScoped null
+                if (error.value != null) return@memScoped null
+                val chunk = data.toByteArray()
+                if (chunk.isEmpty()) break
+                chunk.copyInto(output, destinationOffset = totalBytesRead)
+                totalBytesRead += chunk.size
+            }
+            if (totalBytesRead > maxBytes) null else output.copyOf(totalBytesRead)
+        } finally {
+            handle.closeAndReturnError(null)
+        }
+    }
+}
+
 @OptIn(ExperimentalForeignApi::class)
 internal fun writeIosFileBytes(path: String, bytes: ByteArray): Boolean {
     val file = fopen(path, "wb") ?: return false
@@ -102,7 +132,7 @@ internal fun filePathFromIosLocator(target: String): String {
 }
 
 @OptIn(ExperimentalForeignApi::class)
-private fun NSData.toByteArray(): ByteArray {
+internal fun NSData.toByteArray(): ByteArray {
     val byteCount = length.toInt()
     if (byteCount <= 0) return ByteArray(0)
     val byteArray = ByteArray(byteCount)
@@ -111,3 +141,13 @@ private fun NSData.toByteArray(): ByteArray {
     }
     return byteArray
 }
+
+@OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
+internal fun ByteArray.toNSData(): NSData {
+    if (isEmpty()) return NSData()
+    return usePinned { pinned ->
+        NSData.create(bytes = pinned.addressOf(0), length = size.convert())
+    }
+}
+
+private const val IOS_BOUNDED_READ_CHUNK_BYTES = 64 * 1024

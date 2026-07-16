@@ -83,6 +83,23 @@ class ImportStoreTest {
         assertLocalFolderImportUsesRequestedPickerMode(LocalFolderPickerMode.BuiltIn)
     }
 
+    @Test
+    fun `local folder reauthorization records summary and success message`() = runTest {
+        val repository = FakeImportSourceRepository()
+        val harness = createStore(repository)
+
+        harness.store.dispatch(ImportIntent.ReauthorizeLocalFolder("local-1"))
+        advanceUntilIdle()
+
+        assertEquals("local-1", repository.lastReauthorizedLocalFolderSourceId)
+        assertEquals(
+            "本地文件夹已重新授权并扫描。发现 1 个音频文件，成功导入 1 首，0 个失败。",
+            harness.store.state.value.message,
+        )
+        assertEquals(testScanSummary("local-1"), harness.store.state.value.latestScanSummariesBySourceId["local-1"])
+        harness.close()
+    }
+
     private suspend fun TestScope.assertLocalFolderImportUsesRequestedPickerMode(mode: LocalFolderPickerMode) {
         val repository = FakeImportSourceRepository()
         val harness = createStore(repository)
@@ -994,6 +1011,7 @@ private class FakeImportSourceRepository(
     var lastUpdatedEmbyDraft: EmbySourceDraft? = null
     var lastUpdatedEmbyKeepExisting: Boolean = false
     var lastLocalFolderMode: LocalFolderPickerMode? = null
+    var lastReauthorizedLocalFolderSourceId: String? = null
     var navidromeProbeResult: Result<NavidromeLibraryProbe> =
         Result.success(NavidromeLibraryProbe(totalTrackCount = null))
     var existingNavidromeProbeResult: Result<NavidromeLibraryProbe> =
@@ -1022,6 +1040,19 @@ private class FakeImportSourceRepository(
 
     private suspend fun importLocalFolderResult(): Result<ImportScanSummary?> {
         return pendingResult?.await()?.map { testScanSummary("local-1") } ?: localFolderResult
+    }
+
+    override suspend fun reauthorizeLocalFolder(sourceId: String): Result<ImportScanSummary?> {
+        lastReauthorizedLocalFolderSourceId = sourceId
+        return Result.success(testScanSummary(sourceId))
+    }
+
+    override suspend fun reauthorizeLocalFolder(
+        sourceId: String,
+        progressSink: ImportScanProgressSink,
+    ): Result<ImportScanSummary?> {
+        progressToEmit?.let(progressSink::onProgress)
+        return reauthorizeLocalFolder(sourceId)
     }
 
     override suspend fun testSambaSource(draft: SambaSourceDraft): Result<Unit> {

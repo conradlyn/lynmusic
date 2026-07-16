@@ -26,6 +26,12 @@ class AudioScanFormatsTest {
 
     @Test
     fun `android import classification keeps only supported formats importable`() {
+        listOf("mp3", "m4a", "aac", "wav", "flac").forEach { extension ->
+            assertEquals(
+                NonNavidromeAudioScanResult.IMPORT_SUPPORTED,
+                classifyNonNavidromeAudioFile("good.$extension", androidSupportedImportExtensions),
+            )
+        }
         assertEquals(
             NonNavidromeAudioScanResult.IMPORT_SUPPORTED,
             classifyNonNavidromeAudioFile("good.flac", androidSupportedImportExtensions),

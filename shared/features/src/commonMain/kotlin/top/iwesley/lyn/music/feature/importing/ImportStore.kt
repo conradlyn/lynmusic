@@ -54,6 +54,7 @@ sealed interface ImportScanOperation {
     data object CreateLocalFolder : ImportScanOperation
     data class CreateRemote(val type: ImportSourceType) : ImportScanOperation
     data class RescanSource(val sourceId: String) : ImportScanOperation
+    data class ReauthorizeLocalFolder(val sourceId: String) : ImportScanOperation
     data class UpdateRemote(val sourceId: String) : ImportScanOperation
 }
 
@@ -122,6 +123,7 @@ sealed interface ImportIntent {
     data object TestRemoteSource : ImportIntent
     data object SaveRemoteSource : ImportIntent
     data class RescanSource(val sourceId: String) : ImportIntent
+    data class ReauthorizeLocalFolder(val sourceId: String) : ImportIntent
     data class ToggleSourceEnabled(val sourceId: String, val enabled: Boolean) : ImportIntent
     data class DeleteSource(val sourceId: String) : ImportIntent
     data class SambaLabelChanged(val value: String) : ImportIntent
@@ -682,6 +684,19 @@ class ImportStore(
             }
 
             is ImportIntent.RescanSource -> rescanSourceWithLargeNavidromeCheck(intent.sourceId)
+
+            is ImportIntent.ReauthorizeLocalFolder -> {
+                runScanningImport(ImportScanOperation.ReauthorizeLocalFolder(intent.sourceId)) { progressSink ->
+                    repository.reauthorizeLocalFolder(intent.sourceId, progressSink)
+                        .onSuccess { summary ->
+                            summary?.let {
+                                recordScanSummary(it)
+                                setMessage(scanSuccessMessage("本地文件夹已重新授权并扫描。", it))
+                            }
+                        }
+                        .onFailure { setMessage("重新授权本地文件夹失败: ${it.message}") }
+                }
+            }
 
             is ImportIntent.ToggleSourceEnabled -> runImport {
                 repository.setSourceEnabled(intent.sourceId, intent.enabled)
