@@ -25,8 +25,11 @@ import top.iwesley.lyn.music.core.model.ArtworkCacheStore
 import top.iwesley.lyn.music.core.model.ArtworkCacheVersionRegistry
 import top.iwesley.lyn.music.core.model.NavidromeLocatorRuntime
 import top.iwesley.lyn.music.core.model.RemotePlaybackUrlCandidate
+import top.iwesley.lyn.music.core.model.buildIosArtworkCacheLocator
 import top.iwesley.lyn.music.core.model.isCompleteArtworkPayload
 import top.iwesley.lyn.music.core.model.isReplaceableNavidromePlaceholderArtwork
+import top.iwesley.lyn.music.core.model.parseIosArtworkCacheLocator
+import top.iwesley.lyn.music.core.model.parseLegacyIosArtworkCacheFileName
 import top.iwesley.lyn.music.domain.readRemotePlaybackUrlCandidateWithFallback
 
 fun createIosArtworkCacheStore(): ArtworkCacheStore = IosArtworkCacheStore()
@@ -36,13 +39,14 @@ internal fun storeIosImportedArtwork(cacheKey: String, payload: ByteArray): Stri
     val directory = iosArtworkCacheDirectory()
     val cachePrefix = cacheKey.stableArtworkCacheHash()
     val fileName = "$cachePrefix${artworkCacheExtension("embedded", payload)}"
-    return writeIosArtworkCacheFileAtomically(
+    val written = writeIosArtworkCacheFileAtomically(
         directory = directory,
         fileName = fileName,
         payload = payload,
         cachePrefix = cachePrefix,
         replaceExisting = true,
-    )?.path
+    ) ?: return null
+    return buildIosArtworkCacheLocator(written.path.substringAfterLast('/'))
 }
 
 private class IosArtworkCacheStore : ArtworkCacheStore {
@@ -58,26 +62,27 @@ private class IosArtworkCacheStore : ArtworkCacheStore {
             val effectiveCacheKey = cacheKey.ifBlank { locator }
             val primaryPrefix = effectiveCacheKey.stableArtworkCacheHash()
             val legacyPrefix = locator.stableArtworkCacheHash().takeIf { it != primaryPrefix }
-            if (target.startsWith("file://", ignoreCase = true)) {
-                val path = filePathFromIosLocator(target)
+            if (!isRemoteArtworkTarget(target)) {
+                val existingAlbumCache = findIosArtworkCacheFile(directory, primaryPrefix)
+                if (!replaceExisting && existingAlbumCache != null) {
+                    return@runCatching rememberIosArtworkTarget(effectiveCacheKey, existingAlbumCache)
+                }
+                val sourcePath = resolveIosLocalArtworkSourcePath(target, directory)
+                if (sourcePath == null) {
+                    return@runCatching existingAlbumCache?.let {
+                        rememberIosArtworkTarget(effectiveCacheKey, it)
+                    }
+                }
                 val promoted = promoteIosLocalArtworkFile(
-                    source = path,
+                    source = sourcePath,
                     cachePrefix = primaryPrefix,
                     locator = target,
                     replaceExisting = replaceExisting,
                 )
-                val result = rememberIosArtworkTarget(effectiveCacheKey, promoted?.path ?: path)
-                promoted?.takeIf { it.changed }?.let { versionRegistry.bump(effectiveCacheKey) }
-                return@runCatching result
-            }
-            if (!target.startsWith("http://", ignoreCase = true) && !target.startsWith("https://", ignoreCase = true)) {
-                val promoted = promoteIosLocalArtworkFile(
-                    source = target,
-                    cachePrefix = primaryPrefix,
-                    locator = target,
-                    replaceExisting = replaceExisting,
-                )
-                val result = rememberIosArtworkTarget(effectiveCacheKey, promoted?.path ?: target)
+                val result = promoted?.path
+                    ?.let { rememberIosArtworkTarget(effectiveCacheKey, it) }
+                    ?: existingAlbumCache?.let { rememberIosArtworkTarget(effectiveCacheKey, it) }
+                    ?: rememberIosArtworkTarget(effectiveCacheKey, sourcePath)
                 promoted?.takeIf { it.changed }?.let { versionRegistry.bump(effectiveCacheKey) }
                 return@runCatching result
             }
@@ -143,12 +148,33 @@ private class IosArtworkCacheStore : ArtworkCacheStore {
         }
     }
 
-    private fun rememberIosArtworkTarget(cacheKey: String, path: String): String {
-        iosArtworkCachedTarget(path)?.let { target ->
-            targetRegistry.put(cacheKey, target)
-        }
+    private fun rememberIosArtworkTarget(cacheKey: String, path: String): String? {
+        val target = iosArtworkCachedTarget(path) ?: return null
+        targetRegistry.put(cacheKey, target)
         return path
     }
+}
+
+private fun resolveIosLocalArtworkSourcePath(target: String, directory: String): String? {
+    parseIosArtworkCacheLocator(target)?.let { fileName ->
+        return validIosArtworkPath("$directory/$fileName")
+    }
+    val directPath = if (target.startsWith("file://", ignoreCase = true)) {
+        filePathFromIosLocator(target)
+    } else {
+        target
+    }
+    validIosArtworkPath(directPath)?.let { return it }
+    return relocateLegacyIosArtworkPath(directPath, directory)
+}
+
+private fun relocateLegacyIosArtworkPath(path: String, directory: String): String? {
+    val safeFileName = parseLegacyIosArtworkCacheFileName(path) ?: return null
+    return validIosArtworkPath("$directory/$safeFileName")
+}
+
+private fun validIosArtworkPath(path: String): String? {
+    return path.takeIf { readIosLocalBytes(it)?.let(::isCompleteArtworkPayload) == true }
 }
 
 private suspend fun readIosRemoteArtworkPayload(
@@ -238,17 +264,26 @@ private fun promoteIosArtworkCacheFile(
     val directory = iosArtworkCacheDirectory()
     val output = "$directory/$fileName"
     if (source == output) return IosArtworkCacheFileResult(output, changed = false)
-    if (replaceExisting) {
-        deleteIosArtworkCacheFiles(directory, cachePrefix)
-    }
+    val temporary = "$output$IOS_ARTWORK_CACHE_TEMP_MARKER${platform.Foundation.NSUUID.UUID().UUIDString}"
     return runCatching {
-        if (link(source, output) != 0) {
+        if (link(source, temporary) != 0) {
             val payload = readIosLocalBytes(source)?.takeIf(::isCompleteArtworkPayload) ?: return@runCatching null
-            if (!writeIosFileBytes(output, payload)) return@runCatching null
+            if (!writeIosFileBytes(temporary, payload)) return@runCatching null
         }
+        if (validIosArtworkPath(temporary) == null) return@runCatching null
+        if (!replaceExisting) {
+            findIosArtworkCacheFile(directory, cachePrefix)
+                ?.let { return@runCatching IosArtworkCacheFileResult(it, changed = false) }
+        }
+        if (rename(temporary, output) != 0) {
+            return@runCatching null
+        }
+        deleteIosArtworkCacheFilesExcept(directory, cachePrefix, fileName)
         output
-            .takeIf { readIosLocalBytes(it)?.let { bytes -> isCompleteArtworkPayload(bytes) } == true }
+            .takeIf { validIosArtworkPath(it) != null }
             ?.let { IosArtworkCacheFileResult(it, changed = true) }
+    }.also {
+        remove(temporary)
     }.getOrNull()
 }
 
@@ -273,12 +308,13 @@ internal fun iosArtworkCacheDirectory(): String {
     return directory
 }
 
-private fun writeIosArtworkCacheFileAtomically(
+internal fun writeIosArtworkCacheFileAtomically(
     directory: String,
     fileName: String,
     payload: ByteArray,
     cachePrefix: String,
     replaceExisting: Boolean,
+    renameFile: (source: String, target: String) -> Int = { source, target -> rename(source, target) },
 ): IosArtworkCacheFileResult? {
     if (!isCompleteArtworkPayload(payload)) return null
     val output = "$directory/$fileName"
@@ -297,16 +333,12 @@ private fun writeIosArtworkCacheFileAtomically(
         if (!replaceExisting && readIosLocalBytes(output)?.let { isCompleteArtworkPayload(it) } == true) {
             return@runCatching IosArtworkCacheFileResult(output, changed = false)
         }
-        if (replaceExisting) {
-            deleteIosArtworkCacheFiles(directory, cachePrefix)
-        } else {
-            remove(output)
-        }
-        if (rename(temporary, output) != 0) {
+        if (renameFile(temporary, output) != 0) {
             return@runCatching null
         }
+        deleteIosArtworkCacheFilesExcept(directory, cachePrefix, fileName)
         output
-            .takeIf { readIosLocalBytes(it)?.let { bytes -> isCompleteArtworkPayload(bytes) } == true }
+            .takeIf { validIosArtworkPath(it) != null }
             ?.let { IosArtworkCacheFileResult(it, changed = true) }
     }.also {
         remove(temporary)
@@ -314,7 +346,11 @@ private fun writeIosArtworkCacheFileAtomically(
 }
 
 @OptIn(ExperimentalForeignApi::class)
-private fun deleteIosArtworkCacheFiles(directory: String, cachePrefix: String) {
+private fun deleteIosArtworkCacheFilesExcept(
+    directory: String,
+    cachePrefix: String,
+    retainedFileName: String,
+) {
     val handle = opendir(directory) ?: return
     try {
         while (true) {
@@ -323,6 +359,7 @@ private fun deleteIosArtworkCacheFiles(directory: String, cachePrefix: String) {
             if (name == "." || name == "..") continue
             if (!name.startsWith(cachePrefix)) continue
             if (name.contains(IOS_ARTWORK_CACHE_TEMP_MARKER)) continue
+            if (name == retainedFileName) continue
             remove("$directory/$name")
         }
     } finally {
@@ -330,7 +367,7 @@ private fun deleteIosArtworkCacheFiles(directory: String, cachePrefix: String) {
     }
 }
 
-private data class IosArtworkCacheFileResult(
+internal data class IosArtworkCacheFileResult(
     val path: String,
     val changed: Boolean,
 )

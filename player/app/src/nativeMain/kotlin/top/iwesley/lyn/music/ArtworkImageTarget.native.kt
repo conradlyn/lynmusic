@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import platform.Foundation.NSURL
 import top.iwesley.lyn.music.core.model.ArtworkCacheStore
+import top.iwesley.lyn.music.core.model.isIosArtworkCacheBackedLocator
 import top.iwesley.lyn.music.core.model.normalizedArtworkCacheLocator
 import top.iwesley.lyn.music.core.model.parseEmbyCoverLocator
 import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleCoverLocator
@@ -20,7 +21,8 @@ internal actual suspend fun resolveLynArtworkTarget(
     artworkCacheStore: ArtworkCacheStore,
 ): LynResolvedArtworkTarget? = withContext(Dispatchers.Default) {
     val normalized = normalizedArtworkCacheLocator(locator) ?: return@withContext null
-    val cachedTarget = if (cacheRemote) {
+    val isIosCacheBackedLocator = isIosArtworkCacheBackedLocator(normalized)
+    val cachedTarget = if (cacheRemote || isIosCacheBackedLocator) {
         runCatching { artworkCacheStore.cache(normalized, cacheKey ?: normalized) }
             .getOrNull()
             ?.trim()
@@ -30,7 +32,7 @@ internal actual suspend fun resolveLynArtworkTarget(
         null
     }
     val target = cachedTarget
-        ?: resolveArtworkCacheTarget(normalized)
+        ?: resolveArtworkCacheTarget(normalized).takeUnless { isIosCacheBackedLocator }
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
         ?: return@withContext null

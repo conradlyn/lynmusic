@@ -60,7 +60,6 @@ import top.iwesley.lyn.music.core.model.AppleResolvedMediaLocator
 import top.iwesley.lyn.music.core.model.AudioTagGateway
 import top.iwesley.lyn.music.core.model.AudioTagPatch
 import top.iwesley.lyn.music.core.model.AudioTagSnapshot
-import top.iwesley.lyn.music.core.model.DiagnosticLogger
 import top.iwesley.lyn.music.core.model.ImportScanFailure
 import top.iwesley.lyn.music.core.model.ImportScanPhase
 import top.iwesley.lyn.music.core.model.ImportScanProgress
@@ -76,7 +75,6 @@ import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.buildIosLocalFolderReference
 import top.iwesley.lyn.music.core.model.buildIosLocalMediaLocator
 import top.iwesley.lyn.music.core.model.classifyNonNavidromeAudioFile
-import top.iwesley.lyn.music.core.model.info
 import top.iwesley.lyn.music.core.model.parseIosLocalFolderReference
 import top.iwesley.lyn.music.core.model.parseIosLocalMediaLocator
 import top.iwesley.lyn.music.core.model.sameNameLyricsRelativePath
@@ -87,14 +85,11 @@ import kotlin.math.roundToLong
 
 internal val IOS_SUPPORTED_IMPORT_AUDIO_EXTENSIONS = setOf("mp3", "m4a", "aac", "wav", "flac")
 
-internal class IosLocalFolderPicker(
-    private val logger: DiagnosticLogger,
-) : NSObject(), UIDocumentPickerDelegateProtocol {
+internal class IosLocalFolderPicker : NSObject(), UIDocumentPickerDelegateProtocol {
     private var continuation: kotlinx.coroutines.CancellableContinuation<LocalFolderSelection?>? = null
     private var picker: UIDocumentPickerViewController? = null
 
     suspend fun pick(): LocalFolderSelection? = withContext(Dispatchers.Main) {
-        logger.info(IOS_LOCAL_FOLDER_LOG_TAG) { "picker.begin" }
         suspendCancellableCoroutine { pending ->
             check(continuation == null) { "已有文件夹选择器正在显示。" }
             val controller = UIDocumentPickerViewController(
@@ -127,31 +122,16 @@ internal class IosLocalFolderPicker(
         controller: UIDocumentPickerViewController,
         didPickDocumentsAtURLs: List<*>,
     ) {
-        val matchesCurrent = isCurrentPickerController(controller)
-        logger.info(IOS_LOCAL_FOLDER_LOG_TAG) {
-            "picker.selection-callback.received matches-current=$matchesCurrent"
-        }
-        if (!matchesCurrent) return
-        logger.info(IOS_LOCAL_FOLDER_LOG_TAG) { "picker.selected" }
+        if (!isCurrentPickerController(controller)) return
         val url = didPickDocumentsAtURLs.firstOrNull() as? NSURL
         val result = runCatching { url?.let(::createIosLocalFolderSelection) }
-        if (result.isSuccess) {
-            logger.info(IOS_LOCAL_FOLDER_LOG_TAG) { "picker.completed" }
-        } else {
-            logger.info(IOS_LOCAL_FOLDER_LOG_TAG) { "picker.failed" }
-        }
         val pending = continuation
         clearPendingPicker()
         pending?.resumeWith(result)
     }
 
     override fun documentPickerWasCancelled(controller: UIDocumentPickerViewController) {
-        val matchesCurrent = isCurrentPickerController(controller)
-        logger.info(IOS_LOCAL_FOLDER_LOG_TAG) {
-            "picker.cancel-callback.received matches-current=$matchesCurrent"
-        }
-        if (!matchesCurrent) return
-        logger.info(IOS_LOCAL_FOLDER_LOG_TAG) { "picker.cancelled" }
+        if (!isCurrentPickerController(controller)) return
         val pending = continuation
         clearPendingPicker()
         pending?.resume(null)
@@ -167,8 +147,6 @@ internal class IosLocalFolderPicker(
         picker = null
     }
 }
-
-private const val IOS_LOCAL_FOLDER_LOG_TAG = "LocalFolderImport"
 
 private fun topIosViewController(): UIViewController? {
     val application = UIApplication.sharedApplication

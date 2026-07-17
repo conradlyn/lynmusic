@@ -5,6 +5,42 @@ fun normalizedArtworkCacheLocator(locator: String?): String? {
     return rawTarget.takeIf { it.isNotBlank() }
 }
 
+fun buildIosArtworkCacheLocator(fileName: String): String? {
+    val normalizedFileName = normalizedIosArtworkCacheFileName(fileName) ?: return null
+    return "$IOS_ARTWORK_CACHE_LOCATOR_PREFIX$normalizedFileName"
+}
+
+fun isIosArtworkCacheLocator(locator: String?): Boolean {
+    return locator?.trim()?.startsWith(IOS_ARTWORK_CACHE_SCHEME_PREFIX) == true
+}
+
+fun isIosArtworkCacheBackedLocator(locator: String?): Boolean {
+    return isIosArtworkCacheLocator(locator) || parseLegacyIosArtworkCacheFileName(locator) != null
+}
+
+fun parseIosArtworkCacheLocator(locator: String?): String? {
+    val normalizedLocator = locator?.trim()?.takeIf { it.startsWith(IOS_ARTWORK_CACHE_LOCATOR_PREFIX) }
+        ?: return null
+    return normalizedIosArtworkCacheFileName(normalizedLocator.removePrefix(IOS_ARTWORK_CACHE_LOCATOR_PREFIX))
+}
+
+fun parseLegacyIosArtworkCacheFileName(locator: String?): String? {
+    val rawLocator = locator?.trim().orEmpty()
+    val localPath = when {
+        rawLocator.startsWith('/') -> rawLocator
+        rawLocator.startsWith(IOS_LOCAL_FILE_URL_PREFIX, ignoreCase = true) ->
+            rawLocator.substring(IOS_FILE_URL_SCHEME_PREFIX.length)
+
+        else -> return null
+    }
+    if (!localPath.contains(IOS_APP_DATA_CONTAINER_PATH_MARKER)) return null
+    val markerIndex = localPath.lastIndexOf(IOS_ARTWORK_CACHE_PATH_MARKER)
+    if (markerIndex < 0) return null
+    val fileName = localPath.substring(markerIndex + IOS_ARTWORK_CACHE_PATH_MARKER.length)
+    if (fileName.contains('/') || fileName.contains('\\')) return null
+    return normalizedIosArtworkCacheFileName(fileName)
+}
+
 fun trackArtworkCacheKey(track: Track): String? {
     return albumArtworkCacheKey(
         sourceId = track.sourceId,
@@ -69,3 +105,24 @@ private fun normalizeArtworkCacheKeyPart(value: String?): String? {
         ?.replace(Regex("\\s+"), " ")
         ?.takeIf { it.isNotBlank() }
 }
+
+private fun normalizedIosArtworkCacheFileName(fileName: String): String? {
+    val candidate = fileName.trim()
+    if (candidate.isEmpty() || candidate.length > IOS_ARTWORK_CACHE_FILE_NAME_MAX_LENGTH) return null
+    if (!candidate.first().isLetterOrDigit()) return null
+    if (candidate.any { character ->
+            !character.isLetterOrDigit() && character != '.' && character != '-' && character != '_'
+        }
+    ) {
+        return null
+    }
+    return candidate
+}
+
+private const val IOS_ARTWORK_CACHE_SCHEME_PREFIX = "lynmusic-ios-artwork://"
+private const val IOS_ARTWORK_CACHE_LOCATOR_PREFIX = "${IOS_ARTWORK_CACHE_SCHEME_PREFIX}v1/"
+private const val IOS_FILE_URL_SCHEME_PREFIX = "file://"
+private const val IOS_LOCAL_FILE_URL_PREFIX = "${IOS_FILE_URL_SCHEME_PREFIX}/"
+private const val IOS_APP_DATA_CONTAINER_PATH_MARKER = "/Containers/Data/Application/"
+private const val IOS_ARTWORK_CACHE_PATH_MARKER = "/Library/Caches/lynmusic-artwork-cache/"
+private const val IOS_ARTWORK_CACHE_FILE_NAME_MAX_LENGTH = 128

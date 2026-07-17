@@ -564,7 +564,6 @@ class RoomImportSourceRepository(
     private val secureCredentialStore: SecureCredentialStore,
     private val offlineDownloadGateway: OfflineDownloadGateway = UnsupportedOfflineDownloadGateway,
     private val addressSelector: RemoteSourceAddressSelector = RemoteSourceAddressSelector(),
-    private val logger: DiagnosticLogger = NoopDiagnosticLogger,
 ) : ImportSourceRepository {
     private val navidromeScanLocks = mutableMapOf<String, Mutex>()
     private val navidromeScanLocksMutex = Mutex()
@@ -612,9 +611,6 @@ class RoomImportSourceRepository(
     ): Result<ImportScanSummary> {
         return runCatching {
             val sourceId = newId("local")
-            logger.info(LOCAL_FOLDER_IMPORT_LOG_TAG) {
-                "source-transaction.begin source=$sourceId"
-            }
             val source = database.immediateWriteTransaction {
                 val existing = database.importSourceDao().getAll()
                 if (hasLocalFolderPathConflict(
@@ -631,9 +627,6 @@ class RoomImportSourceRepository(
                     rootReference = selection.persistentReference,
                     createdAt = now(),
                 ).also { database.importSourceDao().upsert(it.toEntity()) }
-            }
-            logger.info(LOCAL_FOLDER_IMPORT_LOG_TAG) {
-                "source-transaction.completed source=$sourceId"
             }
             runScan(source, progressSink) {
                 gateway.scanLocalFolder(selection, source.id, progressSink)
@@ -4025,7 +4018,6 @@ private fun Throwable.throwIfCancellation() {
 }
 
 private const val LYRICS_LOG_TAG = "Lyrics"
-private const val LOCAL_FOLDER_IMPORT_LOG_TAG = "LocalFolderImport"
 private const val NETWORK_LYRICS_LOOKUP_SOURCE_ID = "network-lyrics"
 const val MANUAL_LYRICS_OVERRIDE_SOURCE_ID = "manual-override"
 const val SAME_NAME_LRC_SOURCE_ID = "same-name-lrc"

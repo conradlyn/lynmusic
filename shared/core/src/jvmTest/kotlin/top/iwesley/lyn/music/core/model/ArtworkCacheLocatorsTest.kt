@@ -2,6 +2,9 @@ package top.iwesley.lyn.music.core.model
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class ArtworkCacheLocatorsTest {
     @Test
@@ -56,5 +59,78 @@ class ArtworkCacheLocatorsTest {
         val bytes = byteArrayOf(1, 2, 3, 4)
 
         assertEquals(bytes.stableArtworkBytesHash(), byteArrayOf(1, 2, 3, 4).stableArtworkBytesHash())
+    }
+
+    @Test
+    fun `ios artwork locator round trips stable cache file name`() {
+        val locator = buildIosArtworkCacheLocator("f358180aff319859.jpg")
+
+        assertEquals("lynmusic-ios-artwork://v1/f358180aff319859.jpg", locator)
+        assertEquals("f358180aff319859.jpg", parseIosArtworkCacheLocator(locator))
+    }
+
+    @Test
+    fun `ios artwork locator accepts unicode file name`() {
+        val locator = buildIosArtworkCacheLocator("四季歌_封面.png")
+
+        assertEquals("四季歌_封面.png", parseIosArtworkCacheLocator(locator))
+    }
+
+    @Test
+    fun `ios artwork locator rejects path traversal and malformed names`() {
+        assertNull(buildIosArtworkCacheLocator("../cover.jpg"))
+        assertNull(buildIosArtworkCacheLocator("nested/cover.jpg"))
+        assertNull(buildIosArtworkCacheLocator("nested\\cover.jpg"))
+        assertNull(parseIosArtworkCacheLocator("lynmusic-ios-artwork://v1/../cover.jpg"))
+        assertNull(parseIosArtworkCacheLocator("lynmusic-ios-artwork://v1/%2e%2e%2fcover.jpg"))
+        assertNull(parseIosArtworkCacheLocator("lynmusic-ios-artwork://v2/cover.jpg"))
+    }
+
+    @Test
+    fun `ios artwork cache backed locator recognizes legacy container paths`() {
+        val legacyPath =
+            "/var/mobile/Containers/Data/Application/OLD/Library/Caches/lynmusic-artwork-cache/f358180aff319859.jpg"
+        val legacyFileUrl = "file://$legacyPath"
+        val privateLegacyPath = "/private$legacyPath"
+        val simulatorLegacyPath =
+            "/Users/test/Library/Developer/CoreSimulator/Devices/DEVICE/data/Containers/Data/Application/OLD/Library/Caches/lynmusic-artwork-cache/f358180aff319859.jpg"
+
+        assertEquals("f358180aff319859.jpg", parseLegacyIosArtworkCacheFileName(legacyPath))
+        assertEquals("f358180aff319859.jpg", parseLegacyIosArtworkCacheFileName(legacyFileUrl))
+        assertEquals("f358180aff319859.jpg", parseLegacyIosArtworkCacheFileName(privateLegacyPath))
+        assertEquals("f358180aff319859.jpg", parseLegacyIosArtworkCacheFileName(simulatorLegacyPath))
+        assertTrue(isIosArtworkCacheBackedLocator(legacyPath))
+        assertTrue(isIosArtworkCacheBackedLocator(legacyFileUrl))
+        assertTrue(isIosArtworkCacheBackedLocator("lynmusic-ios-artwork://v1/f358180aff319859.jpg"))
+        assertFalse(isIosArtworkCacheBackedLocator("/tmp/f358180aff319859.jpg"))
+    }
+
+    @Test
+    fun `legacy ios artwork locator rejects nested and unsafe cache paths`() {
+        val cacheRoot =
+            "/var/mobile/Containers/Data/Application/OLD/Library/Caches/lynmusic-artwork-cache/"
+        assertNull(parseLegacyIosArtworkCacheFileName("${cacheRoot}nested/cover.jpg"))
+        assertNull(parseLegacyIosArtworkCacheFileName("${cacheRoot}../cover.jpg"))
+        assertNull(parseLegacyIosArtworkCacheFileName("${cacheRoot}nested\\cover.jpg"))
+        assertNull(
+            parseLegacyIosArtworkCacheFileName(
+                "/var/mobile/Containers/Data/Application/OLD/Library/Caches/not-lynmusic-artwork-cache/cover.jpg",
+            ),
+        )
+        assertNull(
+            parseLegacyIosArtworkCacheFileName(
+                "https://example.com/Containers/Data/Application/OLD/Library/Caches/lynmusic-artwork-cache/cover.jpg",
+            ),
+        )
+        assertNull(
+            parseLegacyIosArtworkCacheFileName(
+                "/tmp/Containers/Data/Application/OLD/lynmusic-artwork-cache/cover.jpg",
+            ),
+        )
+        assertFalse(
+            isIosArtworkCacheBackedLocator(
+                "https://example.com/Containers/Data/Application/OLD/Library/Caches/lynmusic-artwork-cache/cover.jpg",
+            ),
+        )
     }
 }

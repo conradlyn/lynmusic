@@ -26,8 +26,8 @@ import top.iwesley.lyn.music.SharedRuntimeServices
 import top.iwesley.lyn.music.buildPlayerAppComponent
 import top.iwesley.lyn.music.buildSharedGraph
 import top.iwesley.lyn.music.core.model.ConsoleDiagnosticLogger
-import top.iwesley.lyn.music.core.model.CompactPlayerLyricsPreferencesStore
 import top.iwesley.lyn.music.core.model.DiagnosticLogger
+import top.iwesley.lyn.music.core.model.CompactPlayerLyricsPreferencesStore
 import top.iwesley.lyn.music.core.model.EmbyCredential
 import top.iwesley.lyn.music.core.model.EmbySourceDraft
 import top.iwesley.lyn.music.core.model.IMPORT_SOURCE_REQUEST_TIMEOUT_MILLIS
@@ -659,7 +659,7 @@ private class IosImportSourceGateway(
     private val navidromeHttpClient: LyricsHttpClient,
     private val logger: DiagnosticLogger,
 ) : ImportSourceGateway {
-    private val localFolderPicker = IosLocalFolderPicker(logger)
+    private val localFolderPicker = IosLocalFolderPicker()
     private val localFolderScanner = IosLocalFolderScanner()
 
     override suspend fun pickLocalFolder(): LocalFolderSelection? = localFolderPicker.pick()
@@ -673,7 +673,6 @@ private class IosImportSourceGateway(
         sourceId: String,
         progressSink: ImportScanProgressSink,
     ): ImportScanReport {
-        logger.info("LocalFolderImport") { "scan.gateway.begin source=$sourceId" }
         return localFolderScanner.scan(selection, sourceId, progressSink)
     }
 

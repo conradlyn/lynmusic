@@ -211,7 +211,6 @@ fun buildSharedGraph(
         secureCredentialStore = runtimeServices.secureCredentialStore,
         offlineDownloadGateway = runtimeServices.offlineDownloadGateway,
         addressSelector = runtimeServices.remoteSourceAddressSelector,
-        logger = runtimeServices.logger,
     )
     val settingsRepository = DefaultSettingsRepository(
         database = database,

@@ -13,6 +13,7 @@ import top.iwesley.lyn.music.core.model.ArtworkCacheStore
 import top.iwesley.lyn.music.core.model.NavidromeAudioQuality
 import top.iwesley.lyn.music.core.model.NavidromeLocatorResolver
 import top.iwesley.lyn.music.core.model.NavidromeLocatorRuntime
+import top.iwesley.lyn.music.core.model.buildIosArtworkCacheLocator
 import top.iwesley.lyn.music.core.model.buildNavidromeCoverLocator
 
 class ArtworkImageTargetTest {
@@ -199,6 +200,35 @@ class ArtworkImageTargetTest {
 
         assertEquals("/local/cover.png", initial.target)
         assertFalse(initial.isLocalFile)
+    }
+
+    @Test
+    fun `initial target defers ios artwork cache locator to platform resolver`() {
+        val locator = requireNotNull(buildIosArtworkCacheLocator("f358180aff319859.jpg"))
+
+        val initial = initialLynArtworkTarget(
+            normalized = locator,
+            requestCacheKey = "album:source:album-1",
+            cacheRemote = true,
+            artworkCacheStore = FakeArtworkCacheStore(),
+        )
+
+        assertEquals(null, initial)
+    }
+
+    @Test
+    fun `initial target defers legacy ios artwork cache path to platform resolver`() {
+        val legacyPath =
+            "/var/mobile/Containers/Data/Application/OLD/Library/Caches/lynmusic-artwork-cache/f358180aff319859.jpg"
+
+        val initial = initialLynArtworkTarget(
+            normalized = legacyPath,
+            requestCacheKey = "album:source:album-1",
+            cacheRemote = false,
+            artworkCacheStore = FakeArtworkCacheStore(),
+        )
+
+        assertEquals(null, initial)
     }
 
     @Test

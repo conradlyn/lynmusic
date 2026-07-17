@@ -32,6 +32,7 @@ import lynmusic.player.app.generated.resources.default_cover
 import org.jetbrains.compose.resources.painterResource
 import top.iwesley.lyn.music.core.model.ArtworkCachedTarget
 import top.iwesley.lyn.music.core.model.ArtworkCacheStore
+import top.iwesley.lyn.music.core.model.isIosArtworkCacheBackedLocator
 import top.iwesley.lyn.music.core.model.normalizedArtworkCacheLocator
 import top.iwesley.lyn.music.core.model.parseEmbyCoverLocator
 import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleCoverLocator
@@ -205,6 +206,23 @@ private fun LynArtworkAsyncImage(
     val context = LocalPlatformContext.current
     val fallbackPainter = painterResource(Res.drawable.default_cover)
     var lastSuccessPainter by remember { mutableStateOf<Painter?>(null) }
+    if (data == null) {
+        val displayPainter = lastSuccessPainter
+            .takeIf { retainPreviousWhileLoading && targetPending }
+            ?: fallbackPainter
+        Box(modifier = modifier, contentAlignment = alignment) {
+            Image(
+                painter = displayPainter,
+                contentDescription = contentDescription,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = contentScale,
+                alignment = alignment,
+                alpha = alpha,
+                colorFilter = colorFilter,
+            )
+        }
+        return
+    }
     val request = remember(context, data, memoryCacheKey, placeholderMemoryCacheKey, diskCacheKey, cacheRemote, maxDecodeSizePx) {
         val shouldUseDiskCache = false
         ImageRequest.Builder(context)
@@ -229,7 +247,7 @@ private fun LynArtworkAsyncImage(
         lastSuccessPainter = lastSuccessPainter,
         retainPreviousWhileLoading = retainPreviousWhileLoading,
         targetPending = targetPending,
-        dataMissing = data == null,
+        dataMissing = false,
     )
     Box(modifier = modifier, contentAlignment = alignment) {
         Image(
@@ -368,6 +386,7 @@ private fun shouldUseInitialArtworkTarget(
 ): Boolean {
     if (parseSubsonicCompatibleCoverLocator(normalizedLocator) != null) return false
     if (parseEmbyCoverLocator(normalizedLocator) != null) return false
+    if (isIosArtworkCacheBackedLocator(normalizedLocator)) return false
     if (!cacheRemote) return true
     return !normalizedLocator.startsWith("http://", ignoreCase = true) &&
         !normalizedLocator.startsWith("https://", ignoreCase = true)

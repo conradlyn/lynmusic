@@ -17,6 +17,7 @@ import top.iwesley.lyn.music.core.model.LyricsShareCardModel
 import top.iwesley.lyn.music.core.model.LyricsShareFontOption
 import top.iwesley.lyn.music.core.model.LyricsSharePlatformService
 import top.iwesley.lyn.music.core.model.LyricsShareSaveResult
+import top.iwesley.lyn.music.core.model.isIosArtworkCacheBackedLocator
 import top.iwesley.lyn.music.core.model.normalizedArtworkCacheLocator
 import top.iwesley.lyn.music.core.model.parseEmbyCoverLocator
 import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleCoverLocator
@@ -111,12 +112,12 @@ private suspend fun loadArtworkImage(
     return (artworkBytes ?: loadBundledDefaultCoverBytes())?.let(Image::makeFromEncoded)
 }
 
-private suspend fun resolveIosLyricsShareArtworkTarget(
+internal suspend fun resolveIosLyricsShareArtworkTarget(
     normalizedLocator: String,
     artworkCacheKey: String?,
     artworkCacheStore: ArtworkCacheStore,
 ): String? {
-    if (shouldCacheLyricsShareArtwork(normalizedLocator)) {
+    if (shouldResolveLyricsShareArtworkThroughCache(normalizedLocator)) {
         val cacheKey = artworkCacheKey?.trim()?.takeIf { it.isNotEmpty() } ?: normalizedLocator
         return artworkCacheStore.cache(normalizedLocator, cacheKey)
             ?.trim()
@@ -139,8 +140,9 @@ private suspend fun readIosLyricsShareArtworkTargetBytes(target: String): ByteAr
     }
 }
 
-private fun shouldCacheLyricsShareArtwork(normalizedLocator: String): Boolean {
-    return parseSubsonicCompatibleCoverLocator(normalizedLocator) != null ||
+private fun shouldResolveLyricsShareArtworkThroughCache(normalizedLocator: String): Boolean {
+    return isIosArtworkCacheBackedLocator(normalizedLocator) ||
+        parseSubsonicCompatibleCoverLocator(normalizedLocator) != null ||
         parseEmbyCoverLocator(normalizedLocator) != null ||
         normalizedLocator.startsWith("http://", ignoreCase = true) ||
         normalizedLocator.startsWith("https://", ignoreCase = true)
