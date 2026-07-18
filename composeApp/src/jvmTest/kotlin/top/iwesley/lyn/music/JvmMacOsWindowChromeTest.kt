@@ -5,6 +5,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import androidx.compose.ui.unit.dp
+import top.iwesley.lyn.music.platform.JvmDataLocationProgress
 import top.iwesley.lyn.music.platform.minimizeWindowOnCloseOrDefault
 
 class JvmMacOsWindowChromeTest {
@@ -69,13 +70,28 @@ class JvmMacOsWindowChromeTest {
     }
 
     @Test
-    fun `desktop close is blocked while startup operation is in progress`() {
-        assertFalse(shouldAllowDesktopWindowClose(startupOperationInProgress = true))
+    fun `desktop close is blocked while data location operation is in progress`() {
+        assertFalse(
+            shouldAllowDesktopWindowClose(
+                JvmDesktopStartupState.Preparing(
+                    JvmDataLocationProgress("正在准备数据"),
+                ),
+            ),
+        )
     }
 
     @Test
-    fun `desktop close is allowed after startup operation finishes`() {
-        assertTrue(shouldAllowDesktopWindowClose(startupOperationInProgress = false))
+    fun `desktop close is blocked while normal startup is in progress`() {
+        assertFalse(shouldAllowDesktopWindowClose(JvmDesktopStartupState.Starting))
+    }
+
+    @Test
+    fun `desktop close is allowed after startup fails`() {
+        assertTrue(
+            shouldAllowDesktopWindowClose(
+                JvmDesktopStartupState.ComponentFailed(IllegalStateException("启动失败")),
+            ),
+        )
     }
 
     @Test

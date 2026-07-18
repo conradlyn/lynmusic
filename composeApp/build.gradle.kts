@@ -91,6 +91,7 @@ kotlin {
             dependsOn(skiaLyricsShareMain)
             dependencies {
                 implementation(compose.desktop.currentOs)
+                implementation(libs.compose.material3)
                 implementation(libs.kotlinx.coroutinesSwing)
                 implementation(libs.ktor.client.okhttp)
                 implementation(libs.sardine)

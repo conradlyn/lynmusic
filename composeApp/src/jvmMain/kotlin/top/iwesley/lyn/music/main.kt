@@ -18,9 +18,11 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import java.awt.Dimension
 import javax.swing.JOptionPane
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import top.iwesley.lyn.music.platform.JvmAppInstanceLock
 import top.iwesley.lyn.music.platform.JvmDataLocationManager
@@ -46,16 +48,21 @@ fun main() {
     try {
         application {
             val dataLocationManager = remember { JvmDataLocationManager() }
-            val initialStartup = remember(dataLocationManager) {
-                initializeJvmDesktopStartup(dataLocationManager)
-            }
             val applicationScope = rememberCoroutineScope()
             var startupAttempt by remember { mutableIntStateOf(0) }
-            var requiresDataLocationOperation by remember {
-                mutableStateOf(initialStartup.requiresDataLocationOperation)
-            }
+            var requiresDataLocationOperation by remember { mutableStateOf(false) }
             var startupState by remember {
-                mutableStateOf(initialStartup.state)
+                mutableStateOf(initialJvmDesktopStartupState())
+            }
+            val restartStartup = {
+                requiresDataLocationOperation = false
+                startupState = initialJvmDesktopStartupState()
+                startupAttempt += 1
+            }
+            LaunchedEffect(startupAttempt) {
+                val initializedStartup = initializeJvmDesktopStartup(dataLocationManager)
+                startupState = initializedStartup.state
+                requiresDataLocationOperation = initializedStartup.requiresDataLocationOperation
             }
             LaunchedEffect(startupAttempt, requiresDataLocationOperation) {
                 if (!requiresDataLocationOperation) return@LaunchedEffect
@@ -78,15 +85,20 @@ fun main() {
                 progressJob.join()
                 startupState = locationResult.fold(
                     onSuccess = {
-                        createJvmDesktopComponentState(dataLocationManager)
+                        withContext(Dispatchers.IO) {
+                            createJvmDesktopComponentState(dataLocationManager)
+                        }
                     },
                     onFailure = { error ->
                         JvmDesktopStartupState.DataLocationFailed(
                             error = error,
-                            canCancelChange = dataLocationManager.hasPendingChangeSafely(),
+                            canCancelChange = withContext(Dispatchers.IO) {
+                                dataLocationManager.hasPendingChangeSafely()
+                            },
                         )
                     },
                 )
+                requiresDataLocationOperation = false
             }
 
             val latestStartupState by rememberUpdatedState(startupState)
@@ -103,7 +115,7 @@ fun main() {
             SwingWindow(
                 onCloseRequest = closeRequest@{
                     val currentStartupState = latestStartupState
-                    if (!shouldAllowDesktopWindowClose(currentStartupState is JvmDesktopStartupState.Preparing)) {
+                    if (!shouldAllowDesktopWindowClose(currentStartupState)) {
                         return@closeRequest
                     }
                     val currentComponent = (currentStartupState as? JvmDesktopStartupState.Ready)?.component
@@ -148,6 +160,9 @@ fun main() {
                 },
             ) {
                 when (val current = startupState) {
+                    JvmDesktopStartupState.Starting ->
+                        JvmDesktopStartingScreen()
+
                     is JvmDesktopStartupState.Preparing ->
                         StartupDataLocationProgressScreen(
                             message = current.progress.message,
@@ -160,10 +175,7 @@ fun main() {
                             canCancelChange = current.canCancelChange,
                             onRetry = retry@{
                                 if (startupState !is JvmDesktopStartupState.DataLocationFailed) return@retry
-                                val retryStartup = initializeJvmDesktopStartup(dataLocationManager)
-                                requiresDataLocationOperation = retryStartup.requiresDataLocationOperation
-                                startupState = retryStartup.state
-                                if (retryStartup.requiresDataLocationOperation) startupAttempt += 1
+                                restartStartup()
                             },
                             onCancelChange = cancel@{
                                 if (startupState !is JvmDesktopStartupState.DataLocationFailed) return@cancel
@@ -173,15 +185,14 @@ fun main() {
                                 applicationScope.launch {
                                     dataLocationManager.cancelPendingChange().fold(
                                         onSuccess = {
-                                            val resumedStartup = initializeJvmDesktopStartup(dataLocationManager)
-                                            requiresDataLocationOperation = resumedStartup.requiresDataLocationOperation
-                                            startupState = resumedStartup.state
-                                            if (resumedStartup.requiresDataLocationOperation) startupAttempt += 1
+                                            restartStartup()
                                         },
                                         onFailure = { error ->
                                             startupState = JvmDesktopStartupState.DataLocationFailed(
                                                 error = error,
-                                                canCancelChange = dataLocationManager.hasPendingChangeSafely(),
+                                                canCancelChange = withContext(Dispatchers.IO) {
+                                                    dataLocationManager.hasPendingChangeSafely()
+                                                },
                                             )
                                         },
                                     )
@@ -222,34 +233,32 @@ private data class JvmDesktopStartupInitialization(
     val state: JvmDesktopStartupState,
 )
 
-private fun initializeJvmDesktopStartup(
+private suspend fun initializeJvmDesktopStartup(
     dataLocationManager: JvmDataLocationManager,
-): JvmDesktopStartupInitialization = runCatching {
-    dataLocationManager.requiresStartupDataLocationOperation()
-}.fold(
-    onSuccess = { requiresDataLocationOperation ->
-        JvmDesktopStartupInitialization(
-            requiresDataLocationOperation = requiresDataLocationOperation,
-            state = if (requiresDataLocationOperation) {
-                JvmDesktopStartupState.Preparing(
-                    JvmDataLocationProgress("正在读取数据位置…"),
-                )
-            } else {
-                createJvmDesktopComponentState(dataLocationManager)
-            },
-        )
-    },
-    onFailure = { error ->
-        logJvmStartupFailure(stage = "data-location-config", error = error)
-        JvmDesktopStartupInitialization(
-            requiresDataLocationOperation = false,
-            state = JvmDesktopStartupState.DataLocationFailed(
-                error = error,
-                canCancelChange = false,
-            ),
-        )
-    },
-)
+): JvmDesktopStartupInitialization = withContext(Dispatchers.IO) {
+    runCatching {
+        dataLocationManager.requiresStartupDataLocationOperation()
+    }.fold(
+        onSuccess = { requiresDataLocationOperation ->
+            JvmDesktopStartupInitialization(
+                requiresDataLocationOperation = requiresDataLocationOperation,
+                state = resolveJvmDesktopStartupAfterLocationCheck(requiresDataLocationOperation) {
+                    createJvmDesktopComponentState(dataLocationManager)
+                },
+            )
+        },
+        onFailure = { error ->
+            logJvmStartupFailure(stage = "data-location-config", error = error)
+            JvmDesktopStartupInitialization(
+                requiresDataLocationOperation = false,
+                state = JvmDesktopStartupState.DataLocationFailed(
+                    error = error,
+                    canCancelChange = false,
+                ),
+            )
+        },
+    )
+}
 
 private fun JvmDataLocationManager.hasPendingChangeSafely(): Boolean =
     runCatching { hasPendingChange() }.getOrDefault(false)
@@ -280,6 +289,7 @@ private fun showDesktopStartupMessage(message: String) {
 }
 
 internal sealed interface JvmDesktopStartupState {
+    data object Starting : JvmDesktopStartupState
     data class Preparing(val progress: JvmDataLocationProgress) : JvmDesktopStartupState
     data class DataLocationFailed(
         val error: Throwable,
@@ -290,6 +300,20 @@ internal sealed interface JvmDesktopStartupState {
         val startupWarning: String?,
     ) : JvmDesktopStartupState
     data class ComponentFailed(val error: Throwable) : JvmDesktopStartupState
+}
+
+internal fun initialJvmDesktopStartupState(): JvmDesktopStartupState =
+    JvmDesktopStartupState.Starting
+
+internal fun resolveJvmDesktopStartupAfterLocationCheck(
+    requiresDataLocationOperation: Boolean,
+    createComponentState: () -> JvmDesktopStartupState,
+): JvmDesktopStartupState = if (requiresDataLocationOperation) {
+    JvmDesktopStartupState.Preparing(
+        JvmDataLocationProgress("正在读取数据位置…"),
+    )
+} else {
+    createComponentState()
 }
 
 private const val WINDOW_CLOSE_PREFERENCE_FLUSH_TIMEOUT_MILLIS = 2_000L
@@ -309,8 +333,13 @@ internal fun shouldMinimizeDesktopWindowOnClose(
     return supportsMacOsWindowCloseBehavior && minimizeWindowOnClose
 }
 
-internal fun shouldAllowDesktopWindowClose(startupOperationInProgress: Boolean): Boolean =
-    !startupOperationInProgress
+internal fun shouldAllowDesktopWindowClose(startupState: JvmDesktopStartupState): Boolean = when (startupState) {
+    JvmDesktopStartupState.Starting,
+    is JvmDesktopStartupState.Preparing,
+    -> false
+
+    else -> true
+}
 
 internal fun defaultDesktopWindowChrome(osName: String): DesktopWindowChrome {
     return if (isJvmMacOs(osName)) {
