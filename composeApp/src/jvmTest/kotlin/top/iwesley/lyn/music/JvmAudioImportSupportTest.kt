@@ -24,11 +24,15 @@ class JvmAudioImportSupportTest {
     }
 
     @Test
-    fun `jvm import classification marks other extra scanned formats unsupported`() {
+    fun `jvm import classification supports ogg`() {
         assertEquals(
-            NonNavidromeAudioScanResult.IMPORT_UNSUPPORTED,
-            classifyJvmScannedAudioFile("bad.ogg"),
+            NonNavidromeAudioScanResult.IMPORT_SUPPORTED,
+            classifyJvmScannedAudioFile("good.ogg"),
         )
+    }
+
+    @Test
+    fun `jvm import classification marks other extra scanned formats unsupported`() {
         assertEquals(
             NonNavidromeAudioScanResult.IMPORT_UNSUPPORTED,
             classifyJvmScannedAudioFile("bad.opus"),

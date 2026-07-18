@@ -10,6 +10,7 @@ internal val JVM_SUPPORTED_IMPORT_AUDIO_EXTENSIONS = setOf(
     "wav",
     "flac",
     "ape",
+    "ogg",
     "wma",
 )
 
