@@ -45,6 +45,14 @@ internal actual suspend fun resolveLynArtworkTarget(
     )
 }
 
+internal actual fun coilArtworkData(target: String): String {
+    val trimmed = target.trim()
+    return when {
+        trimmed.startsWith("/", ignoreCase = false) -> "file://$trimmed"
+        else -> trimmed
+    }
+}
+
 @OptIn(ExperimentalForeignApi::class)
 private fun String.toNativeArtworkTargetPath(): String? {
     val trimmed = trim()

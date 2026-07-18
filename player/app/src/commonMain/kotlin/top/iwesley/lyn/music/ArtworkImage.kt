@@ -484,13 +484,7 @@ internal fun buildLynArtworkCacheKey(
     }
 }
 
-private fun coilArtworkData(target: String): String {
-    val trimmed = target.trim()
-    return when {
-        trimmed.startsWith("/", ignoreCase = false) -> "file://$trimmed"
-        else -> trimmed
-    }
-}
+internal expect fun coilArtworkData(target: String): String
 
 private fun ByteArray.stableContentHash(): String {
     var hash = 14695981039346656037uL

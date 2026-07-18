@@ -1,6 +1,8 @@
 package top.iwesley.lyn.music
 
+import java.net.URI
 import java.nio.file.Files
+import java.nio.file.Paths
 import kotlin.io.path.absolutePathString
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -156,6 +158,32 @@ class ArtworkImageTargetTest {
         assertEquals(file.absolutePath, resolved.target)
         assertEquals("5:1700000020000", resolved.version)
         assertTrue(resolved.isLocalFile)
+    }
+
+    @Test
+    fun `absolute local artwork path is normalized to readable file uri for coil`() {
+        val file = Files.createTempFile("LynMusic 封面 #", ".png").toFile()
+        file.writeBytes(byteArrayOf(1, 2, 3))
+
+        val data = coilArtworkData(file.absolutePath)
+        val resolvedPath = Paths.get(URI(data))
+
+        assertTrue(data.startsWith("file:", ignoreCase = true))
+        assertEquals(file.canonicalFile, resolvedPath.toFile().canonicalFile)
+    }
+
+    @Test
+    fun `legacy windows file url is normalized to readable file uri for coil`() {
+        if (!System.getProperty("os.name").contains("Windows", ignoreCase = true)) return
+        val file = Files.createTempFile("LynMusic legacy artwork", ".png").toFile()
+        file.writeBytes(byteArrayOf(1, 2, 3))
+        val legacyFileUrl = "file://${file.absolutePath}"
+
+        val data = coilArtworkData(legacyFileUrl)
+        val resolvedPath = Paths.get(URI(data))
+
+        assertTrue(data.startsWith("file:", ignoreCase = true))
+        assertEquals(file.canonicalFile, resolvedPath.toFile().canonicalFile)
     }
 
     @Test

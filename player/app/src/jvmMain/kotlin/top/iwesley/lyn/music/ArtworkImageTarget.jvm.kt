@@ -32,7 +32,7 @@ internal actual suspend fun resolveLynArtworkTarget(
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
         ?: return@withContext null
-    val file = target.toArtworkTargetFile()
+    val file = target.toJvmArtworkTargetFile()
     LynResolvedArtworkTarget(
         locator = normalized,
         target = target,
@@ -41,14 +41,37 @@ internal actual suspend fun resolveLynArtworkTarget(
     )
 }
 
-private fun String.toArtworkTargetFile(): File? {
+internal actual fun coilArtworkData(target: String): String {
+    val trimmed = target.trim()
+    return trimmed.toJvmArtworkTargetFile()
+        ?.toPath()
+        ?.toUri()
+        ?.toString()
+        ?: trimmed
+}
+
+internal fun String.toJvmArtworkTargetFile(): File? {
     val trimmed = trim()
     return when {
-        trimmed.startsWith("file://", ignoreCase = true) ->
+        trimmed.startsWith("file:", ignoreCase = true) ->
             runCatching { Paths.get(URI(trimmed)).toFile() }.getOrNull()
-                ?: File(trimmed.removePrefix("file://"))
+                ?: trimmed.legacyFileUrlPath()?.toAbsoluteJvmArtworkFile()
 
-        trimmed.startsWith("/", ignoreCase = false) -> File(trimmed)
+        else -> trimmed.toAbsoluteJvmArtworkFile()
+    }
+}
+
+private fun String.legacyFileUrlPath(): String? {
+    return when {
+        startsWith("file://", ignoreCase = true) -> substring("file://".length)
+        startsWith("file:", ignoreCase = true) -> substring("file:".length)
         else -> null
     }
+}
+
+private fun String.toAbsoluteJvmArtworkFile(): File? {
+    return runCatching { Paths.get(this) }
+        .getOrNull()
+        ?.takeIf { path -> path.isAbsolute }
+        ?.toFile()
 }
