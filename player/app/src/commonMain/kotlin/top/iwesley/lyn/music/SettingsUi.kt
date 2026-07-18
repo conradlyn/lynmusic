@@ -2180,6 +2180,10 @@ private fun StorageSettingsPane(
         state.dataLocationRestartRequired -> {
             AlertDialog(
                 onDismissRequest = {},
+                containerColor = shellColors.navContainer,
+                titleContentColor = MaterialTheme.colorScheme.onSurface,
+                textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                tonalElevation = 0.dp,
                 title = { Text("需要重新打开应用") },
                 text = {
                     Text("数据位置设置已保存。应用将退出，请重新打开 LynMusic 以完成数据位置切换。")
@@ -2199,6 +2203,10 @@ private fun StorageSettingsPane(
                         onSettingsIntent(SettingsIntent.CancelDiscardDataLocation)
                     }
                 },
+                containerColor = shellColors.navContainer,
+                titleContentColor = MaterialTheme.colorScheme.onSurface,
+                textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                tonalElevation = 0.dp,
                 title = { Text("永久丢弃旧数据？") },
                 text = {
                     Text("下次启动时将永久删除当前位置的数据库、设置、凭据、离线音乐和缓存。此操作不可恢复。")
@@ -2233,6 +2241,10 @@ private fun StorageSettingsPane(
                         onSettingsIntent(SettingsIntent.CancelDataLocationSelection)
                     }
                 },
+                containerColor = shellColors.navContainer,
+                titleContentColor = MaterialTheme.colorScheme.onSurface,
+                textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                tonalElevation = 0.dp,
                 title = { Text("更改数据位置") },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
