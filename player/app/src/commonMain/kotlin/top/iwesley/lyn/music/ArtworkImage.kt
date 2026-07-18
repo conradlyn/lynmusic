@@ -57,7 +57,16 @@ internal data class LynArtworkModel(
     val targetPending: Boolean,
 )
 
-private data class LynArtworkTargetState(
+internal data class LynArtworkTargetRequestKey(
+    val normalized: String?,
+    val requestCacheKey: String?,
+    val cacheRemote: Boolean,
+    val cacheVersion: Long,
+    val artworkCacheStore: ArtworkCacheStore,
+)
+
+internal data class LynArtworkTargetState(
+    val requestKey: LynArtworkTargetRequestKey,
     val target: LynResolvedArtworkTarget?,
     val resolved: Boolean,
 )
@@ -298,7 +307,16 @@ private fun rememberLynArtworkModel(
     cacheVersion: Long,
     artworkCacheStore: ArtworkCacheStore,
 ): LynArtworkModel {
-    val initialTarget = remember(normalized, requestCacheKey, cacheRemote, artworkCacheStore) {
+    val requestKey = remember(normalized, requestCacheKey, cacheRemote, cacheVersion, artworkCacheStore) {
+        LynArtworkTargetRequestKey(
+            normalized = normalized,
+            requestCacheKey = requestCacheKey,
+            cacheRemote = cacheRemote,
+            cacheVersion = cacheVersion,
+            artworkCacheStore = artworkCacheStore,
+        )
+    }
+    val initialTarget = remember(requestKey) {
         initialLynArtworkTarget(
             normalized = normalized,
             requestCacheKey = requestCacheKey,
@@ -306,16 +324,12 @@ private fun rememberLynArtworkModel(
             artworkCacheStore = artworkCacheStore,
         )
     }
-    val resolvedTargetState by produceState(
-        initialValue = LynArtworkTargetState(
-            target = initialTarget,
-            resolved = normalized == null || initialTarget != null,
-        ),
-        normalized,
-        requestCacheKey,
-        cacheRemote,
-        cacheVersion,
-        artworkCacheStore,
+    val initialTargetState = remember(requestKey, initialTarget) {
+        initialLynArtworkTargetState(requestKey = requestKey, initialTarget = initialTarget)
+    }
+    val producedTargetState by produceState(
+        initialValue = initialTargetState,
+        requestKey,
     ) {
         val resolvedTarget = resolveLynArtworkTarget(
             locator = normalized,
@@ -324,10 +338,16 @@ private fun rememberLynArtworkModel(
             artworkCacheStore = artworkCacheStore,
         )
         value = LynArtworkTargetState(
+            requestKey = requestKey,
             target = resolvedTarget ?: initialTarget,
             resolved = true,
         )
     }
+    val resolvedTargetState = selectLynArtworkTargetState(
+        currentRequestKey = requestKey,
+        initialTargetState = initialTargetState,
+        producedTargetState = producedTargetState,
+    )
     return remember(normalized, requestCacheKey, resolvedTargetState, cacheRemote, maxDecodeSizePx, cacheVersion) {
         val resolvedTarget = resolvedTargetState.target
         LynArtworkModel(
@@ -342,6 +362,25 @@ private fun rememberLynArtworkModel(
             targetPending = normalized != null && resolvedTarget == null && !resolvedTargetState.resolved,
         )
     }
+}
+
+internal fun initialLynArtworkTargetState(
+    requestKey: LynArtworkTargetRequestKey,
+    initialTarget: LynResolvedArtworkTarget?,
+): LynArtworkTargetState {
+    return LynArtworkTargetState(
+        requestKey = requestKey,
+        target = initialTarget,
+        resolved = requestKey.normalized == null || initialTarget != null,
+    )
+}
+
+internal fun selectLynArtworkTargetState(
+    currentRequestKey: LynArtworkTargetRequestKey,
+    initialTargetState: LynArtworkTargetState,
+    producedTargetState: LynArtworkTargetState,
+): LynArtworkTargetState {
+    return producedTargetState.takeIf { it.requestKey == currentRequestKey } ?: initialTargetState
 }
 
 internal fun initialLynArtworkTarget(
