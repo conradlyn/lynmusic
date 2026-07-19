@@ -70,7 +70,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil3.compose.AsyncImagePainter
+import coil3.compose.LocalPlatformContext
 import coil3.compose.rememberAsyncImagePainter
+import coil3.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import top.iwesley.lyn.music.core.model.ArtworkCacheStore
@@ -686,12 +688,15 @@ private fun TvLyricsSearchArtwork(
     modifier: Modifier = Modifier,
 ) {
     val normalized = remember(artworkLocator) { normalizedArtworkCacheLocator(artworkLocator) }
-    val model by produceState<String?>(
+    val requestToken = remember(normalized) {
+        TvLyricsSearchArtworkRequestToken(artworkLocator = normalized)
+    }
+    val resolution by produceState<TvLyricsSearchArtworkResolution?>(
         initialValue = null,
-        normalized,
+        requestToken,
         artworkCacheStore,
     ) {
-        value = withContext(Dispatchers.IO) {
+        val target = withContext(Dispatchers.IO) {
             normalized?.let { locator ->
                 runCatching {
                     artworkCacheStore.cache(
@@ -704,8 +709,23 @@ private fun TvLyricsSearchArtwork(
                     ?: resolveArtworkCacheTarget(locator)
             }
         }
+        value = TvLyricsSearchArtworkResolution(
+            requestToken = requestToken,
+            target = target,
+        )
     }
-    val painter = rememberAsyncImagePainter(model = model)
+    val model = resolution.targetFor(requestToken)
+    val context = LocalPlatformContext.current
+    val imageRequest = remember(context, model, requestToken) {
+        model?.let { target ->
+            ImageRequest.Builder(context)
+                .data(target)
+                .memoryCacheKey(tvLyricsSearchArtworkMemoryCacheKey(requestToken.artworkLocator ?: target))
+                .size(TV_LYRICS_SEARCH_ARTWORK_MAX_DECODE_SIZE_PX)
+                .build()
+        }
+    }
+    val painter = rememberAsyncImagePainter(model = imageRequest)
     val painterState by painter.state.collectAsState()
     Box(
         modifier = modifier

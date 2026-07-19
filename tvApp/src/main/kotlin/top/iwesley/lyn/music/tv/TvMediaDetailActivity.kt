@@ -6,7 +6,6 @@ import android.content.pm.ActivityInfo
 import android.os.Build
 import android.os.Bundle
 import android.util.DisplayMetrics
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -44,8 +43,10 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,8 +61,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Border
+import androidx.tv.material3.Button as TvButton
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
+import androidx.tv.material3.OutlinedButton as TvOutlinedButton
 import coil3.compose.rememberAsyncImagePainter
 import kotlin.math.roundToInt
 import top.iwesley.lyn.music.LynMusicAppComponent
@@ -84,19 +87,33 @@ internal enum class TvMediaDetailSource {
     Favorites,
 }
 
-class TvMediaDetailActivity : ComponentActivity() {
+class TvMediaDetailActivity : TvComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_USER
         val args = intent.parseTvMediaDetailArgs()
+        var appComponentResult by mutableStateOf(tvAppComponentResult())
 
         setContent {
-            val component = TvAppComponentHolder.current()
-            if (component == null || args == null) {
+            val component = appComponentResult.getOrNull()
+            if (args == null) {
                 TvMainTheme {
                     TvMediaDetailErrorScreen(
-                        message = "详情页不可用，请返回主界面重新打开。",
+                        message = "详情参数无效，请返回后重新打开。",
+                        onRetry = null,
+                        onBack = ::finish,
+                    )
+                }
+                return@setContent
+            }
+            if (component == null) {
+                TvMainTheme {
+                    TvMediaDetailErrorScreen(
+                        message = "组件初始化失败，请检查存储状态后重试。",
+                        onRetry = {
+                            appComponentResult = tvAppComponentResult()
+                        },
                         onBack = ::finish,
                     )
                 }
@@ -462,6 +479,7 @@ private fun TvMediaDetailEmptyPanel(modifier: Modifier = Modifier) {
 @Composable
 private fun TvMediaDetailErrorScreen(
     message: String,
+    onRetry: (() -> Unit)?,
     onBack: () -> Unit,
 ) {
     BackHandler(onBack = onBack)
@@ -482,10 +500,17 @@ private fun TvMediaDetailErrorScreen(
         ) {
             Text("无法打开详情", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
             Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            TextButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = null)
-                Spacer(Modifier.width(6.dp))
-                Text("返回")
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (onRetry != null) {
+                    TvButton(onClick = onRetry) {
+                        Text("重试")
+                    }
+                }
+                TvOutlinedButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("返回")
+                }
             }
         }
     }

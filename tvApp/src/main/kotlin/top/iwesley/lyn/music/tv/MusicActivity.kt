@@ -3,7 +3,6 @@ package top.iwesley.lyn.music.tv
 import android.content.Intent
 import android.os.Bundle
 import android.view.WindowManager
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.animateColorAsState
@@ -64,7 +63,7 @@ import top.iwesley.lyn.music.core.model.LyricsDocument
 import top.iwesley.lyn.music.core.model.LyricsLookupMetadata
 import top.iwesley.lyn.music.data.repository.LyricsRepository
 
-class MusicActivity : ComponentActivity() {
+class MusicActivity : TvComponentActivity() {
     private val playbackSession by lazy {
         TvRendererActivityPlaybackSession(this, TvRendererRoute.Music)
     }
@@ -73,9 +72,9 @@ class MusicActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         TvUpnpRendererService.start(this)
+        val component = tvAppComponentResult().getOrNull()
         setContent {
             ConfigureTvImageLoader()
-            val component = TvAppComponentHolder.current()
             val state by TvUpnpRendererRouter.state.collectAsState()
             MusicRendererTheme {
                 MusicRendererScreen(
@@ -164,6 +163,7 @@ private fun MusicRendererScreen(
     Box(modifier = Modifier.fillMaxSize()) {
         TvPlaybackArtworkBackground(
             artworkModel = state.artworkUri,
+            artworkMemoryCacheKey = tvPlayerArtworkMemoryCacheKey(state.artworkUri, 0L),
             colors = backgroundColors,
             modifier = Modifier.fillMaxSize(),
         )

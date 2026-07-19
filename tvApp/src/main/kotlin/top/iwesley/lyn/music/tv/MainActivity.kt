@@ -7,36 +7,44 @@ import android.util.DisplayMetrics
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
-import top.iwesley.lyn.music.ANDROID_TV_PLATFORM_NAME
+import androidx.compose.ui.unit.dp
+import androidx.tv.material3.Button as TvButton
 import kotlin.math.min
-import top.iwesley.lyn.music.StartupDatabaseErrorScreen
-import top.iwesley.lyn.music.buildPlayerAppComponent
 import top.iwesley.lyn.music.core.model.AppDisplayScalePreset
 import top.iwesley.lyn.music.core.model.effectiveAppDisplayDensity
-import top.iwesley.lyn.music.platform.createAndroidRuntimeGraph
 import top.iwesley.lyn.music.tv.ui.TvMainApp
+import top.iwesley.lyn.music.tv.ui.TvMainTheme
 import kotlin.math.roundToInt
 
-class MainActivity : ComponentActivity() {
+class MainActivity : TvComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         TvUpnpRendererService.start(this)
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_USER
-        val appComponentResult = runCatching {
-            val runtimeGraph = createAndroidRuntimeGraph(this, platformName = ANDROID_TV_PLATFORM_NAME)
-            buildPlayerAppComponent(
-                sharedGraph = runtimeGraph.sharedGraph,
-                playerRuntimeServices = runtimeGraph.playerRuntimeServices,
-            )
-        }
+        var appComponentResult by mutableStateOf(tvAppComponentResult())
 
         setContent {
             val appComponent = appComponentResult.getOrNull()
@@ -46,10 +54,47 @@ class MainActivity : ComponentActivity() {
                     TvMainApp(appComponent)
                 }
             } else {
-                StartupDatabaseErrorScreen(
-                    error = appComponentResult.exceptionOrNull(),
-                    showDetails = false,
+                TvStartupComponentErrorScreen(
+                    onRetry = {
+                        appComponentResult = tvAppComponentResult()
+                    },
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TvStartupComponentErrorScreen(onRetry: () -> Unit) {
+    TvMainTheme {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .padding(56.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth(0.52f)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(32.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+                Text(
+                    text = "无法启动 LynMusic",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = "组件初始化失败，请检查存储状态后重试。",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TvButton(onClick = onRetry) {
+                    Text("重试")
+                }
             }
         }
     }

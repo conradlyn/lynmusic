@@ -1,6 +1,7 @@
 package top.iwesley.lyn.music.platform
 
 import android.Manifest
+import android.content.Context
 import android.content.ClipData
 import android.content.ContentValues
 import android.graphics.Bitmap
@@ -21,20 +22,18 @@ import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
 import androidx.activity.ComponentActivity
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.URI
 import java.net.URL
-import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlin.math.max
 import top.iwesley.lyn.music.core.model.DEFAULT_LYRICS_SHARE_FONT_PREVIEW_TEXT
 import top.iwesley.lyn.music.core.model.LyricsShareCardModel
+import top.iwesley.lyn.music.core.model.GlobalDiagnosticLogger
 import top.iwesley.lyn.music.core.model.LyricsShareArtworkTintSpec
 import top.iwesley.lyn.music.core.model.LyricsShareCardSpec
 import top.iwesley.lyn.music.core.model.LyricsShareFontKind
@@ -52,22 +51,25 @@ import top.iwesley.lyn.music.core.model.normalizedArtworkCacheLocator
 import top.iwesley.lyn.music.core.model.parseEmbyCoverLocator
 import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleCoverLocator
 import top.iwesley.lyn.music.core.model.resolveArtworkCacheTarget
-import kotlin.coroutines.resume
 
 class AndroidLyricsSharePlatformService(
-    activity: ComponentActivity,
+    context: Context,
+    private val activityActions: AndroidActivityActions,
     private val fontLibraryPlatformService: LyricsShareFontLibraryPlatformService =
         UnsupportedLyricsShareFontLibraryPlatformService,
 ) : LyricsSharePlatformService {
-    private val context = activity.applicationContext
+    constructor(
+        activity: ComponentActivity,
+        fontLibraryPlatformService: LyricsShareFontLibraryPlatformService =
+            UnsupportedLyricsShareFontLibraryPlatformService,
+    ) : this(
+        context = activity.applicationContext,
+        activityActions = FixedAndroidActivityActions(activity, GlobalDiagnosticLogger),
+        fontLibraryPlatformService = fontLibraryPlatformService,
+    )
+
+    private val context = context.applicationContext
     private val artworkCacheStore = createAndroidArtworkCacheStore(context)
-    private var pendingPermissionContinuation: CancellableContinuation<Boolean>? = null
-    private val permissionLauncher = activity.registerForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        pendingPermissionContinuation?.resume(granted)
-        pendingPermissionContinuation = null
-    }
 
     override suspend fun buildPreview(model: LyricsShareCardModel): Result<ByteArray> = withContext(Dispatchers.IO) {
         runCatching {
@@ -199,12 +201,7 @@ class AndroidLyricsSharePlatformService(
         ) {
             return true
         }
-        return withContext(Dispatchers.Main) {
-            suspendCancellableCoroutine { continuation ->
-                pendingPermissionContinuation = continuation
-                permissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            }
-        }
+        return activityActions.requestPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)
     }
 
     private fun saveImageToMediaStore(pngBytes: ByteArray, suggestedName: String) {

@@ -62,10 +62,17 @@ class MainActivity : ComponentActivity() {
         }
         val appComponentResult = runCatching {
             val runtimeGraph = createAndroidRuntimeGraph(this)
-            buildPlayerAppComponent(
-                sharedGraph = runtimeGraph.sharedGraph,
-                playerRuntimeServices = runtimeGraph.playerRuntimeServices,
-            )
+            try {
+                buildPlayerAppComponent(
+                    sharedGraph = runtimeGraph.sharedGraph,
+                    playerRuntimeServices = runtimeGraph.playerRuntimeServices,
+                )
+            } catch (error: Throwable) {
+                runtimeGraph.disposeAfterComponentBuildFailure()
+                    .exceptionOrNull()
+                    ?.let(error::addSuppressed)
+                throw error
+            }
         }
         appComponent = appComponentResult.getOrNull()
         handleExternalAudioOpenIntent(intent)

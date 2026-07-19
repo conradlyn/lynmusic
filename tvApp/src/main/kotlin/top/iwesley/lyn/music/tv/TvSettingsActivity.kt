@@ -6,7 +6,6 @@ import android.content.pm.ActivityInfo
 import android.os.Build
 import android.os.Bundle
 import android.util.DisplayMetrics
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -124,7 +123,6 @@ import top.iwesley.lyn.music.core.model.AppStorageCategory
 import top.iwesley.lyn.music.core.model.AppStorageCategoryUsage
 import top.iwesley.lyn.music.core.model.BuildMetadata
 import top.iwesley.lyn.music.core.model.DeviceInfoSnapshot
-import top.iwesley.lyn.music.core.model.GlobalDiagnosticLogger
 import top.iwesley.lyn.music.core.model.ImportSource
 import top.iwesley.lyn.music.core.model.ImportSourceType
 import top.iwesley.lyn.music.core.model.LocalFolderSelection
@@ -144,26 +142,27 @@ import top.iwesley.lyn.music.feature.settings.AppUpdateUiStatus
 import top.iwesley.lyn.music.feature.settings.SettingsIntent
 import top.iwesley.lyn.music.feature.settings.SettingsState
 import top.iwesley.lyn.music.feature.settings.toAppUpdateUiModel
-import top.iwesley.lyn.music.platform.AndroidLocalFolderPicker
 import top.iwesley.lyn.music.tv.ui.TvMainTheme
 
 private val TvSettingsPanelShape = RoundedCornerShape(18.dp)
 private val TvSettingsItemShape = RoundedCornerShape(14.dp)
 
-class TvSettingsActivity : ComponentActivity() {
-    private lateinit var localFolderPicker: AndroidLocalFolderPicker
-
+class TvSettingsActivity : TvComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_USER
-        localFolderPicker = AndroidLocalFolderPicker(this, GlobalDiagnosticLogger)
-
+        var appComponentResult by mutableStateOf(tvAppComponentResult())
         setContent {
-            val component = TvAppComponentHolder.current()
+            val component = appComponentResult.getOrNull()
             if (component == null) {
                 TvMainTheme {
-                    TvSettingsUnavailableScreen(onBack = ::finish)
+                    TvSettingsUnavailableScreen(
+                        onRetry = {
+                            appComponentResult = tvAppComponentResult()
+                        },
+                        onBack = ::finish,
+                    )
                 }
                 return@setContent
             }
@@ -171,7 +170,7 @@ class TvSettingsActivity : ComponentActivity() {
             ProvideTvSettingsDensity(appDisplayScalePreset) {
                 TvSettingsApp(
                     component = component,
-                    pickLocalFolder = localFolderPicker::pickLocalFolder,
+                    pickLocalFolder = { (application as LynMusicApplication).pickLocalFolder() },
                     onBack = ::finish,
                 )
             }
@@ -2712,7 +2711,11 @@ private fun TvSettingsIconBox(icon: ImageVector) {
 }
 
 @Composable
-private fun TvSettingsUnavailableScreen(onBack: () -> Unit) {
+private fun TvSettingsUnavailableScreen(
+    onRetry: () -> Unit,
+    onBack: () -> Unit,
+) {
+    BackHandler(onBack = onBack)
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -2721,9 +2724,14 @@ private fun TvSettingsUnavailableScreen(onBack: () -> Unit) {
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("设置页不可用", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
-            Text("请返回主界面重新打开。", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            TextButton(onClick = onBack) {
-                Text("返回")
+            Text("组件初始化失败，请检查存储状态后重试。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                TvButton(onClick = onRetry) {
+                    Text("重试")
+                }
+                TvOutlinedButton(onClick = onBack) {
+                    Text("返回")
+                }
             }
         }
     }

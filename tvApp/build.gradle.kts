@@ -88,6 +88,8 @@ dependencies {
     implementation(compose.materialIconsExtended)
 
     debugImplementation(libs.compose.uiTooling)
+
+    testImplementation(libs.kotlin.testJunit)
 }
 
 if (rootProject.isAndroidLintOnAssembleEnabled()) {

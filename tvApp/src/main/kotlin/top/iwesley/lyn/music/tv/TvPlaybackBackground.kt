@@ -38,7 +38,7 @@ import top.iwesley.lyn.music.core.model.resolveArtworkDecodeSampleSize
 @Composable
 internal fun TvPlaybackArtworkBackground(
     artworkModel: String?,
-    artworkCacheVersion: Long = 0L,
+    artworkMemoryCacheKey: String?,
     colors: TvPlaybackBackgroundColors?,
     modifier: Modifier = Modifier,
 ) {
@@ -60,11 +60,12 @@ internal fun TvPlaybackArtworkBackground(
         label = "tv-playback-background-tertiary",
     )
     val context = LocalPlatformContext.current
-    val artworkRequest = remember(context, artworkModel, artworkCacheVersion) {
+    val artworkRequest = remember(context, artworkModel, artworkMemoryCacheKey) {
         artworkModel?.let { target ->
             ImageRequest.Builder(context)
                 .data(target)
-                .memoryCacheKey("tv-playback-background:$target:$artworkCacheVersion")
+                .memoryCacheKey(artworkMemoryCacheKey)
+                .size(TV_PLAYER_ARTWORK_MAX_DECODE_SIZE_PX)
                 .build()
         }
     }

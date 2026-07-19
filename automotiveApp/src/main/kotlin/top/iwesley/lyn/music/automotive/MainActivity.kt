@@ -49,10 +49,17 @@ class MainActivity : ComponentActivity() {
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_USER
         val appComponentResult = runCatching {
             val runtimeGraph = createAndroidRuntimeGraph(this, platformName = ANDROID_AUTOMOTIVE_PLATFORM_NAME)
-            buildPlayerAppComponent(
-                sharedGraph = runtimeGraph.sharedGraph,
-                playerRuntimeServices = runtimeGraph.playerRuntimeServices,
-            )
+            try {
+                buildPlayerAppComponent(
+                    sharedGraph = runtimeGraph.sharedGraph,
+                    playerRuntimeServices = runtimeGraph.playerRuntimeServices,
+                )
+            } catch (error: Throwable) {
+                runtimeGraph.disposeAfterComponentBuildFailure()
+                    .exceptionOrNull()
+                    ?.let(error::addSuppressed)
+                throw error
+            }
         }
         appComponent = appComponentResult.getOrNull()
         handleExternalAudioOpenIntent(intent)

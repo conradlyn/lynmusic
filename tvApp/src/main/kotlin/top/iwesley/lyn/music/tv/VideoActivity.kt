@@ -3,7 +3,6 @@ package top.iwesley.lyn.music.tv
 import android.content.Intent
 import android.os.Bundle
 import android.view.WindowManager
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.annotation.OptIn
@@ -29,7 +28,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 
-class VideoActivity : ComponentActivity() {
+class VideoActivity : TvComponentActivity() {
     private val playbackSession by lazy {
         TvRendererActivityPlaybackSession(this, TvRendererRoute.Video)
     }

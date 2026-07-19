@@ -1,7 +1,6 @@
 package top.iwesley.lyn.music.tv.ui
 
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -14,7 +13,6 @@ import top.iwesley.lyn.music.feature.library.LibraryIntent
 import top.iwesley.lyn.music.feature.player.PlayerIntent
 import top.iwesley.lyn.music.feature.settings.SettingsIntent
 import top.iwesley.lyn.music.tv.ConfigureTvImageLoader
-import top.iwesley.lyn.music.tv.TvAppComponentHolder
 import top.iwesley.lyn.music.tv.TvPlayerActivity
 
 @Composable
@@ -22,14 +20,6 @@ internal fun TvMainApp(
     component: LynMusicAppComponent,
 ) {
     ConfigureTvImageLoader()
-
-    DisposableEffect(component) {
-        TvAppComponentHolder.attach(component)
-        onDispose {
-            TvAppComponentHolder.detach(component)
-            component.dispose()
-        }
-    }
 
     val scope = rememberCoroutineScope()
     val tvStore = remember(component) { TvMainStore(scope) }

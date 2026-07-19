@@ -24,8 +24,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
-import androidx.lifecycle.DefaultLifecycleObserver
-import androidx.lifecycle.LifecycleOwner
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
@@ -47,15 +45,25 @@ import io.ktor.client.request.setBody
 import io.ktor.client.request.url
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpMethod
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import top.iwesley.lyn.music.SharedGraph
 import top.iwesley.lyn.music.SharedRuntimeServices
 import top.iwesley.lyn.music.buildSharedGraph
@@ -197,7 +205,46 @@ import kotlin.coroutines.resumeWithException
 data class AndroidRuntimeGraph(
     val sharedGraph: SharedGraph,
     val playerRuntimeServices: PlayerRuntimeServices,
-)
+    private val ownsDatabase: Boolean = false,
+) {
+    private val failureCleanupStarted = AtomicBoolean(false)
+
+    fun disposeAfterComponentBuildFailure(): Result<Unit> {
+        if (!failureCleanupStarted.compareAndSet(false, true)) return Result.success(Unit)
+        return runCatching {
+            runBlocking {
+                val failures = mutableListOf<Throwable>()
+
+                suspend fun closeResource(close: suspend () -> Unit) {
+                    runCatching { close() }.onFailure(failures::add)
+                }
+
+                closeResource {
+                    withTimeout(ANDROID_RUNTIME_FAILURE_SCOPE_SHUTDOWN_TIMEOUT_MS) {
+                        sharedGraph.scope.coroutineContext[Job]?.cancelAndJoin()
+                    }
+                }
+                closeResource { playerRuntimeServices.castSessionForegroundPlatformService.close() }
+                closeResource { playerRuntimeServices.castGateway.release() }
+                closeResource { playerRuntimeServices.castMediaUrlResolver.release() }
+                closeResource { sharedGraph.desktopLyricsPlatformService.release() }
+                closeResource { playerRuntimeServices.menuBarLyricsControlsPlatformService.close() }
+                closeResource { playerRuntimeServices.playbackRepository?.close() }
+                closeResource { playerRuntimeServices.closeDesktopResources() }
+                if (ownsDatabase) {
+                    closeResource { sharedGraph.database.close() }
+                }
+
+                failures.firstOrNull()?.let { primary ->
+                    failures.drop(1).forEach { failure ->
+                        if (failure !== primary) runCatching { primary.addSuppressed(failure) }
+                    }
+                    throw primary
+                }
+            }
+        }
+    }
+}
 
 fun openAndroidRuntimeDatabase(context: Context): LynMusicDatabase {
     return openLynMusicDatabase(
@@ -212,12 +259,18 @@ fun createAndroidRuntimeGraph(
     activity: ComponentActivity,
     platformName: String = "Android",
 ): AndroidRuntimeGraph {
+    val logger = AndroidDiagnosticLogger(enabled = true, label = platformName)
     val database = openAndroidRuntimeDatabase(activity.applicationContext)
-    return createAndroidRuntimeGraph(
-        activity = activity,
-        database = database,
-        platformName = platformName,
-    )
+    return createAndroidRuntimeGraphWithOwnedDatabase(database) {
+        createAndroidRuntimeGraph(
+            context = activity.applicationContext,
+            database = database,
+            activityActions = FixedAndroidActivityActions(activity, logger),
+            platformName = platformName,
+            logger = logger,
+            ownsDatabase = true,
+        )
+    }
 }
 
 fun createAndroidRuntimeGraph(
@@ -226,17 +279,67 @@ fun createAndroidRuntimeGraph(
     platformName: String = "Android",
 ): AndroidRuntimeGraph {
     val logger = AndroidDiagnosticLogger(enabled = true, label = platformName)
+    return createAndroidRuntimeGraph(
+        context = activity.applicationContext,
+        database = database,
+        activityActions = FixedAndroidActivityActions(activity, logger),
+        platformName = platformName,
+        logger = logger,
+        ownsDatabase = false,
+    )
+}
+
+fun createAndroidRuntimeGraph(
+    context: Context,
+    activityActions: AndroidActivityActions,
+    platformName: String = "Android",
+): AndroidRuntimeGraph {
+    val logger = AndroidDiagnosticLogger(enabled = true, label = platformName)
+    val database = openAndroidRuntimeDatabase(context)
+    return createAndroidRuntimeGraphWithOwnedDatabase(database) {
+        createAndroidRuntimeGraph(
+            context = context.applicationContext,
+            database = database,
+            activityActions = activityActions,
+            platformName = platformName,
+            logger = logger,
+            ownsDatabase = true,
+        )
+    }
+}
+
+private fun createAndroidRuntimeGraphWithOwnedDatabase(
+    database: LynMusicDatabase,
+    factory: () -> AndroidRuntimeGraph,
+): AndroidRuntimeGraph = try {
+    factory()
+} catch (error: Throwable) {
+    runCatching { database.close() }
+        .exceptionOrNull()
+        ?.takeIf { closeError -> closeError !== error }
+        ?.let { closeError -> runCatching { error.addSuppressed(closeError) } }
+    throw error
+}
+
+private fun createAndroidRuntimeGraph(
+    context: Context,
+    database: LynMusicDatabase,
+    activityActions: AndroidActivityActions,
+    platformName: String,
+    logger: DiagnosticLogger,
+    ownsDatabase: Boolean,
+): AndroidRuntimeGraph {
     GlobalDiagnosticLogger.installStrategy(logger)
     val secureStore = AndroidCredentialStore(
-        context = activity.applicationContext,
+        context = context,
         logger = logger,
     ).withSecureInMemoryCache()
-    val appPreferencesStore = AndroidAppPreferencesStore(activity.applicationContext)
-    val networkConnectionTypeProvider = AndroidNetworkConnectionTypeProvider.get(activity.applicationContext)
+    val appPreferencesStore = AndroidAppPreferencesStore(context)
+    val networkConnectionTypeProvider = AndroidNetworkConnectionTypeProvider.get(context)
     val remoteSourceAddressSelector = RemoteSourceAddressSelector(networkConnectionTypeProvider)
-    val lyricsShareFontLibraryPlatformService = AndroidLyricsShareFontLibraryPlatformService(activity)
+    val lyricsShareFontLibraryPlatformService = AndroidLyricsShareFontLibraryPlatformService(context, activityActions)
     val navidromeHttpClient = AndroidLyricsHttpClient()
-    val artworkCacheStore = createAndroidArtworkCacheStore(activity.applicationContext)
+    val artworkCacheStore = createAndroidArtworkCacheStore(context)
     val platform = PlatformDescriptor(
         name = platformName,
         capabilities = PlatformCapabilities(
@@ -250,111 +353,127 @@ fun createAndroidRuntimeGraph(
             supportsDesktopLyrics = true,
             supportsEqualizer = platformName.supportsAndroidEqualizer(),
             supportsPlaybackBackgroundArtworkBlur = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S,
-            supportsSystemLocalFolderPicker = canResolveOpenDocumentTree(activity),
+            supportsSystemLocalFolderPicker = canResolveOpenDocumentTree(context),
         ),
     )
-    val desktopLyricsPlatformService = AndroidDesktopLyricsPlatformService(activity.applicationContext)
-    val sharedGraph = buildSharedGraph(
-        platform = platform,
-        database = database,
-        runtimeServices = SharedRuntimeServices(
-            importSourceGateway = AndroidImportSourceGateway(activity, logger, navidromeHttpClient),
-            secureCredentialStore = secureStore,
-            sambaCachePreferencesStore = appPreferencesStore,
-            themePreferencesStore = appPreferencesStore,
-            appDisplayPreferencesStore = appPreferencesStore,
-            compactPlayerLyricsPreferencesStore = appPreferencesStore,
-            desktopLyricsPreferencesStore = appPreferencesStore,
-            autoPlayOnStartupPreferencesStore = appPreferencesStore,
-            navidromeAudioQualityPreferencesStore = appPreferencesStore,
-            playbackDecoderPreferencesStore = appPreferencesStore,
-            playerArtworkStylePreferencesStore = appPreferencesStore,
-            networkConnectionTypeProvider = networkConnectionTypeProvider,
-            remoteSourceAddressSelector = remoteSourceAddressSelector,
-            librarySourceFilterPreferencesStore = appPreferencesStore,
-            lyricsShareFontLibraryPlatformService = lyricsShareFontLibraryPlatformService,
-            lyricsShareFontPreferencesStore = appPreferencesStore,
-            lyricsHttpClient = navidromeHttpClient,
-            artworkCacheStore = artworkCacheStore,
-            appStorageGateway = createAndroidAppStorageGateway(activity.applicationContext, database),
-            offlineDownloadGateway = createAndroidOfflineDownloadGateway(
-                context = activity.applicationContext,
-                database = database,
+    val desktopLyricsPlatformService = AndroidDesktopLyricsPlatformService(context)
+    val sharedScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    return try {
+        val dateChangeNotifier = AndroidDailyRecommendationDateChangeNotifier(
+            context = context,
+            activityResumedEvents = activityActions.activityResumedEvents,
+            dateKeyProvider = AndroidDailyRecommendationDateKeyProvider,
+            scope = sharedScope,
+        )
+        val sharedGraph = buildSharedGraph(
+            platform = platform,
+            database = database,
+            runtimeServices = SharedRuntimeServices(
+                importSourceGateway = AndroidImportSourceGateway(context, activityActions, logger, navidromeHttpClient),
                 secureCredentialStore = secureStore,
-                logger = logger,
-                addressSelector = remoteSourceAddressSelector,
-            ),
-            deviceInfoGateway = createAndroidDeviceInfoGateway(activity),
-            audioTagGateway = AndroidAudioTagGateway(
-                context = activity.applicationContext,
-                database = database,
-                secureCredentialStore = secureStore,
-                logger = logger,
-            ),
-            sameNameLyricsFileGateway = AndroidSameNameLyricsFileGateway(
-                context = activity.applicationContext,
-                database = database,
-                secureCredentialStore = secureStore,
-                logger = logger,
-            ),
-            audioTagEditorPlatformService = AndroidAudioTagEditorPlatformService(activity),
-            dailyRecommendationDateKeyProvider = AndroidDailyRecommendationDateKeyProvider,
-            dailyRecommendationDateChangeNotifier = AndroidDailyRecommendationDateChangeNotifier(
-                context = activity.applicationContext,
-                activity = activity,
-                dateKeyProvider = AndroidDailyRecommendationDateKeyProvider,
-            ),
-            desktopLyricsPlatformService = desktopLyricsPlatformService,
-            logger = logger,
-        ),
-    )
-    return AndroidRuntimeGraph(
-        sharedGraph = sharedGraph,
-        playerRuntimeServices = PlayerRuntimeServices(
-            playbackRepository = AndroidServiceBackedPlaybackRepository(activity.applicationContext),
-            playbackPreferencesStore = appPreferencesStore,
-            equalizerPlatformService = if (platformName.supportsAndroidEqualizer()) {
-                AndroidEqualizerPlatformService(
-                    context = activity.applicationContext,
-                    platformName = platformName,
-                )
-            } else {
-                top.iwesley.lyn.music.core.model.UnsupportedEqualizerPlatformService
-            },
-            castGateway = AndroidUpnpCastGateway(
-                context = activity.applicationContext,
-                logger = logger,
-            ),
-            castMediaUrlResolver = AndroidCastMediaUrlResolver(
-                context = activity.applicationContext,
-                database = database,
-                secureCredentialStore = secureStore,
+                sambaCachePreferencesStore = appPreferencesStore,
+                themePreferencesStore = appPreferencesStore,
+                appDisplayPreferencesStore = appPreferencesStore,
+                compactPlayerLyricsPreferencesStore = appPreferencesStore,
+                desktopLyricsPreferencesStore = appPreferencesStore,
+                autoPlayOnStartupPreferencesStore = appPreferencesStore,
+                navidromeAudioQualityPreferencesStore = appPreferencesStore,
+                playbackDecoderPreferencesStore = appPreferencesStore,
+                playerArtworkStylePreferencesStore = appPreferencesStore,
+                networkConnectionTypeProvider = networkConnectionTypeProvider,
+                remoteSourceAddressSelector = remoteSourceAddressSelector,
+                librarySourceFilterPreferencesStore = appPreferencesStore,
+                lyricsShareFontLibraryPlatformService = lyricsShareFontLibraryPlatformService,
+                lyricsShareFontPreferencesStore = appPreferencesStore,
+                lyricsHttpClient = navidromeHttpClient,
+                artworkCacheStore = artworkCacheStore,
+                appStorageGateway = createAndroidAppStorageGateway(context, database),
+                offlineDownloadGateway = createAndroidOfflineDownloadGateway(
+                    context = context,
+                    database = database,
+                    secureCredentialStore = secureStore,
+                    logger = logger,
+                    addressSelector = remoteSourceAddressSelector,
+                ),
+                deviceInfoGateway = createAndroidDeviceInfoGateway(context),
+                audioTagGateway = AndroidAudioTagGateway(
+                    context = context,
+                    database = database,
+                    secureCredentialStore = secureStore,
+                    logger = logger,
+                ),
+                sameNameLyricsFileGateway = AndroidSameNameLyricsFileGateway(
+                    context = context,
+                    database = database,
+                    secureCredentialStore = secureStore,
+                    logger = logger,
+                ),
+                audioTagEditorPlatformService = AndroidAudioTagEditorPlatformService(context, activityActions),
+                dailyRecommendationDateKeyProvider = AndroidDailyRecommendationDateKeyProvider,
+                dailyRecommendationDateChangeNotifier = dateChangeNotifier,
+                desktopLyricsPlatformService = desktopLyricsPlatformService,
                 logger = logger,
             ),
-            castBackgroundRunSettingsOpener = if (platformName == "Android") {
-                AndroidCastBackgroundRunSettingsOpener(activity.applicationContext)
-            } else {
-                UnsupportedCastBackgroundRunSettingsOpener
-            },
-            castNotificationPermissionRequester = if (platformName == "Android") {
-                AndroidCastNotificationPermissionRequester(activity)
-            } else {
-                UnsupportedCastNotificationPermissionRequester
-            },
-            castSessionForegroundPlatformService = if (platformName == "Android") {
-                createAndroidCastSessionForegroundPlatformService(
-                    context = activity.applicationContext,
-                    artworkCacheStore = artworkCacheStore,
-                )
-            } else {
-                UnsupportedCastSessionForegroundPlatformService
-            },
-            lyricsSharePlatformService = AndroidLyricsSharePlatformService(activity, lyricsShareFontLibraryPlatformService),
-            lyricsShareFontLibraryPlatformService = lyricsShareFontLibraryPlatformService,
-            lyricsShareFontPreferencesStore = appPreferencesStore,
-        ),
-    )
+            scope = sharedScope,
+        )
+        AndroidRuntimeGraph(
+            sharedGraph = sharedGraph,
+            playerRuntimeServices = PlayerRuntimeServices(
+                playbackRepository = AndroidServiceBackedPlaybackRepository(context),
+                playbackPreferencesStore = appPreferencesStore,
+                equalizerPlatformService = if (platformName.supportsAndroidEqualizer()) {
+                    AndroidEqualizerPlatformService(
+                        context = context,
+                        platformName = platformName,
+                    )
+                } else {
+                    top.iwesley.lyn.music.core.model.UnsupportedEqualizerPlatformService
+                },
+                castGateway = AndroidUpnpCastGateway(
+                    context = context,
+                    logger = logger,
+                ),
+                castMediaUrlResolver = AndroidCastMediaUrlResolver(
+                    context = context,
+                    database = database,
+                    secureCredentialStore = secureStore,
+                    logger = logger,
+                ),
+                castBackgroundRunSettingsOpener = if (platformName == "Android") {
+                    AndroidCastBackgroundRunSettingsOpener(context)
+                } else {
+                    UnsupportedCastBackgroundRunSettingsOpener
+                },
+                castNotificationPermissionRequester = if (platformName == "Android") {
+                    AndroidCastNotificationPermissionRequester(context, activityActions)
+                } else {
+                    UnsupportedCastNotificationPermissionRequester
+                },
+                castSessionForegroundPlatformService = if (platformName == "Android") {
+                    createAndroidCastSessionForegroundPlatformService(
+                        context = context,
+                        artworkCacheStore = artworkCacheStore,
+                    )
+                } else {
+                    UnsupportedCastSessionForegroundPlatformService
+                },
+                lyricsSharePlatformService = AndroidLyricsSharePlatformService(
+                    context = context,
+                    activityActions = activityActions,
+                    fontLibraryPlatformService = lyricsShareFontLibraryPlatformService,
+                ),
+                lyricsShareFontLibraryPlatformService = lyricsShareFontLibraryPlatformService,
+                lyricsShareFontPreferencesStore = appPreferencesStore,
+            ),
+            ownsDatabase = ownsDatabase,
+        )
+    } catch (error: Throwable) {
+        sharedScope.cancel()
+        throw error
+    }
 }
+
+private const val ANDROID_RUNTIME_FAILURE_SCOPE_SHUTDOWN_TIMEOUT_MS = 2_000L
 
 private object AndroidDailyRecommendationDateKeyProvider : DailyRecommendationDateKeyProvider {
     override fun currentDateKey(): String {
@@ -369,27 +488,19 @@ private fun String.supportsAndroidEqualizer(): Boolean {
 
 private class AndroidDailyRecommendationDateChangeNotifier(
     private val context: Context,
-    private val activity: ComponentActivity,
+    activityResumedEvents: Flow<Unit>,
     private val dateKeyProvider: DailyRecommendationDateKeyProvider,
+    scope: CoroutineScope,
 ) : DailyRecommendationDateChangeNotifier {
     private val mutableDateKeys = MutableStateFlow(dateKeyProvider.currentDateKey())
     override val dateKeys: Flow<String> = mutableDateKeys.asStateFlow()
+    private val receiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            refreshCurrentDateKey()
+        }
+    }
 
     init {
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                refreshCurrentDateKey()
-            }
-        }
-        val lifecycleObserver = object : DefaultLifecycleObserver {
-            override fun onStart(owner: LifecycleOwner) {
-                refreshCurrentDateKey()
-            }
-
-            override fun onResume(owner: LifecycleOwner) {
-                refreshCurrentDateKey()
-            }
-        }
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_DATE_CHANGED)
             addAction(Intent.ACTION_TIME_CHANGED)
@@ -402,11 +513,25 @@ private class AndroidDailyRecommendationDateChangeNotifier(
             filter,
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
-        activity.lifecycle.addObserver(lifecycleObserver)
+        val collectorJob = scope.launchActivityResumedDateRefreshCollector(activityResumedEvents) {
+            refreshCurrentDateKey()
+        }
+        collectorJob.invokeOnCompletion {
+            runCatching { context.unregisterReceiver(receiver) }
+        }
     }
 
     override fun refreshCurrentDateKey() {
         mutableDateKeys.value = dateKeyProvider.currentDateKey()
+    }
+}
+
+internal fun CoroutineScope.launchActivityResumedDateRefreshCollector(
+    activityResumedEvents: Flow<Unit>,
+    refresh: () -> Unit,
+): Job = launch(start = CoroutineStart.UNDISPATCHED) {
+    activityResumedEvents.collect {
+        refresh()
     }
 }
 
@@ -1268,6 +1393,10 @@ class AndroidLocalFolderPicker(
         }
     }
 
+    internal fun cancelPendingRequest() {
+        resumeFolderSelection(null)
+    }
+
     private fun showManageAllFilesAccessPrompt() {
         val hasReadableUsbRoot = hasReadableAndroidUsbStorageRoot(activity, logger)
         val builder = AlertDialog.Builder(activity)
@@ -1393,18 +1522,19 @@ class AndroidLocalFolderPicker(
 }
 
 private class AndroidImportSourceGateway(
-    private val activity: ComponentActivity,
+    context: Context,
+    private val activityActions: AndroidActivityActions,
     private val logger: DiagnosticLogger,
     private val navidromeHttpClient: LyricsHttpClient,
 ) : ImportSourceGateway {
-    private val localFolderPicker = AndroidLocalFolderPicker(activity, logger)
+    private val context = context.applicationContext
 
     override suspend fun pickLocalFolder(): LocalFolderSelection? {
-        return localFolderPicker.pickLocalFolder()
+        return activityActions.pickLocalFolder(LocalFolderPickerMode.Automatic)
     }
 
     override suspend fun pickLocalFolder(mode: LocalFolderPickerMode): LocalFolderSelection? {
-        return localFolderPicker.pickLocalFolder(mode)
+        return activityActions.pickLocalFolder(mode)
     }
 
     override suspend fun scanLocalFolder(selection: LocalFolderSelection, sourceId: String): ImportScanReport {
@@ -1416,11 +1546,11 @@ private class AndroidImportSourceGateway(
         sourceId: String,
         progressSink: ImportScanProgressSink,
     ): ImportScanReport {
-        val directLocalFileAccess = hasDirectLocalFileAccess(activity)
+        val directLocalFileAccess = hasDirectLocalFileAccess(context)
         resolveAndroidLocalTrackFile(selection.persistentReference)
             ?.takeIf { it.isDirectory }
             ?.let { root ->
-                val canScanDirectly = directLocalFileAccess || isWithinReadableAndroidUsbStorageRoot(activity, root, logger)
+                val canScanDirectly = directLocalFileAccess || isWithinReadableAndroidUsbStorageRoot(context, root, logger)
                 if (canScanDirectly) {
                     val branch = if (directLocalFileAccess) "direct-permission" else "usb-readable-root"
                     return scanLocalDirectoryWithLogging(
@@ -1436,9 +1566,9 @@ private class AndroidImportSourceGateway(
                 }
             }
         val treeUri = Uri.parse(selection.persistentReference)
-        val resolvedDirectory = resolveTreeUriToDirectory(activity, treeUri)
+        val resolvedDirectory = resolveTreeUriToDirectory(context, treeUri)
         logger.info(LOCAL_IMPORT_LOG_TAG) {
-            "resolve-tree-uri source=$sourceId treeUri=$treeUri directLocalFileAccess=${hasDirectLocalFileAccess(activity)} " +
+            "resolve-tree-uri source=$sourceId treeUri=$treeUri directLocalFileAccess=${hasDirectLocalFileAccess(context)} " +
                 "resolvedDirectory=${resolvedDirectory?.absolutePath ?: "null"}"
         }
         resolvedDirectory
@@ -1590,7 +1720,7 @@ private class AndroidImportSourceGateway(
         return scanAndroidWebDav(
             draft = draft,
             sourceId = sourceId,
-            artworkDirectory = File(activity.cacheDir, "artwork"),
+            artworkDirectory = File(context.cacheDir, "artwork"),
             logger = logger,
             progressSink = progressSink,
         )
@@ -1740,7 +1870,7 @@ private class AndroidImportSourceGateway(
         sourceId: String,
         progressSink: ImportScanProgressSink,
     ): ImportScanReport {
-        val root = DocumentFile.fromTreeUri(activity, treeUri) ?: error("Cannot open tree uri: $treeUri")
+        val root = DocumentFile.fromTreeUri(context, treeUri) ?: error("Cannot open tree uri: $treeUri")
         val tracks = mutableListOf<top.iwesley.lyn.music.core.model.ImportedTrackCandidate>()
         val failures = mutableListOf<ImportScanFailure>()
         val discoveredAudioFileCount = walkDocumentTree(root, "", sourceId, tracks, failures, progressSink)
@@ -1884,11 +2014,11 @@ private class AndroidImportSourceGateway(
         relativePath: String,
     ): top.iwesley.lyn.music.core.model.ImportedTrackCandidate {
         return AndroidAudioTagReader.readCandidate(
-            context = activity,
+            context = context,
             uri = file.uri,
             displayName = file.name,
             relativePath = relativePath,
-            artworkDirectory = File(activity.cacheDir, "artwork"),
+            artworkDirectory = File(context.cacheDir, "artwork"),
             logger = logger,
             sizeBytes = file.length(),
             modifiedAt = file.lastModified(),
@@ -1961,11 +2091,11 @@ private class AndroidImportSourceGateway(
         relativePath: String,
     ): top.iwesley.lyn.music.core.model.ImportedTrackCandidate {
         return AndroidAudioTagReader.readCandidate(
-            context = activity,
+            context = context,
             uri = Uri.fromFile(file),
             displayName = file.name,
             relativePath = relativePath,
-            artworkDirectory = File(activity.cacheDir, "artwork"),
+            artworkDirectory = File(context.cacheDir, "artwork"),
             logger = logger,
             sizeBytes = file.length(),
             modifiedAt = file.lastModified(),
@@ -1973,7 +2103,7 @@ private class AndroidImportSourceGateway(
     }
 
     private fun storeAndroidArtwork(relativePath: String, bytes: ByteArray): String {
-        val artworkDirectory = File(activity.cacheDir, "artwork").apply {
+        val artworkDirectory = File(context.cacheDir, "artwork").apply {
             mkdirs()
         }
         val fileName = buildString {

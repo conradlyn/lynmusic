@@ -8,7 +8,6 @@ import android.os.Bundle
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.WindowManager
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -98,11 +97,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.tv.material3.Button as TvButton
+import androidx.tv.material3.OutlinedButton as TvOutlinedButton
 import coil3.compose.LocalPlatformContext
 import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.withContext
 import top.iwesley.lyn.music.LynMusicAppComponent
 import top.iwesley.lyn.music.core.model.AppDisplayScalePreset
 import top.iwesley.lyn.music.core.model.ArtworkCacheStore
@@ -122,18 +125,22 @@ import top.iwesley.lyn.music.feature.player.PlayerIntent
 import top.iwesley.lyn.music.feature.player.PlayerState
 import top.iwesley.lyn.music.tv.ui.TvMainTheme
 
-class TvPlayerActivity : ComponentActivity() {
+class TvPlayerActivity : TvComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_USER
+        var appComponentResult by mutableStateOf(tvAppComponentResult())
 
         setContent {
-            val component = TvAppComponentHolder.current()
+            val component = appComponentResult.getOrNull()
             if (component == null) {
                 TvMainTheme {
                     TvPlayerUnavailableScreen(
-                        message = "播放页不可用，请返回主界面重新打开。",
+                        message = "组件初始化失败，请检查存储状态后重试。",
+                        onRetry = {
+                            appComponentResult = tvAppComponentResult()
+                        },
                         onBack = ::finish,
                     )
                 }
@@ -300,7 +307,7 @@ private fun TvPlayerScreen(
     Box(modifier = Modifier.fillMaxSize()) {
         TvPlaybackArtworkBackground(
             artworkModel = artwork.target,
-            artworkCacheVersion = artwork.cacheVersion,
+            artworkMemoryCacheKey = artwork.memoryCacheKey,
             colors = backgroundColors,
             modifier = Modifier.fillMaxSize(),
         )
@@ -321,7 +328,7 @@ private fun TvPlayerScreen(
                     snapshot = snapshot,
                     track = track,
                     artworkModel = artwork.target,
-                    artworkCacheVersion = artwork.cacheVersion,
+                    artworkMemoryCacheKey = artwork.memoryCacheKey,
                     modifier = Modifier
                         .weight(0.48f)
                         .fillMaxHeight(),
@@ -373,7 +380,7 @@ private fun TvPlayerInfoPane(
     snapshot: PlaybackSnapshot,
     track: Track,
     artworkModel: String?,
-    artworkCacheVersion: Long,
+    artworkMemoryCacheKey: String?,
     modifier: Modifier = Modifier,
 ) {
     val audioQuality = remember(
@@ -394,7 +401,7 @@ private fun TvPlayerInfoPane(
     ) {
         TvPlayerArtwork(
             artworkModel = artworkModel,
-            artworkCacheVersion = artworkCacheVersion,
+            artworkMemoryCacheKey = artworkMemoryCacheKey,
             modifier = Modifier
                 .fillMaxWidth(0.76f)
                 .aspectRatio(1f),
@@ -444,7 +451,7 @@ private fun TvPlayerInfoPane(
 @Composable
 private fun TvPlayerArtwork(
     artworkModel: String?,
-    artworkCacheVersion: Long,
+    artworkMemoryCacheKey: String?,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -452,7 +459,7 @@ private fun TvPlayerArtwork(
     ) {
         TvPlayerArtworkImage(
             model = artworkModel,
-            cacheVersion = artworkCacheVersion,
+            memoryCacheKey = artworkMemoryCacheKey,
             modifier = Modifier.fillMaxSize(),
         )
     }
@@ -983,15 +990,16 @@ private fun TvPlayerQueueTrackRow(
 @Composable
 private fun TvPlayerArtworkImage(
     model: String?,
-    cacheVersion: Long,
+    memoryCacheKey: String?,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalPlatformContext.current
-    val imageRequest = remember(context, model, cacheVersion) {
+    val imageRequest = remember(context, model, memoryCacheKey) {
         model?.let { target ->
             ImageRequest.Builder(context)
                 .data(target)
-                .memoryCacheKey("tv-player-artwork:$target:$cacheVersion")
+                .memoryCacheKey(memoryCacheKey)
+                .size(TV_PLAYER_ARTWORK_MAX_DECODE_SIZE_PX)
                 .build()
         }
     }
@@ -1021,6 +1029,7 @@ private fun TvPlayerArtworkImage(
 private data class TvPlayerArtworkModel(
     val target: String?,
     val cacheVersion: Long,
+    val memoryCacheKey: String?,
 )
 
 @Composable
@@ -1036,23 +1045,39 @@ private fun rememberTvPlayerArtworkModel(
     val cacheVersion by remember(artworkCacheStore, requestCacheKey) {
         requestCacheKey?.let(artworkCacheStore::observeVersion) ?: flowOf(0L)
     }.collectAsState(initial = 0L)
-    val model by produceState<String?>(
+    val requestToken = remember(requestCacheKey, normalized, cacheVersion) {
+        TvPlayerArtworkRequestToken(
+            cacheKey = requestCacheKey,
+            artworkLocator = normalized,
+            cacheVersion = cacheVersion,
+        )
+    }
+    val resolution by produceState<TvPlayerArtworkResolution?>(
         initialValue = null,
-        normalized,
-        requestCacheKey,
-        cacheVersion,
+        requestToken,
         artworkCacheStore,
     ) {
-        value = when {
-            normalized == null -> null
-            requestCacheKey != null -> artworkCacheStore.cache(normalized, requestCacheKey)
-                ?: resolveArtworkCacheTarget(normalized)
-            else -> resolveArtworkCacheTarget(normalized)
+        val target = withContext(Dispatchers.IO) {
+            when {
+                normalized == null -> null
+                requestCacheKey != null -> artworkCacheStore.cache(normalized, requestCacheKey)
+                    ?: resolveArtworkCacheTarget(normalized)
+                else -> resolveArtworkCacheTarget(normalized)
+            }
         }
+        value = TvPlayerArtworkResolution(
+            requestToken = requestToken,
+            target = target,
+        )
     }
+    val model = resolution.targetFor(requestToken)
     return TvPlayerArtworkModel(
         target = model,
         cacheVersion = cacheVersion,
+        memoryCacheKey = tvPlayerArtworkMemoryCacheKey(
+            artworkIdentity = requestToken.memoryCacheIdentity(),
+            artworkCacheVersion = cacheVersion,
+        ),
     )
 }
 
@@ -1106,6 +1131,7 @@ private fun TvPlayerToast(
 @Composable
 private fun TvPlayerUnavailableScreen(
     message: String,
+    onRetry: (() -> Unit)? = null,
     onBack: () -> Unit,
 ) {
     BackHandler(onBack = onBack)
@@ -1135,6 +1161,16 @@ private fun TvPlayerUnavailableScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.titleMedium,
             )
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (onRetry != null) {
+                    TvButton(onClick = onRetry) {
+                        Text("重试")
+                    }
+                }
+                TvOutlinedButton(onClick = onBack) {
+                    Text("返回")
+                }
+            }
         }
     }
 }

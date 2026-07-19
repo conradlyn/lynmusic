@@ -5,28 +5,23 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.ComponentActivity
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import top.iwesley.lyn.music.cast.CastNotificationPermissionRequester
-import kotlin.coroutines.resume
+import top.iwesley.lyn.music.core.model.GlobalDiagnosticLogger
 
 class AndroidCastNotificationPermissionRequester(
-    activity: ComponentActivity,
+    context: Context,
+    private val activityActions: AndroidActivityActions,
 ) : CastNotificationPermissionRequester {
-    private val context: Context = activity.applicationContext
+    constructor(activity: ComponentActivity) : this(
+        context = activity.applicationContext,
+        activityActions = FixedAndroidActivityActions(activity, GlobalDiagnosticLogger),
+    )
+
+    private val context: Context = context.applicationContext
     private val mutex = Mutex()
-    private var pendingContinuation: kotlin.coroutines.Continuation<Boolean>? = null
-    private val permissionLauncher = activity.registerForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        pendingContinuation?.resume(granted)
-        pendingContinuation = null
-    }
 
     override fun isRequestNeeded(): Boolean {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission()
@@ -38,17 +33,7 @@ class AndroidCastNotificationPermissionRequester(
             if (!isRequestNeeded()) {
                 return@withLock true
             }
-            withContext(Dispatchers.Main) {
-                suspendCancellableCoroutine { continuation ->
-                    pendingContinuation = continuation
-                    continuation.invokeOnCancellation {
-                        if (pendingContinuation === continuation) {
-                            pendingContinuation = null
-                        }
-                    }
-                    permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                }
-            }
+            activityActions.requestPermission(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 

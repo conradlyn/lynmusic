@@ -3,13 +3,11 @@ package top.iwesley.lyn.music.platform
 import android.content.Context
 import android.net.Uri
 import androidx.activity.ComponentActivity
-import androidx.activity.result.contract.ActivityResultContracts
 import java.net.URL
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import kotlin.coroutines.resume
 import top.iwesley.lyn.music.core.model.AudioTagEditorPlatformService
+import top.iwesley.lyn.music.core.model.GlobalDiagnosticLogger
 import top.iwesley.lyn.music.core.model.NavidromeLocatorRuntime
 import top.iwesley.lyn.music.core.model.RemotePlaybackUrlCandidate
 import top.iwesley.lyn.music.core.model.isCompleteArtworkPayload
@@ -19,30 +17,18 @@ import top.iwesley.lyn.music.core.model.parseSubsonicCompatibleCoverLocator
 import top.iwesley.lyn.music.domain.readRemotePlaybackUrlCandidateWithFallback
 
 internal class AndroidAudioTagEditorPlatformService(
-    activity: ComponentActivity,
+    context: Context,
+    private val activityActions: AndroidActivityActions,
 ) : AudioTagEditorPlatformService {
-    private val context = activity.applicationContext
-    private var artworkContinuation: ((Uri?) -> Unit)? = null
-    private val picker = activity.registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        val continuation = artworkContinuation
-        artworkContinuation = null
-        continuation?.invoke(uri)
-    }
+    constructor(activity: ComponentActivity) : this(
+        context = activity.applicationContext,
+        activityActions = FixedAndroidActivityActions(activity, GlobalDiagnosticLogger),
+    )
+
+    private val context = context.applicationContext
 
     override suspend fun pickArtworkBytes(): Result<ByteArray?> = runCatching {
-        val uri = withContext(Dispatchers.Main) {
-            suspendCancellableCoroutine<Uri?> { continuation ->
-                artworkContinuation = { pickedUri ->
-                    if (continuation.isActive) {
-                        continuation.resume(pickedUri)
-                    }
-                }
-                continuation.invokeOnCancellation {
-                    artworkContinuation = null
-                }
-                picker.launch("image/*")
-            }
-        }
+        val uri = activityActions.pickContent("image/*")
         if (uri == null) {
             null
         } else {

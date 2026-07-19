@@ -2,8 +2,11 @@ package top.iwesley.lyn.music.platform
 
 import android.app.ActivityManager
 import android.content.Context
+import android.hardware.display.DisplayManager
 import android.os.Build
 import android.util.DisplayMetrics
+import android.view.Display
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -12,23 +15,27 @@ import top.iwesley.lyn.music.core.model.DeviceInfoSnapshot
 
 fun createAndroidDeviceInfoGateway(
     activity: ComponentActivity,
-): DeviceInfoGateway = AndroidDeviceInfoGateway(activity)
+): DeviceInfoGateway = createAndroidDeviceInfoGateway(activity.applicationContext)
+
+fun createAndroidDeviceInfoGateway(
+    context: Context,
+): DeviceInfoGateway = AndroidDeviceInfoGateway(context.applicationContext)
 
 private class AndroidDeviceInfoGateway(
-    private val activity: ComponentActivity,
+    private val context: Context,
 ) : DeviceInfoGateway {
     override suspend fun loadDeviceInfoSnapshot(): Result<DeviceInfoSnapshot> = withContext(Dispatchers.Default) {
         runCatching {
-            val (resolutionWidthPx, resolutionHeightPx) = androidResolutionPx(activity)
+            val (resolutionWidthPx, resolutionHeightPx) = androidResolutionPx(context)
             DeviceInfoSnapshot(
                 systemName = "Android",
                 systemVersion = androidSystemVersion(),
                 resolution = formatResolution(resolutionWidthPx, resolutionHeightPx),
                 resolutionWidthPx = resolutionWidthPx,
                 resolutionHeightPx = resolutionHeightPx,
-                systemDensityScale = androidSystemDensityScale(activity),
+                systemDensityScale = androidSystemDensityScale(context),
                 cpuDescription = androidCpuDescription(),
-                totalMemoryBytes = androidTotalMemoryBytes(activity.applicationContext),
+                totalMemoryBytes = androidTotalMemoryBytes(context),
                 deviceModel = androidDeviceModel(),
             )
         }
@@ -44,26 +51,30 @@ private fun androidSystemVersion(): String {
     }
 }
 
-private fun androidResolutionPx(activity: ComponentActivity): Pair<Int?, Int?> {
+private fun androidResolutionPx(context: Context): Pair<Int?, Int?> {
     val displayMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-        activity.display?.mode
+        context.getSystemService(DisplayManager::class.java)
+            ?.getDisplay(Display.DEFAULT_DISPLAY)
+            ?.mode
     } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
         @Suppress("DEPRECATION")
-        activity.windowManager.defaultDisplay.mode
+        (context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager)?.defaultDisplay?.mode
     } else {
         null
     }
-    val width = displayMode?.physicalWidth?.takeIf { it > 0 } ?: activity.resources.displayMetrics.widthPixels.takeIf { it > 0 }
-    val height = displayMode?.physicalHeight?.takeIf { it > 0 } ?: activity.resources.displayMetrics.heightPixels.takeIf { it > 0 }
+    val width = displayMode?.physicalWidth?.takeIf { it > 0 }
+        ?: context.resources.displayMetrics.widthPixels.takeIf { it > 0 }
+    val height = displayMode?.physicalHeight?.takeIf { it > 0 }
+        ?: context.resources.displayMetrics.heightPixels.takeIf { it > 0 }
     return width to height
 }
 
-private fun androidSystemDensityScale(activity: ComponentActivity): Float? {
-    val configurationDensityDpi = activity.resources.configuration.densityDpi.takeIf { it > 0 }
+private fun androidSystemDensityScale(context: Context): Float? {
+    val configurationDensityDpi = context.resources.configuration.densityDpi.takeIf { it > 0 }
     if (configurationDensityDpi != null) {
         return configurationDensityDpi / DisplayMetrics.DENSITY_DEFAULT.toFloat()
     }
-    return activity.resources.displayMetrics.density.takeIf { it.isFinite() && it > 0f }
+    return context.resources.displayMetrics.density.takeIf { it.isFinite() && it > 0f }
 }
 
 private fun androidCpuDescription(): String? {

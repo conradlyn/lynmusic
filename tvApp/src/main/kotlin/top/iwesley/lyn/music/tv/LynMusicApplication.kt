@@ -10,15 +10,85 @@ import android.util.Log
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.system.exitProcess
+import top.iwesley.lyn.music.ANDROID_TV_PLATFORM_NAME
+import top.iwesley.lyn.music.LynMusicAppComponent
+import top.iwesley.lyn.music.buildPlayerAppComponent
+import top.iwesley.lyn.music.core.model.GlobalDiagnosticLogger
+import top.iwesley.lyn.music.core.model.LocalFolderPickerMode
+import top.iwesley.lyn.music.core.model.LocalFolderSelection
+import top.iwesley.lyn.music.platform.AndroidActivityActionHost
+import top.iwesley.lyn.music.platform.MutableAndroidActivityActions
+import top.iwesley.lyn.music.platform.createAndroidRuntimeGraph
 
 class LynMusicApplication : Application() {
+    private val activityActions = MutableAndroidActivityActions(GlobalDiagnosticLogger)
+    private val componentInitializationAttempt = AtomicInteger(0)
+    private val componentStore = ProcessComponentStore(
+        factory = {
+            val attempt = componentInitializationAttempt.incrementAndGet()
+            Log.i(TV_COMPONENT_LOG_TAG, "Initializing Application component. attempt=$attempt")
+            createAppComponent()
+        },
+        onCreated = { result ->
+            val attempt = componentInitializationAttempt.get()
+            result.fold(
+                onSuccess = { Log.i(TV_COMPONENT_LOG_TAG, "Application component initialized. attempt=$attempt") },
+                onFailure = { error ->
+                    Log.e(TV_COMPONENT_LOG_TAG, "Application component initialization failed. attempt=$attempt", error)
+                },
+            )
+        },
+    )
+
     override fun onCreate() {
         super.onCreate()
         if (isCrashReportProcess()) {
             return
         }
         installAndroidUncaughtExceptionHandler(applicationContext)
+    }
+
+    internal fun getOrCreateAppComponent(): Result<LynMusicAppComponent> {
+        return componentStore.getOrCreate()
+    }
+
+    internal fun createActivityActionHost(activity: androidx.activity.ComponentActivity): AndroidActivityActionHost {
+        return AndroidActivityActionHost(activity, activityActions, GlobalDiagnosticLogger)
+    }
+
+    internal suspend fun pickLocalFolder(): LocalFolderSelection? {
+        return activityActions.pickLocalFolder(LocalFolderPickerMode.Automatic)
+    }
+
+    override fun onTerminate() {
+        componentStore.clear { component ->
+            runCatching(component::dispose).fold(
+                onSuccess = { Log.i(TV_COMPONENT_LOG_TAG, "Application component disposed by onTerminate().") },
+                onFailure = { error -> Log.e(TV_COMPONENT_LOG_TAG, "Application component disposal failed.", error) },
+            )
+        }
+        super.onTerminate()
+    }
+
+    private fun createAppComponent(): LynMusicAppComponent {
+        val runtimeGraph = createAndroidRuntimeGraph(
+            context = applicationContext,
+            activityActions = activityActions,
+            platformName = ANDROID_TV_PLATFORM_NAME,
+        )
+        return try {
+            buildPlayerAppComponent(
+                sharedGraph = runtimeGraph.sharedGraph,
+                playerRuntimeServices = runtimeGraph.playerRuntimeServices,
+            )
+        } catch (error: Throwable) {
+            runtimeGraph.disposeAfterComponentBuildFailure()
+                .exceptionOrNull()
+                ?.let(error::addSuppressed)
+            throw error
+        }
     }
 
     private fun isCrashReportProcess(): Boolean {
@@ -106,5 +176,6 @@ private fun resolveCurrentProcessName(context: Context): String? {
 internal const val EXTRA_ANDROID_CRASH_REPORT = "top.iwesley.lyn.music.tv.extra.CRASH_REPORT"
 
 private const val ANDROID_CRASH_LOG_TAG = "LynMusic"
+private const val TV_COMPONENT_LOG_TAG = "LynMusicTvComponent"
 private const val ANDROID_CRASH_EXIT_CODE = 10
 private const val MAX_ANDROID_CRASH_REPORT_CHARS = 120_000

@@ -2,34 +2,31 @@ package top.iwesley.lyn.music.platform
 
 import android.content.Context
 import android.graphics.Typeface
-import android.net.Uri
 import androidx.activity.ComponentActivity
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.documentfile.provider.DocumentFile
 import java.io.File
 import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import kotlin.coroutines.resume
 import top.iwesley.lyn.music.core.model.DEFAULT_LYRICS_SHARE_FONT_PREVIEW_TEXT
+import top.iwesley.lyn.music.core.model.GlobalDiagnosticLogger
 import top.iwesley.lyn.music.core.model.LyricsShareFontKind
 import top.iwesley.lyn.music.core.model.LyricsShareFontLibraryPlatformService
 import top.iwesley.lyn.music.core.model.LyricsShareFontOption
 import top.iwesley.lyn.music.core.model.buildLyricsShareImportedFontKey
 import top.iwesley.lyn.music.core.model.parseLyricsShareImportedFontHash
 
-class AndroidLyricsShareFontLibraryPlatformService(
-    activity: ComponentActivity,
+class AndroidLyricsShareFontLibraryPlatformService internal constructor(
+    context: Context,
+    private val activityActions: AndroidActivityActions,
 ) : LyricsShareFontLibraryPlatformService {
-    private val context = activity.applicationContext
+    constructor(activity: ComponentActivity) : this(
+        context = activity.applicationContext,
+        activityActions = FixedAndroidActivityActions(activity, GlobalDiagnosticLogger),
+    )
+
+    private val context = context.applicationContext
     private val rootDirectory = File(context.filesDir, "lyrics-share-fonts")
-    private var pickFontContinuation: ((Uri?) -> Unit)? = null
-    private val picker = activity.registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        val continuation = pickFontContinuation
-        pickFontContinuation = null
-        continuation?.invoke(uri)
-    }
 
     override suspend fun listImportedFonts(): Result<List<LyricsShareFontOption>> = withContext(Dispatchers.IO) {
         runCatching {
@@ -44,17 +41,7 @@ class AndroidLyricsShareFontLibraryPlatformService(
 
     override suspend fun importFont(): Result<LyricsShareFontOption?> = runCatching {
         rootDirectory.mkdirs()
-        val uri = withContext(Dispatchers.Main) {
-            suspendCancellableCoroutine<Uri?> { continuation ->
-                pickFontContinuation = { pickedUri ->
-                    if (continuation.isActive) {
-                        continuation.resume(pickedUri)
-                    }
-                }
-                continuation.invokeOnCancellation { pickFontContinuation = null }
-                picker.launch("*/*")
-            }
-        } ?: return@runCatching null
+        val uri = activityActions.pickContent("*/*") ?: return@runCatching null
         withContext(Dispatchers.IO) {
             val document = DocumentFile.fromSingleUri(context, uri)
             val originalName = document?.name ?: uri.lastPathSegment.orEmpty()
