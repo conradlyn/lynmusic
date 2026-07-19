@@ -13,6 +13,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
@@ -22,7 +23,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
+import coil3.compose.LocalPlatformContext
 import coil3.compose.rememberAsyncImagePainter
+import coil3.request.ImageRequest
 import java.io.File
 import java.net.URI
 import java.net.URL
@@ -35,6 +38,7 @@ import top.iwesley.lyn.music.core.model.resolveArtworkDecodeSampleSize
 @Composable
 internal fun TvPlaybackArtworkBackground(
     artworkModel: String?,
+    artworkCacheVersion: Long = 0L,
     colors: TvPlaybackBackgroundColors?,
     modifier: Modifier = Modifier,
 ) {
@@ -55,11 +59,20 @@ internal fun TvPlaybackArtworkBackground(
         targetValue = colors?.tertiaryColor ?: Color.Transparent,
         label = "tv-playback-background-tertiary",
     )
+    val context = LocalPlatformContext.current
+    val artworkRequest = remember(context, artworkModel, artworkCacheVersion) {
+        artworkModel?.let { target ->
+            ImageRequest.Builder(context)
+                .data(target)
+                .memoryCacheKey("tv-playback-background:$target:$artworkCacheVersion")
+                .build()
+        }
+    }
 
     Box(modifier = modifier.background(baseColor)) {
         if (shouldRenderTvPlaybackBackgroundArtwork(artworkModel)) {
             Image(
-                painter = rememberAsyncImagePainter(model = artworkModel),
+                painter = rememberAsyncImagePainter(model = artworkRequest),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
@@ -124,8 +137,13 @@ private fun shouldRenderTvPlaybackBackgroundArtwork(artworkModel: String?): Bool
 @Composable
 internal fun rememberTvPlaybackBackgroundColors(
     artworkModel: String?,
+    artworkCacheVersion: Long = 0L,
 ): TvPlaybackBackgroundColors? {
-    val colors by produceState<TvPlaybackBackgroundColors?>(initialValue = null, artworkModel) {
+    val colors by produceState<TvPlaybackBackgroundColors?>(
+        initialValue = null,
+        artworkModel,
+        artworkCacheVersion,
+    ) {
         value = withContext(Dispatchers.IO) {
             deriveTvPlaybackBackgroundColors(artworkModel)
         }

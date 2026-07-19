@@ -54,6 +54,7 @@ import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.RepeatOne
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
@@ -77,6 +78,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
@@ -96,8 +98,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import coil3.compose.LocalPlatformContext
 import coil3.compose.rememberAsyncImagePainter
+import coil3.request.ImageRequest
 import kotlin.math.roundToInt
+import kotlinx.coroutines.flow.flowOf
 import top.iwesley.lyn.music.LynMusicAppComponent
 import top.iwesley.lyn.music.core.model.AppDisplayScalePreset
 import top.iwesley.lyn.music.core.model.ArtworkCacheStore
@@ -249,12 +254,15 @@ private fun TvPlayerScreen(
         return
     }
 
-    val artworkModel = rememberTvPlayerArtworkModel(
+    val artwork = rememberTvPlayerArtworkModel(
         artworkLocator = snapshot.currentDisplayArtworkLocator,
         artworkCacheKey = trackArtworkCacheKey(track),
         artworkCacheStore = artworkCacheStore,
     )
-    val backgroundColors = rememberTvPlaybackBackgroundColors(artworkModel)
+    val backgroundColors = rememberTvPlaybackBackgroundColors(
+        artworkModel = artwork.target,
+        artworkCacheVersion = artwork.cacheVersion,
+    )
     val lyricsTitle = remember(
         snapshot.currentDisplayArtistName,
         snapshot.currentDisplayTitle,
@@ -267,19 +275,32 @@ private fun TvPlayerScreen(
         "$artistName $title"
     }
     val playPauseFocusRequester = remember { FocusRequester() }
+    val lyricsSearchButtonFocusRequester = remember { FocusRequester() }
+    val playbackModeFocusRequester = remember { FocusRequester() }
     val queueButtonFocusRequester = remember { FocusRequester() }
     var initialPlayPauseFocusRequested by remember { mutableStateOf(false) }
-    LaunchedEffect(state.isQueueVisible) {
-        if (!initialPlayPauseFocusRequested && !state.isQueueVisible) {
+    var lyricsSearchWasVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(state.isQueueVisible, state.isManualLyricsSearchVisible) {
+        if (!initialPlayPauseFocusRequested && !state.isQueueVisible && !state.isManualLyricsSearchVisible) {
             withFrameNanos { }
             playPauseFocusRequester.requestFocus()
             initialPlayPauseFocusRequested = true
         }
     }
+    LaunchedEffect(state.isManualLyricsSearchVisible) {
+        if (state.isManualLyricsSearchVisible) {
+            lyricsSearchWasVisible = true
+        } else if (lyricsSearchWasVisible) {
+            withFrameNanos { }
+            lyricsSearchButtonFocusRequester.requestFocus()
+            lyricsSearchWasVisible = false
+        }
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         TvPlaybackArtworkBackground(
-            artworkModel = artworkModel,
+            artworkModel = artwork.target,
+            artworkCacheVersion = artwork.cacheVersion,
             colors = backgroundColors,
             modifier = Modifier.fillMaxSize(),
         )
@@ -299,7 +320,8 @@ private fun TvPlayerScreen(
                 TvPlayerInfoPane(
                     snapshot = snapshot,
                     track = track,
-                    artworkModel = artworkModel,
+                    artworkModel = artwork.target,
+                    artworkCacheVersion = artwork.cacheVersion,
                     modifier = Modifier
                         .weight(0.48f)
                         .fillMaxHeight(),
@@ -316,6 +338,8 @@ private fun TvPlayerScreen(
                 snapshot = snapshot,
                 isFavorite = track.id in favoriteTrackIds,
                 playPauseFocusRequester = playPauseFocusRequester,
+                lyricsSearchButtonFocusRequester = lyricsSearchButtonFocusRequester,
+                playbackModeFocusRequester = playbackModeFocusRequester,
                 queueButtonFocusRequester = queueButtonFocusRequester,
                 onPlayerIntent = onPlayerIntent,
                 onToggleFavorite = { onToggleFavorite(track) },
@@ -327,6 +351,13 @@ private fun TvPlayerScreen(
             onPlayerIntent = onPlayerIntent,
             modifier = Modifier.fillMaxSize(),
         )
+        if (state.isManualLyricsSearchVisible) {
+            TvLyricsSearchOverlay(
+                state = state,
+                artworkCacheStore = artworkCacheStore,
+                onPlayerIntent = onPlayerIntent,
+            )
+        }
         TvPlayerToast(
             message = toastMessage,
             modifier = Modifier
@@ -342,6 +373,7 @@ private fun TvPlayerInfoPane(
     snapshot: PlaybackSnapshot,
     track: Track,
     artworkModel: String?,
+    artworkCacheVersion: Long,
     modifier: Modifier = Modifier,
 ) {
     val audioQuality = remember(
@@ -362,6 +394,7 @@ private fun TvPlayerInfoPane(
     ) {
         TvPlayerArtwork(
             artworkModel = artworkModel,
+            artworkCacheVersion = artworkCacheVersion,
             modifier = Modifier
                 .fillMaxWidth(0.76f)
                 .aspectRatio(1f),
@@ -411,6 +444,7 @@ private fun TvPlayerInfoPane(
 @Composable
 private fun TvPlayerArtwork(
     artworkModel: String?,
+    artworkCacheVersion: Long,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -418,6 +452,7 @@ private fun TvPlayerArtwork(
     ) {
         TvPlayerArtworkImage(
             model = artworkModel,
+            cacheVersion = artworkCacheVersion,
             modifier = Modifier.fillMaxSize(),
         )
     }
@@ -476,6 +511,8 @@ private fun TvPlayerBottomControls(
     snapshot: PlaybackSnapshot,
     isFavorite: Boolean,
     playPauseFocusRequester: FocusRequester,
+    lyricsSearchButtonFocusRequester: FocusRequester,
+    playbackModeFocusRequester: FocusRequester,
     queueButtonFocusRequester: FocusRequester,
     onPlayerIntent: (PlayerIntent) -> Unit,
     onToggleFavorite: () -> Unit,
@@ -490,49 +527,72 @@ private fun TvPlayerBottomControls(
             onPlayerIntent = onPlayerIntent,
             modifier = Modifier.fillMaxWidth(),
         )
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        Box(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = Alignment.Center,
         ) {
-            IconButton(onClick = { onPlayerIntent(PlayerIntent.CycleMode) }) {
+            IconButton(
+                onClick = { onPlayerIntent(PlayerIntent.OpenManualLyricsSearch) },
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .focusRequester(lyricsSearchButtonFocusRequester)
+                    .focusProperties { right = playbackModeFocusRequester },
+            ) {
                 Icon(
-                    imageVector = tvPlaybackModeIcon(snapshot.mode),
-                    contentDescription = "播放模式",
+                    imageVector = Icons.Rounded.Search,
+                    contentDescription = "搜索歌词",
                     tint = MaterialTheme.colorScheme.onSurface,
                 )
             }
-            IconButton(onClick = { onPlayerIntent(PlayerIntent.SkipPrevious) }) {
-                Icon(Icons.Rounded.SkipPrevious, contentDescription = "上一首")
-            }
-            IconButton(
-                onClick = { onPlayerIntent(PlayerIntent.TogglePlayPause) },
-                modifier = Modifier.focusRequester(playPauseFocusRequester),
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    imageVector = if (snapshot.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                    contentDescription = if (snapshot.isPlaying) "暂停" else "播放",
-                    modifier = Modifier.size(36.dp),
-                )
-            }
-            IconButton(onClick = { onPlayerIntent(PlayerIntent.SkipNext) }) {
-                Icon(Icons.Rounded.SkipNext, contentDescription = "下一首")
-            }
-            IconButton(onClick = onToggleFavorite) {
-                Icon(
-                    imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                    contentDescription = if (isFavorite) "取消喜欢" else "喜欢",
-                    tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                )
-            }
-            IconButton(
-                onClick = { onPlayerIntent(PlayerIntent.QueueVisibilityChanged(true)) },
-                modifier = Modifier.focusRequester(queueButtonFocusRequester),
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
-                    contentDescription = "播放列表",
-                    tint = MaterialTheme.colorScheme.onSurface,
-                )
+                IconButton(
+                    onClick = { onPlayerIntent(PlayerIntent.CycleMode) },
+                    modifier = Modifier
+                        .focusRequester(playbackModeFocusRequester)
+                        .focusProperties { left = lyricsSearchButtonFocusRequester },
+                ) {
+                    Icon(
+                        imageVector = tvPlaybackModeIcon(snapshot.mode),
+                        contentDescription = "播放模式",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+                IconButton(onClick = { onPlayerIntent(PlayerIntent.SkipPrevious) }) {
+                    Icon(Icons.Rounded.SkipPrevious, contentDescription = "上一首")
+                }
+                IconButton(
+                    onClick = { onPlayerIntent(PlayerIntent.TogglePlayPause) },
+                    modifier = Modifier.focusRequester(playPauseFocusRequester),
+                ) {
+                    Icon(
+                        imageVector = if (snapshot.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                        contentDescription = if (snapshot.isPlaying) "暂停" else "播放",
+                        modifier = Modifier.size(36.dp),
+                    )
+                }
+                IconButton(onClick = { onPlayerIntent(PlayerIntent.SkipNext) }) {
+                    Icon(Icons.Rounded.SkipNext, contentDescription = "下一首")
+                }
+                IconButton(onClick = onToggleFavorite) {
+                    Icon(
+                        imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                        contentDescription = if (isFavorite) "取消喜欢" else "喜欢",
+                        tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+                IconButton(
+                    onClick = { onPlayerIntent(PlayerIntent.QueueVisibilityChanged(true)) },
+                    modifier = Modifier.focusRequester(queueButtonFocusRequester),
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
+                        contentDescription = "播放列表",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
             }
         }
     }
@@ -923,9 +983,19 @@ private fun TvPlayerQueueTrackRow(
 @Composable
 private fun TvPlayerArtworkImage(
     model: String?,
+    cacheVersion: Long,
     modifier: Modifier = Modifier,
 ) {
-    val painter = rememberAsyncImagePainter(model = model)
+    val context = LocalPlatformContext.current
+    val imageRequest = remember(context, model, cacheVersion) {
+        model?.let { target ->
+            ImageRequest.Builder(context)
+                .data(target)
+                .memoryCacheKey("tv-player-artwork:$target:$cacheVersion")
+                .build()
+        }
+    }
+    val painter = rememberAsyncImagePainter(model = imageRequest)
     Box(
         modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant),
         contentAlignment = Alignment.Center,
@@ -948,22 +1018,42 @@ private fun TvPlayerArtworkImage(
     }
 }
 
+private data class TvPlayerArtworkModel(
+    val target: String?,
+    val cacheVersion: Long,
+)
+
 @Composable
 private fun rememberTvPlayerArtworkModel(
     artworkLocator: String?,
     artworkCacheKey: String?,
     artworkCacheStore: ArtworkCacheStore,
-): String? {
-    val model by produceState<String?>(initialValue = null, artworkLocator, artworkCacheKey, artworkCacheStore) {
-        val normalized = normalizedArtworkCacheLocator(artworkLocator)
+): TvPlayerArtworkModel {
+    val normalized = remember(artworkLocator) { normalizedArtworkCacheLocator(artworkLocator) }
+    val requestCacheKey = remember(artworkCacheKey, normalized) {
+        artworkCacheKey?.trim()?.takeIf { it.isNotBlank() } ?: normalized
+    }
+    val cacheVersion by remember(artworkCacheStore, requestCacheKey) {
+        requestCacheKey?.let(artworkCacheStore::observeVersion) ?: flowOf(0L)
+    }.collectAsState(initial = 0L)
+    val model by produceState<String?>(
+        initialValue = null,
+        normalized,
+        requestCacheKey,
+        cacheVersion,
+        artworkCacheStore,
+    ) {
         value = when {
             normalized == null -> null
-            artworkCacheKey != null -> artworkCacheStore.cache(normalized, artworkCacheKey)
+            requestCacheKey != null -> artworkCacheStore.cache(normalized, requestCacheKey)
                 ?: resolveArtworkCacheTarget(normalized)
             else -> resolveArtworkCacheTarget(normalized)
         }
     }
-    return model
+    return TvPlayerArtworkModel(
+        target = model,
+        cacheVersion = cacheVersion,
+    )
 }
 
 @Composable
