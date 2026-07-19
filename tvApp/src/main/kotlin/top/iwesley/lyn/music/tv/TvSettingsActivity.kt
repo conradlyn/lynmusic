@@ -2770,6 +2770,7 @@ private enum class TvSettingsSection(
 private fun ImportScanOperation.sourceIdOrNull(): String? {
     return when (this) {
         is ImportScanOperation.RescanSource -> sourceId
+        is ImportScanOperation.ReauthorizeLocalFolder -> sourceId
         is ImportScanOperation.UpdateRemote -> sourceId
         ImportScanOperation.CreateLocalFolder,
         is ImportScanOperation.CreateRemote -> null
