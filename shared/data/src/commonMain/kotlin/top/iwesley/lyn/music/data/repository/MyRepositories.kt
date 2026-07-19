@@ -23,6 +23,7 @@ import top.iwesley.lyn.music.core.model.RecentTrack
 import top.iwesley.lyn.music.core.model.SecureCredentialStore
 import top.iwesley.lyn.music.core.model.SubsonicAuthMode
 import top.iwesley.lyn.music.core.model.Track
+import top.iwesley.lyn.music.core.model.info
 import top.iwesley.lyn.music.core.model.warn
 import top.iwesley.lyn.music.data.db.AlbumEntity
 import top.iwesley.lyn.music.data.db.DailyRecommendationEntity
@@ -236,8 +237,8 @@ class RoomMyRepository(
         val enabledSourceIds = database.importSourceDao()
             .getAll()
             .enabledSourceIds()
-        val tracks = database.trackDao()
-            .getAll()
+        val allTracks = database.trackDao().getAll()
+        val tracks = allTracks
             .filter { it.sourceId in enabledSourceIds }
         if (tracks.isEmpty()) return emptyList()
         val trackIds = tracks.map { it.id }
@@ -247,22 +248,36 @@ class RoomMyRepository(
         val favoriteTracks = database.favoriteTrackDao()
             .getAll()
             .filter { it.sourceId in enabledSourceIds }
-        val recentRecommendationTrackIds = database.dailyRecommendationDao()
+        val tracksById = allTracks.associateBy { it.id }
+        val recentRecommendationExposures = database.dailyRecommendationDao()
             .getRecentBefore(
                 dateKey = dateKey,
-                sinceGeneratedAt = generatedAt - RECENT_RECOMMENDATION_PENALTY_WINDOW_MS,
+                sinceGeneratedAt = generatedAt - DAILY_RECOMMENDATION_HISTORY_WINDOW_MS,
             )
-            .flatMap { decodeDailyRecommendationTrackIds(it.trackIds) }
-            .toSet()
-        return rankDailyRecommendationTrackIds(
+            .flatMap { recommendation ->
+                decodeDailyRecommendationTrackIds(recommendation.trackIds).map { trackId ->
+                    DailyRecommendationExposure(
+                        trackId = trackId,
+                        track = tracksById[trackId],
+                        recommendedAt = recommendation.generatedAt,
+                    )
+                }
+            }
+        val ranking = rankDailyRecommendationTracks(
             tracks = tracks,
             favoriteTracks = favoriteTracks,
             trackStats = trackStats,
-            recentRecommendationTrackIds = recentRecommendationTrackIds,
+            recentRecommendationExposures = recentRecommendationExposures,
             dateKey = dateKey,
             nowMs = generatedAt,
             limit = dailyRecommendationLimit,
         )
+        logger.info(MY_LOG_TAG) {
+            "daily-recommendation-generated date=$dateKey candidates=${ranking.candidateCount} " +
+                "hardExcluded=${ranking.hardExcludedCount} softPenalized=${ranking.softPenalizedCount} " +
+                "backfilled=${ranking.backfilledCount} selected=${ranking.trackIds.size}"
+        }
+        return ranking.trackIds
     }
 
     private suspend fun refreshEmbyRecentPlays(source: ImportSourceEntity) {
@@ -531,16 +546,118 @@ private fun resolveSyncedPlayCount(remotePlayCount: Int?, existingPlayCount: Int
     return (remotePlayCount ?: existingPlayCount ?: 1).coerceAtLeast(1)
 }
 
+internal data class DailyRecommendationExposure(
+    val trackId: String,
+    val track: TrackEntity?,
+    val recommendedAt: Long,
+)
+
+internal data class DailyRecommendationSongIdentity(
+    val trackId: String,
+    val titleKey: String?,
+    val artistKey: String?,
+    val albumKey: String?,
+    val durationMs: Long,
+)
+
+internal data class DailyRecommendationExposureSummary(
+    val exposureCount: Int = 0,
+    val lastRecommendedAt: Long? = null,
+) {
+    fun isHardExcluded(nowMs: Long): Boolean {
+        val recommendedAt = lastRecommendedAt ?: return false
+        return recommendationAgeMs(nowMs, recommendedAt) < DAILY_RECOMMENDATION_HARD_EXCLUSION_WINDOW_MS
+    }
+}
+
+internal data class DailyRecommendationRankingResult(
+    val trackIds: List<String>,
+    val candidateCount: Int,
+    val hardExcludedCount: Int,
+    val softPenalizedCount: Int,
+    val backfilledCount: Int,
+)
+
+internal fun dailyRecommendationSongIdentity(track: TrackEntity): DailyRecommendationSongIdentity {
+    return DailyRecommendationSongIdentity(
+        trackId = track.id,
+        titleKey = track.title.recommendationIdentityTextKey(),
+        artistKey = track.artistName.recommendationIdentityTextKey(),
+        albumKey = track.albumTitle.recommendationIdentityTextKey(),
+        durationMs = track.durationMs.coerceAtLeast(0L),
+    )
+}
+
+internal fun areSameDailyRecommendationSong(
+    left: DailyRecommendationSongIdentity,
+    right: DailyRecommendationSongIdentity,
+): Boolean {
+    if (left.trackId == right.trackId) return true
+    if (left.titleKey == null || left.artistKey == null) return false
+    if (left.titleKey != right.titleKey || left.artistKey != right.artistKey) return false
+    if (left.durationMs > 0L && right.durationMs > 0L) {
+        return kotlin.math.abs(left.durationMs - right.durationMs) <= DAILY_RECOMMENDATION_DURATION_TOLERANCE_MS
+    }
+    return left.albumKey != null && left.albumKey == right.albumKey
+}
+
+internal fun dailyRecommendationHistoryPenalty(
+    summary: DailyRecommendationExposureSummary,
+    nowMs: Long,
+): Double {
+    val recommendedAt = summary.lastRecommendedAt ?: return 0.0
+    if (summary.exposureCount <= 0) return 0.0
+    val ageMs = recommendationAgeMs(nowMs, recommendedAt)
+    if (ageMs > DAILY_RECOMMENDATION_HISTORY_WINDOW_MS) return 0.0
+    val softWindowMs =
+        DAILY_RECOMMENDATION_HISTORY_WINDOW_MS - DAILY_RECOMMENDATION_HARD_EXCLUSION_WINDOW_MS
+    val recencyFactor = (DAILY_RECOMMENDATION_HISTORY_WINDOW_MS - ageMs)
+        .coerceIn(0L, softWindowMs)
+        .toDouble() / softWindowMs.toDouble()
+    val frequencyPenalty = (summary.exposureCount * DAILY_RECOMMENDATION_FREQUENCY_PENALTY_STEP)
+        .coerceAtMost(DAILY_RECOMMENDATION_MAX_FREQUENCY_PENALTY)
+    return DAILY_RECOMMENDATION_MAX_RECENCY_PENALTY * recencyFactor + frequencyPenalty
+}
+
 internal fun rankDailyRecommendationTrackIds(
     tracks: List<TrackEntity>,
     favoriteTracks: List<FavoriteTrackEntity>,
     trackStats: Map<String, TrackPlaybackStatsEntity>,
-    recentRecommendationTrackIds: Set<String>,
+    recentRecommendationExposures: List<DailyRecommendationExposure>,
     dateKey: String,
     nowMs: Long,
     limit: Int = DEFAULT_DAILY_RECOMMENDATION_LIMIT,
 ): List<String> {
-    if (tracks.isEmpty() || limit <= 0) return emptyList()
+    return rankDailyRecommendationTracks(
+        tracks = tracks,
+        favoriteTracks = favoriteTracks,
+        trackStats = trackStats,
+        recentRecommendationExposures = recentRecommendationExposures,
+        dateKey = dateKey,
+        nowMs = nowMs,
+        limit = limit,
+    ).trackIds
+}
+
+internal fun rankDailyRecommendationTracks(
+    tracks: List<TrackEntity>,
+    favoriteTracks: List<FavoriteTrackEntity>,
+    trackStats: Map<String, TrackPlaybackStatsEntity>,
+    recentRecommendationExposures: List<DailyRecommendationExposure>,
+    dateKey: String,
+    nowMs: Long,
+    limit: Int = DEFAULT_DAILY_RECOMMENDATION_LIMIT,
+): DailyRecommendationRankingResult {
+    if (tracks.isEmpty() || limit <= 0) {
+        return DailyRecommendationRankingResult(
+            trackIds = emptyList(),
+            candidateCount = tracks.size,
+            hardExcludedCount = 0,
+            softPenalizedCount = 0,
+            backfilledCount = 0,
+        )
+    }
+    val historyIndex = DailyRecommendationHistoryIndex(recentRecommendationExposures, nowMs)
     val favoriteTrackIds = favoriteTracks.map { it.trackId }.toSet()
     val tracksById = tracks.associateBy { it.id }
     val favoriteArtistKeys = favoriteTrackIds
@@ -562,79 +679,137 @@ internal fun rankDailyRecommendationTrackIds(
             val stats = trackStats[track.id]
             val artistKey = track.artistName.recommendationTextKey()
             val albumKey = track.albumId.recommendationTextKey() ?: track.albumTitle.recommendationTextKey()
-            val titleKey = track.title.recommendationTextKey()
             val playCount = stats?.playCount ?: 0
             val seededHash = stableRecommendationHash(dateKey, track.id)
-            var score = 0.0
-            if (track.id in favoriteTrackIds) score += 0.25
-            score += (playCount.toDouble() / maxPlayCount.toDouble()) * 0.25
-            if (artistKey != null && (artistKey in favoriteArtistKeys || artistKey in frequentArtistKeys)) score += 0.12
-            if (albumKey != null && (albumKey in favoriteAlbumKeys || albumKey in frequentAlbumKeys)) score += 0.10
+            var baseScore = 0.0
+            if (track.id in favoriteTrackIds) baseScore += 0.25
+            baseScore += (playCount.toDouble() / maxPlayCount.toDouble()) * 0.25
+            if (artistKey != null && (artistKey in favoriteArtistKeys || artistKey in frequentArtistKeys)) baseScore += 0.12
+            if (albumKey != null && (albumKey in favoriteAlbumKeys || albumKey in frequentAlbumKeys)) baseScore += 0.10
             val lastPlayedAt = stats?.lastPlayedAt
             if (lastPlayedAt != null) {
                 val ageMs = nowMs - lastPlayedAt
-                if (ageMs >= THIRTY_DAYS_MS) score += 0.12
-                if (ageMs in 0..THREE_DAYS_MS) score -= 0.30
+                if (ageMs >= THIRTY_DAYS_MS) baseScore += 0.12
+                if (ageMs in 0..THREE_DAYS_MS) baseScore -= 0.30
             }
             val addedAgeMs = nowMs - track.addedAt
-            if (addedAgeMs in 0..THIRTY_DAYS_MS && playCount <= 1) score += 0.10
-            if (track.id in recentRecommendationTrackIds) score -= 0.45
-            score += stableRecommendationFraction(seededHash) * 0.08
+            if (addedAgeMs in 0..THIRTY_DAYS_MS && playCount <= 1) baseScore += 0.10
+            baseScore += stableRecommendationFraction(seededHash) * 0.08
+            val songIdentity = dailyRecommendationSongIdentity(track)
+            val exposureSummary = historyIndex.summary(track, songIdentity)
+            val historyPenalty = dailyRecommendationHistoryPenalty(exposureSummary, nowMs)
             DailyRecommendationCandidate(
                 track = track,
-                score = score,
+                adjustedScore = baseScore - historyPenalty,
                 seededHash = seededHash,
                 artistKey = artistKey,
                 albumKey = albumKey,
-                titleKey = titleKey,
+                songIdentity = songIdentity,
+                exposureSummary = exposureSummary,
+                hardExcluded = exposureSummary.isHardExcluded(nowMs),
             )
         }
-        .sortedWith(
-            compareByDescending<DailyRecommendationCandidate> { it.score }
-                .thenBy { it.seededHash }
-                .thenBy { it.track.title.trim().lowercase() }
-                .thenBy { it.track.id },
-        )
+    val regularComparator = compareByDescending<DailyRecommendationCandidate> { it.adjustedScore }
+        .thenBy { it.seededHash }
+        .thenBy { it.track.title.trim().lowercase() }
+        .thenBy { it.track.id }
+    val eligible = scored.filterNot { it.hardExcluded }.sortedWith(regularComparator)
+    val hardExcluded = scored.filter { it.hardExcluded }.sortedWith(
+        compareBy<DailyRecommendationCandidate> { it.exposureSummary.exposureCount }
+            .thenBy { it.exposureSummary.lastRecommendedAt ?: Long.MIN_VALUE }
+            .thenByDescending { it.adjustedScore }
+            .thenBy { it.seededHash }
+            .thenBy { it.track.id },
+    )
     val selected = mutableListOf<DailyRecommendationCandidate>()
-    val selectedIds = mutableSetOf<String>()
-    val selectedTitleKeys = mutableSetOf<String>()
     val artistCounts = mutableMapOf<String, Int>()
     val albumCounts = mutableMapOf<String, Int>()
-    scored.forEach { candidate ->
-        if (selected.size >= limit) return@forEach
-        if (candidate.titleKey != null && candidate.titleKey in selectedTitleKeys) return@forEach
+
+    fun addCandidate(candidate: DailyRecommendationCandidate, enforceArtistAndAlbumLimits: Boolean): Boolean {
+        if (selected.size >= limit) return false
+        if (selected.any { areSameDailyRecommendationSong(it.songIdentity, candidate.songIdentity) }) return false
         val artistCount = candidate.artistKey?.let { artistCounts[it] } ?: 0
         val albumCount = candidate.albumKey?.let { albumCounts[it] } ?: 0
-        if (artistCount >= DAILY_RECOMMENDATION_ARTIST_LIMIT) return@forEach
-        if (albumCount >= DAILY_RECOMMENDATION_ALBUM_LIMIT) return@forEach
+        if (enforceArtistAndAlbumLimits && artistCount >= DAILY_RECOMMENDATION_ARTIST_LIMIT) return false
+        if (enforceArtistAndAlbumLimits && albumCount >= DAILY_RECOMMENDATION_ALBUM_LIMIT) return false
         selected += candidate
-        selectedIds += candidate.track.id
-        candidate.titleKey?.let(selectedTitleKeys::add)
         candidate.artistKey?.let { artistCounts[it] = artistCount + 1 }
         candidate.albumKey?.let { albumCounts[it] = albumCount + 1 }
+        return true
+    }
+
+    eligible.forEach { candidate ->
+        addCandidate(candidate, enforceArtistAndAlbumLimits = true)
     }
     if (selected.size < limit) {
-        scored.forEach { candidate ->
+        eligible.forEach { candidate ->
             if (selected.size >= limit) return@forEach
-            if (candidate.track.id !in selectedIds &&
-                (candidate.titleKey == null || candidate.titleKey !in selectedTitleKeys)
-            ) {
-                selected += candidate
-                selectedIds += candidate.track.id
-                candidate.titleKey?.let(selectedTitleKeys::add)
+            addCandidate(candidate, enforceArtistAndAlbumLimits = false)
+        }
+    }
+    var backfilledCount = 0
+    if (selected.size < limit) {
+        hardExcluded.forEach { candidate ->
+            if (selected.size >= limit) return@forEach
+            if (addCandidate(candidate, enforceArtistAndAlbumLimits = false)) {
+                backfilledCount += 1
             }
         }
     }
-    if (selected.size < limit) {
-        scored.forEach { candidate ->
-            if (selected.size >= limit) return@forEach
-            if (candidate.track.id !in selectedIds) {
-                selected += candidate
-                selectedIds += candidate.track.id
-            }
-        }
+    return DailyRecommendationRankingResult(
+        trackIds = selected.take(limit).map { it.track.id },
+        candidateCount = tracks.size,
+        hardExcludedCount = hardExcluded.size,
+        softPenalizedCount = eligible.count { it.exposureSummary.exposureCount > 0 },
+        backfilledCount = backfilledCount,
+    )
+}
+
+private class DailyRecommendationHistoryIndex(
+    exposures: List<DailyRecommendationExposure>,
+    nowMs: Long,
+) {
+    private val recentExposures = exposures.filter { exposure ->
+        recommendationAgeMs(nowMs, exposure.recommendedAt) <= DAILY_RECOMMENDATION_HISTORY_WINDOW_MS
     }
-    return selected.take(limit).map { it.track.id }
+    private val byTrackId = recentExposures.groupBy { it.trackId }
+    private val byLogicalBase = recentExposures
+        .mapNotNull { exposure ->
+            val identity = exposure.track?.let(::dailyRecommendationSongIdentity) ?: return@mapNotNull null
+            identity.logicalBaseKey()?.let { key -> key to exposure }
+        }
+        .groupBy(keySelector = { it.first }, valueTransform = { it.second })
+
+    fun summary(
+        track: TrackEntity,
+        identity: DailyRecommendationSongIdentity = dailyRecommendationSongIdentity(track),
+    ): DailyRecommendationExposureSummary {
+        val candidates = buildSet {
+            addAll(byTrackId[track.id].orEmpty())
+            identity.logicalBaseKey()?.let { key -> addAll(byLogicalBase[key].orEmpty()) }
+        }
+        val matching = candidates.filter { exposure ->
+            exposure.trackId == track.id || exposure.track
+                ?.let(::dailyRecommendationSongIdentity)
+                ?.let { exposedIdentity -> areSameDailyRecommendationSong(identity, exposedIdentity) }
+                ?: false
+        }
+        return DailyRecommendationExposureSummary(
+            exposureCount = matching.size,
+            lastRecommendedAt = matching.maxOfOrNull { it.recommendedAt },
+        )
+    }
+}
+
+private data class DailyRecommendationLogicalBaseKey(
+    val titleKey: String,
+    val artistKey: String,
+)
+
+private fun DailyRecommendationSongIdentity.logicalBaseKey(): DailyRecommendationLogicalBaseKey? {
+    val title = titleKey ?: return null
+    val artist = artistKey ?: return null
+    return DailyRecommendationLogicalBaseKey(title, artist)
 }
 
 private fun encodeDailyRecommendationTrackIds(trackIds: List<String>): String {
@@ -653,6 +828,26 @@ private fun decodeDailyRecommendationTrackIds(payload: String): List<String> {
 
 private fun String?.recommendationTextKey(): String? {
     return this?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
+}
+
+private fun String?.recommendationIdentityTextKey(): String? {
+    val value = this?.trim()?.lowercase()?.takeIf { it.isNotBlank() } ?: return null
+    return buildString {
+        var separatorPending = false
+        value.forEach { char ->
+            if (char.isLetterOrDigit()) {
+                if (separatorPending && isNotEmpty()) append(' ')
+                append(char)
+                separatorPending = false
+            } else if (isNotEmpty()) {
+                separatorPending = true
+            }
+        }
+    }.takeIf { it.isNotBlank() }
+}
+
+private fun recommendationAgeMs(nowMs: Long, recommendedAt: Long): Long {
+    return (nowMs - recommendedAt).coerceAtLeast(0L)
 }
 
 private fun stableRecommendationFraction(hash: Long): Double {
@@ -721,11 +916,13 @@ private data class EmbyAlbumRecentSync(
 
 private data class DailyRecommendationCandidate(
     val track: TrackEntity,
-    val score: Double,
+    val adjustedScore: Double,
     val seededHash: Long,
     val artistKey: String?,
     val albumKey: String?,
-    val titleKey: String?,
+    val songIdentity: DailyRecommendationSongIdentity,
+    val exposureSummary: DailyRecommendationExposureSummary,
+    val hardExcluded: Boolean,
 )
 
 private const val DEFAULT_RECENT_ITEM_LIMIT = 20
@@ -733,7 +930,12 @@ private const val DEFAULT_DAILY_RECOMMENDATION_LIMIT = 30
 private const val NAVIDROME_RECENT_ALBUM_FETCH_SIZE = 50
 private const val THREE_DAYS_MS = 3L * 24L * 60L * 60L * 1_000L
 private const val THIRTY_DAYS_MS = 30L * 24L * 60L * 60L * 1_000L
-private const val RECENT_RECOMMENDATION_PENALTY_WINDOW_MS = 7L * 24L * 60L * 60L * 1_000L
+private const val DAILY_RECOMMENDATION_HARD_EXCLUSION_WINDOW_MS = 7L * 24L * 60L * 60L * 1_000L
+private const val DAILY_RECOMMENDATION_HISTORY_WINDOW_MS = 30L * 24L * 60L * 60L * 1_000L
+private const val DAILY_RECOMMENDATION_DURATION_TOLERANCE_MS = 5_000L
+private const val DAILY_RECOMMENDATION_MAX_RECENCY_PENALTY = 0.40
+private const val DAILY_RECOMMENDATION_FREQUENCY_PENALTY_STEP = 0.10
+private const val DAILY_RECOMMENDATION_MAX_FREQUENCY_PENALTY = 0.30
 private const val FREQUENT_PREFERENCE_SAMPLE_SIZE = 12
 private const val DAILY_RECOMMENDATION_ARTIST_LIMIT = 2
 private const val DAILY_RECOMMENDATION_ALBUM_LIMIT = 2

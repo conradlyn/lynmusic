@@ -6,8 +6,10 @@ import java.nio.file.Files
 import kotlin.io.path.absolutePathString
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -508,6 +510,66 @@ class MyRepositoryTest {
     }
 
     @Test
+    fun `daily recommendation generation excludes recent logical song across sources`() = runTest {
+        val database = createMyTestDatabase()
+        val dateProvider = FakeDailyRecommendationDateKeyProvider("2026-05-02")
+        val repository = RoomMyRepository(
+            database = database,
+            secureCredentialStore = MyCredentialStore(),
+            httpClient = RecordingMyHttpClient(),
+            dailyRecommendationDateKeyProvider = dateProvider,
+        )
+
+        try {
+            seedSource(database, sourceId = "local-1", type = "LOCAL_FOLDER", enabled = true)
+            seedSource(database, sourceId = "remote-1", type = "EMBY", enabled = true)
+            val historicalTrack = trackEntity(
+                trackId = "historical-copy",
+                sourceId = "local-1",
+                title = "Shared Song",
+                albumId = "album-shared",
+                albumTitle = "Shared Album",
+                artistName = "Shared Artist",
+            )
+            val remoteCopy = trackEntity(
+                trackId = "remote-copy",
+                sourceId = "remote-1",
+                title = " shared—song ",
+                albumId = "remote-album-shared",
+                albumTitle = "Shared Album",
+                artistName = "shared artist",
+                durationMs = 184_000L,
+            )
+            val freshTracks = (1..30).map { index ->
+                trackEntity(
+                    trackId = "fresh-$index",
+                    sourceId = "remote-1",
+                    title = "Fresh $index",
+                    albumId = "album-$index",
+                    albumTitle = "Album $index",
+                    artistName = "Artist $index",
+                )
+            }
+            database.trackDao().upsertAll(listOf(historicalTrack, remoteCopy) + freshTracks)
+            database.dailyRecommendationDao().upsert(
+                DailyRecommendationEntity(
+                    dateKey = "2026-05-01",
+                    generatedAt = Clock.System.now().toEpochMilliseconds() - 1.daysMs(),
+                    trackIds = """["historical-copy"]""",
+                ),
+            )
+
+            assertTrue(repository.ensureDailyRecommendation().isSuccess)
+            val recommendation = repository.dailyRecommendation.first()
+
+            assertEquals(30, recommendation.size)
+            assertFalse(recommendation.any { it.id == "historical-copy" || it.id == "remote-copy" })
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
     fun `daily recommendation ranking rewards liked and played tracks`() {
         val now = 10_000_000_000L
         val tracks = listOf(
@@ -527,7 +589,7 @@ class MyRepositoryTest {
                     lastPlayedAt = now - 40.daysMs(),
                 ),
             ),
-            recentRecommendationTrackIds = emptySet(),
+            recentRecommendationExposures = emptyList(),
             dateKey = "2026-05-01",
             nowMs = now,
             limit = 3,
@@ -549,7 +611,13 @@ class MyRepositoryTest {
             tracks = tracks,
             favoriteTracks = listOf(favoriteEntity("recently-recommended")),
             trackStats = emptyMap(),
-            recentRecommendationTrackIds = setOf("recently-recommended"),
+            recentRecommendationExposures = listOf(
+                DailyRecommendationExposure(
+                    trackId = "recently-recommended",
+                    track = tracks.first { it.id == "recently-recommended" },
+                    recommendedAt = now - 1.daysMs(),
+                ),
+            ),
             dateKey = "2026-05-01",
             nowMs = now,
             limit = 2,
@@ -559,11 +627,11 @@ class MyRepositoryTest {
     }
 
     @Test
-    fun `daily recommendation ranking avoids duplicate normalized titles when unique titles are available`() {
+    fun `daily recommendation ranking avoids duplicate logical songs when unique songs are available`() {
         val now = 10_000_000_000L
         val tracks = listOf(
             trackEntity("same-liked", "local-1", "Same Song", null, null, artistName = "Artist A", addedAt = now - 90.daysMs()),
-            trackEntity("same-plain", "local-1", " same song ", null, null, artistName = "Artist B", addedAt = now - 90.daysMs()),
+            trackEntity("same-plain", "local-1", " same song ", null, null, artistName = "Artist A", addedAt = now - 90.daysMs()),
             trackEntity("unique-a", "local-1", "Unique A", null, null, artistName = "Artist C", addedAt = now - 90.daysMs()),
             trackEntity("unique-b", "local-1", "Unique B", null, null, artistName = "Artist D", addedAt = now - 90.daysMs()),
         )
@@ -572,7 +640,7 @@ class MyRepositoryTest {
             tracks = tracks,
             favoriteTracks = listOf(favoriteEntity("same-liked")),
             trackStats = emptyMap(),
-            recentRecommendationTrackIds = emptySet(),
+            recentRecommendationExposures = emptyList(),
             dateKey = "2026-05-01",
             nowMs = now,
             limit = 3,
@@ -588,7 +656,7 @@ class MyRepositoryTest {
     }
 
     @Test
-    fun `daily recommendation ranking allows duplicate titles when unique titles cannot fill limit`() {
+    fun `daily recommendation ranking does not duplicate logical song to fill limit`() {
         val now = 10_000_000_000L
         val tracks = listOf(
             trackEntity("same-a", "local-1", "Same Song", null, null, addedAt = now - 90.daysMs()),
@@ -600,14 +668,261 @@ class MyRepositoryTest {
             tracks = tracks,
             favoriteTracks = emptyList(),
             trackStats = emptyMap(),
-            recentRecommendationTrackIds = emptySet(),
+            recentRecommendationExposures = emptyList(),
             dateKey = "2026-05-01",
             nowMs = now,
             limit = 3,
         )
 
-        assertEquals(3, ranked.size)
-        assertEquals(tracks.map { it.id }.toSet(), ranked.toSet())
+        assertEquals(1, ranked.size)
+        assertTrue(ranked.single() in tracks.map { it.id })
+    }
+
+    @Test
+    fun `daily recommendation hard exclusion avoids seven day repeats when fresh songs can fill limit`() {
+        val now = 10_000_000_000L
+        val tracks = (1..35).map { index ->
+            trackEntity(
+                trackId = "track-$index",
+                sourceId = "local-1",
+                title = "Song $index",
+                albumId = "album-$index",
+                albumTitle = "Album $index",
+                artistName = "Artist $index",
+                addedAt = now - 90.daysMs(),
+            )
+        }
+        val exposures = tracks.take(5).map { track ->
+            DailyRecommendationExposure(
+                trackId = track.id,
+                track = track,
+                recommendedAt = now - 1.daysMs(),
+            )
+        }
+
+        val first = rankDailyRecommendationTrackIds(
+            tracks = tracks,
+            favoriteTracks = emptyList(),
+            trackStats = emptyMap(),
+            recentRecommendationExposures = exposures,
+            dateKey = "2026-05-01",
+            nowMs = now,
+            limit = 30,
+        )
+        val repeated = rankDailyRecommendationTrackIds(
+            tracks = tracks,
+            favoriteTracks = emptyList(),
+            trackStats = emptyMap(),
+            recentRecommendationExposures = exposures,
+            dateKey = "2026-05-01",
+            nowMs = now,
+            limit = 30,
+        )
+
+        assertEquals(30, first.size)
+        assertTrue(first.none { id -> id in tracks.take(5).map { it.id } })
+        assertEquals(first, repeated)
+    }
+
+    @Test
+    fun `daily recommendation song identity merges conservative cross source copies`() {
+        val base = trackEntity(
+            trackId = "local-copy",
+            sourceId = "local-1",
+            title = "Song (Live)",
+            albumId = "album-local",
+            albumTitle = "Album",
+            artistName = "The Artist",
+            durationMs = 180_000L,
+        )
+        val same = trackEntity(
+            trackId = "remote-copy",
+            sourceId = "remote-1",
+            title = " song live ",
+            albumId = "album-remote",
+            albumTitle = "Different Album Id",
+            artistName = "the—artist",
+            durationMs = 185_000L,
+        )
+        val differentVersion = same.copy(id = "long-version", durationMs = 185_001L)
+        val differentArtist = same.copy(id = "other-artist", artistName = "Other Artist")
+        val withoutLiveSuffix = same.copy(id = "studio-version", title = "Song")
+
+        assertTrue(
+            areSameDailyRecommendationSong(
+                dailyRecommendationSongIdentity(base),
+                dailyRecommendationSongIdentity(same),
+            ),
+        )
+        assertFalse(
+            areSameDailyRecommendationSong(
+                dailyRecommendationSongIdentity(base),
+                dailyRecommendationSongIdentity(differentVersion),
+            ),
+        )
+        assertFalse(
+            areSameDailyRecommendationSong(
+                dailyRecommendationSongIdentity(base),
+                dailyRecommendationSongIdentity(differentArtist),
+            ),
+        )
+        assertFalse(
+            areSameDailyRecommendationSong(
+                dailyRecommendationSongIdentity(base),
+                dailyRecommendationSongIdentity(withoutLiveSuffix),
+            ),
+        )
+    }
+
+    @Test
+    fun `daily recommendation song identity requires album when duration is missing`() {
+        val base = trackEntity(
+            trackId = "base",
+            sourceId = "local-1",
+            title = "Song",
+            albumId = "album-a",
+            albumTitle = "Album A",
+            artistName = "Artist",
+            durationMs = 0L,
+        )
+        val sameAlbum = base.copy(id = "same-album", sourceId = "remote-1")
+        val differentAlbum = base.copy(id = "different-album", sourceId = "remote-1", albumTitle = "Album B")
+        val missingArtist = base.copy(id = "missing-artist", sourceId = "remote-1", artistName = null)
+
+        assertTrue(
+            areSameDailyRecommendationSong(
+                dailyRecommendationSongIdentity(base),
+                dailyRecommendationSongIdentity(sameAlbum),
+            ),
+        )
+        assertFalse(
+            areSameDailyRecommendationSong(
+                dailyRecommendationSongIdentity(base),
+                dailyRecommendationSongIdentity(differentAlbum),
+            ),
+        )
+        assertFalse(
+            areSameDailyRecommendationSong(
+                dailyRecommendationSongIdentity(base),
+                dailyRecommendationSongIdentity(missingArtist),
+            ),
+        )
+    }
+
+    @Test
+    fun `daily recommendation history penalty decays with age and grows with frequency`() {
+        val now = 10_000_000_000L
+        val recentOnce = dailyRecommendationHistoryPenalty(
+            DailyRecommendationExposureSummary(1, now - 8.daysMs()),
+            now,
+        )
+        val olderOnce = dailyRecommendationHistoryPenalty(
+            DailyRecommendationExposureSummary(1, now - 20.daysMs()),
+            now,
+        )
+        val olderOften = dailyRecommendationHistoryPenalty(
+            DailyRecommendationExposureSummary(3, now - 20.daysMs()),
+            now,
+        )
+        val expired = dailyRecommendationHistoryPenalty(
+            DailyRecommendationExposureSummary(3, now - 31.daysMs()),
+            now,
+        )
+
+        assertTrue(recentOnce > olderOnce)
+        assertTrue(olderOften > olderOnce)
+        assertEquals(0.0, expired)
+    }
+
+    @Test
+    fun `daily recommendation soft history ranks older exposure before recent exposure`() {
+        val now = 10_000_000_000L
+        val recent = trackEntity("recent-soft", "local-1", "Recent Soft", null, null, addedAt = now - 90.daysMs())
+        val older = trackEntity("older-soft", "local-1", "Older Soft", null, null, addedAt = now - 90.daysMs())
+        val exposures = listOf(
+            DailyRecommendationExposure(recent.id, recent, now - 8.daysMs()),
+            DailyRecommendationExposure(older.id, older, now - 20.daysMs()),
+        )
+
+        val ranked = rankDailyRecommendationTrackIds(
+            tracks = listOf(recent, older),
+            favoriteTracks = emptyList(),
+            trackStats = emptyMap(),
+            recentRecommendationExposures = exposures,
+            dateKey = "2026-05-01",
+            nowMs = now,
+            limit = 2,
+        )
+        val withoutExpiredHistory = rankDailyRecommendationTrackIds(
+            tracks = listOf(recent, older),
+            favoriteTracks = emptyList(),
+            trackStats = emptyMap(),
+            recentRecommendationExposures = exposures.map { it.copy(recommendedAt = now - 31.daysMs()) },
+            dateKey = "2026-05-01",
+            nowMs = now,
+            limit = 2,
+        )
+        val withoutHistory = rankDailyRecommendationTrackIds(
+            tracks = listOf(recent, older),
+            favoriteTracks = emptyList(),
+            trackStats = emptyMap(),
+            recentRecommendationExposures = emptyList(),
+            dateKey = "2026-05-01",
+            nowMs = now,
+            limit = 2,
+        )
+
+        assertEquals("older-soft", ranked.first())
+        assertEquals(withoutHistory, withoutExpiredHistory)
+    }
+
+    @Test
+    fun `daily recommendation backfill prefers least frequent then oldest exposure`() {
+        val now = 10_000_000_000L
+        val frequent = trackEntity("frequent", "local-1", "Frequent", null, null, addedAt = now - 90.daysMs())
+        val recent = trackEntity("recent", "local-1", "Recent", null, null, addedAt = now - 90.daysMs())
+        val older = trackEntity("older", "local-1", "Older", null, null, addedAt = now - 90.daysMs())
+        val exposures = listOf(
+            DailyRecommendationExposure(frequent.id, frequent, now - 6.daysMs()),
+            DailyRecommendationExposure(frequent.id, frequent, now - 5.daysMs()),
+            DailyRecommendationExposure(recent.id, recent, now - 1.daysMs()),
+            DailyRecommendationExposure(older.id, older, now - 6.daysMs()),
+        )
+
+        val ranking = rankDailyRecommendationTracks(
+            tracks = listOf(frequent, recent, older),
+            favoriteTracks = emptyList(),
+            trackStats = emptyMap(),
+            recentRecommendationExposures = exposures,
+            dateKey = "2026-05-01",
+            nowMs = now,
+            limit = 2,
+        )
+
+        assertEquals(listOf("older", "recent"), ranking.trackIds)
+        assertEquals(2, ranking.backfilledCount)
+        assertEquals(3, ranking.hardExcludedCount)
+    }
+
+    @Test
+    fun `daily recommendation keeps same title by different artists`() {
+        val now = 10_000_000_000L
+        val tracks = listOf(
+            trackEntity("artist-a", "local-1", "Hello", null, null, artistName = "Artist A"),
+            trackEntity("artist-b", "local-1", "Hello", null, null, artistName = "Artist B"),
+        )
+
+        val ranked = rankDailyRecommendationTrackIds(
+            tracks = tracks,
+            favoriteTracks = emptyList(),
+            trackStats = emptyMap(),
+            recentRecommendationExposures = emptyList(),
+            dateKey = "2026-05-01",
+            nowMs = now,
+            limit = 2,
+        )
+
+        assertEquals(setOf("artist-a", "artist-b"), ranked.toSet())
     }
 }
 
@@ -669,6 +984,7 @@ private fun trackEntity(
     mediaLocator: String = "file:///music/$title.flac",
     artistName: String? = "Artist A",
     addedAt: Long = 0L,
+    durationMs: Long = 180_000L,
 ): TrackEntity {
     return TrackEntity(
         id = trackId,
@@ -678,7 +994,7 @@ private fun trackEntity(
         artistName = artistName,
         albumId = albumId,
         albumTitle = albumTitle,
-        durationMs = 180_000L,
+        durationMs = durationMs,
         trackNumber = null,
         discNumber = null,
         mediaLocator = mediaLocator,
