@@ -1,10 +1,14 @@
 package top.iwesley.lyn.music
 
+import kotlin.math.abs
 import top.iwesley.lyn.music.core.model.LyricsDocument
 import top.iwesley.lyn.music.core.model.LyricsLine
 import top.iwesley.lyn.music.domain.EnhancedLyricsDisplayLine
 import top.iwesley.lyn.music.domain.EnhancedLyricsPresentation
 import top.iwesley.lyn.music.feature.player.isPlayerLyricsStructureTagLine
+
+internal const val PLAYER_LYRICS_SCROLL_ANIMATION_DURATION_MS = 420
+private const val PLAYER_LYRICS_SMOOTH_SCROLL_MAX_INDEX_DISTANCE = 2
 
 internal data class VisiblePlayerLyricsLine(
     val rawIndex: Int,
@@ -71,6 +75,16 @@ internal fun resolveVisiblePlayerLyricsScrollTarget(
     }
 }
 
+internal fun shouldAnimatePlayerLyricsScroll(
+    previousTargetIndex: Int?,
+    targetIndex: Int,
+    isTargetVisible: Boolean,
+): Boolean {
+    return previousTargetIndex != null &&
+        isTargetVisible &&
+        abs(targetIndex - previousTargetIndex) <= PLAYER_LYRICS_SMOOTH_SCROLL_MAX_INDEX_DISTANCE
+}
+
 internal fun resolvePlayerLyricsBrowseTargetIndex(
     visibleLines: List<VisiblePlayerLyricsLine>,
     visibleItems: List<PlayerLyricsVisibleItemInfo>,
@@ -83,7 +97,7 @@ internal fun resolvePlayerLyricsBrowseTargetIndex(
         .filter { item -> visibleLines.getOrNull(item.index)?.line?.timestampMs != null }
         .minByOrNull { item ->
             val itemCenter = item.offset + item.size / 2
-            kotlin.math.abs(itemCenter - viewportCenter)
+            abs(itemCenter - viewportCenter)
         }
         ?.index
 }

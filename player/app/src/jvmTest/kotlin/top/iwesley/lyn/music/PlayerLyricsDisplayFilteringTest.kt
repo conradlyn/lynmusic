@@ -145,6 +145,61 @@ class PlayerLyricsDisplayFilteringTest {
     }
 
     @Test
+    fun `first lyrics target uses immediate positioning`() {
+        assertFalse(
+            shouldAnimatePlayerLyricsScroll(
+                previousTargetIndex = null,
+                targetIndex = 0,
+                isTargetVisible = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `adjacent visible lyrics target uses smooth scrolling`() {
+        assertTrue(
+            shouldAnimatePlayerLyricsScroll(
+                previousTargetIndex = 4,
+                targetIndex = 5,
+                isTargetVisible = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `visible lyrics target two lines away uses smooth scrolling`() {
+        assertTrue(
+            shouldAnimatePlayerLyricsScroll(
+                previousTargetIndex = 4,
+                targetIndex = 6,
+                isTargetVisible = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `distant lyrics target uses immediate positioning`() {
+        assertFalse(
+            shouldAnimatePlayerLyricsScroll(
+                previousTargetIndex = 4,
+                targetIndex = 7,
+                isTargetVisible = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `offscreen lyrics target uses immediate positioning`() {
+        assertFalse(
+            shouldAnimatePlayerLyricsScroll(
+                previousTargetIndex = 4,
+                targetIndex = 5,
+                isTargetVisible = false,
+            ),
+        )
+    }
+
+    @Test
     fun `browse target chooses timestamped visible line closest to viewport center`() {
         val visibleLines = buildVisiblePlayerLyricsLines(
             syncedLyricsDocument(

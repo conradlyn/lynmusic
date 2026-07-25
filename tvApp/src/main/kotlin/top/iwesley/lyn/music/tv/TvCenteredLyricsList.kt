@@ -1,5 +1,8 @@
 package top.iwesley.lyn.music.tv
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -14,7 +17,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -23,6 +29,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlin.math.abs
 import top.iwesley.lyn.music.core.model.LyricsDocument
+
+private const val TV_LYRICS_SCROLL_ANIMATION_DURATION_MS = 420
+private const val TV_LYRICS_SMOOTH_SCROLL_MAX_INDEX_DISTANCE = 2
 
 @Composable
 internal fun TvCenteredLyricsList(
@@ -58,12 +67,21 @@ internal fun TvCenteredLyricsList(
         )
     }
     val listState = rememberLazyListState()
+    var previousScrollTargetIndex by remember(lyrics) { mutableStateOf<Int?>(null) }
     LaunchedEffect(lyrics, scrollTargetIndex, visibleLines.size) {
         val targetIndex = scrollTargetIndex ?: return@LaunchedEffect
+        val isTargetVisible = listState.layoutInfo.visibleItemsInfo.any { it.index == targetIndex }
+        val shouldAnimateScroll = shouldAnimateTvCenteredLyricsScroll(
+            previousTargetIndex = previousScrollTargetIndex,
+            targetIndex = targetIndex,
+            isTargetVisible = isTargetVisible,
+        )
+        previousScrollTargetIndex = targetIndex
         centerTvLyricsItem(
             listState = listState,
             targetIndex = targetIndex,
             itemCount = visibleLines.size,
+            animate = shouldAnimateScroll,
         )
     }
 
@@ -101,6 +119,7 @@ private suspend fun centerTvLyricsItem(
     listState: LazyListState,
     targetIndex: Int,
     itemCount: Int,
+    animate: Boolean,
 ) {
     if (targetIndex !in 0 until itemCount) return
     if (listState.layoutInfo.visibleItemsInfo.none { it.index == targetIndex }) {
@@ -114,8 +133,28 @@ private suspend fun centerTvLyricsItem(
     val itemCenter = itemInfo.offset + itemInfo.size / 2
     val delta = (itemCenter - viewportCenter).toFloat()
     if (abs(delta) > 1f) {
-        listState.scrollBy(delta)
+        if (animate) {
+            listState.animateScrollBy(
+                value = delta,
+                animationSpec = tween(
+                    durationMillis = TV_LYRICS_SCROLL_ANIMATION_DURATION_MS,
+                    easing = FastOutSlowInEasing,
+                ),
+            )
+        } else {
+            listState.scrollBy(delta)
+        }
     }
+}
+
+internal fun shouldAnimateTvCenteredLyricsScroll(
+    previousTargetIndex: Int?,
+    targetIndex: Int,
+    isTargetVisible: Boolean,
+): Boolean {
+    return previousTargetIndex != null &&
+        isTargetVisible &&
+        abs(targetIndex - previousTargetIndex) <= TV_LYRICS_SMOOTH_SCROLL_MAX_INDEX_DISTANCE
 }
 
 private fun resolveTvCenteredLyricsScrollTarget(

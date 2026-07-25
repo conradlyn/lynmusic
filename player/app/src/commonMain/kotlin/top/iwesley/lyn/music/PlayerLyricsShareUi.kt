@@ -1,12 +1,15 @@
 package top.iwesley.lyn.music
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.scrollBy
@@ -148,6 +151,7 @@ internal fun PlayerLyricsPane(
     }
     var isLyricsBrowsing by remember(track.id, lyrics) { mutableStateOf(false) }
     var isAutoScrollingLyrics by remember(track.id, lyrics) { mutableStateOf(false) }
+    var previousAutoScrollTargetIndex by remember(track.id, lyrics) { mutableStateOf<Int?>(null) }
     val browseTargetIndex by remember(listState, visibleLyricsLines) {
         derivedStateOf {
             resolvePlayerLyricsBrowseTargetIndex(
@@ -192,9 +196,16 @@ internal fun PlayerLyricsPane(
             highlightedRawIndex = state.highlightedLineIndex,
         ) ?: return@LaunchedEffect
         if (targetIndex !in visibleLyricsLines.indices) return@LaunchedEffect
+        val isTargetVisible = listState.layoutInfo.visibleItemsInfo.any { it.index == targetIndex }
+        val shouldAnimateScroll = shouldAnimatePlayerLyricsScroll(
+            previousTargetIndex = previousAutoScrollTargetIndex,
+            targetIndex = targetIndex,
+            isTargetVisible = isTargetVisible,
+        )
+        previousAutoScrollTargetIndex = targetIndex
         isAutoScrollingLyrics = true
         try {
-            if (listState.layoutInfo.visibleItemsInfo.none { it.index == targetIndex }) {
+            if (!isTargetVisible) {
                 listState.scrollToItem(targetIndex)
                 withFrameNanos { }
             }
@@ -205,7 +216,17 @@ internal fun PlayerLyricsPane(
             val itemCenter = itemInfo.offset + itemInfo.size / 2
             val delta = (itemCenter - viewportCenter).toFloat()
             if (abs(delta) > 1f) {
-                listState.scrollBy(delta)
+                if (shouldAnimateScroll) {
+                    listState.animateScrollBy(
+                        value = delta,
+                        animationSpec = tween(
+                            durationMillis = PLAYER_LYRICS_SCROLL_ANIMATION_DURATION_MS,
+                            easing = FastOutSlowInEasing,
+                        ),
+                    )
+                } else {
+                    listState.scrollBy(delta)
+                }
             }
         } finally {
             isAutoScrollingLyrics = false
