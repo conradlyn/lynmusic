@@ -1575,7 +1575,9 @@ class PlayerStore(
                     } else {
                         false
                     }
-                if (hasAlbumArtworkCache && !hasReplaceablePlaceholderCache) {
+                val hasUsableCurrentArtwork =
+                    !state.value.snapshot.currentDisplayArtworkLocator.isNullOrBlank()
+                if (hasUsableCurrentArtwork && hasAlbumArtworkCache && !hasReplaceablePlaceholderCache) {
                     logger.debug(PLAYER_LOG_TAG) {
                         "playback-artwork-override-skip source=auto-lyrics track=${track.id} key=$cacheKey locator=$artworkLocator"
                     }

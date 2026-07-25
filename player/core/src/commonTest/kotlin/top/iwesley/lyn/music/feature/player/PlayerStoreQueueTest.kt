@@ -379,9 +379,20 @@ class PlayerStoreQueueTest {
     }
 
     @Test
-    fun `automatic lyrics artwork does not override playback artwork when album cache exists`() = runTest {
+    fun `automatic lyrics artwork does not override available playback artwork when album cache exists`() = runTest {
         val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
-        val playbackRepository = FakeQueuePlaybackRepository(sampleSnapshot())
+        val snapshot = sampleSnapshot()
+        val playbackRepository = FakeQueuePlaybackRepository(
+            snapshot.copy(
+                queue = snapshot.queue.mapIndexed { index, track ->
+                    if (index == snapshot.currentIndex) {
+                        track.copy(artworkLocator = "/tmp/existing.jpg")
+                    } else {
+                        track
+                    }
+                },
+            ),
+        )
         val lyricsRepository = DeferredQueueLyricsRepository()
         val artworkCacheStore = FakePlayerArtworkCacheStore(
             cachedKeys = setOf("album:local-1:artist a:album a"),
@@ -406,6 +417,38 @@ class PlayerStoreQueueTest {
 
         assertEquals(null, playbackRepository.lastArtworkOverride)
         assertEquals(listOf("album:local-1:artist a:album a"), artworkCacheStore.checkedKeys)
+        assertEquals("lyrics for track-1", store.state.value.lyrics?.rawPayload)
+        scope.cancel()
+    }
+
+    @Test
+    fun `automatic lyrics artwork updates playback when album cache exists but current artwork is missing`() = runTest {
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val playbackRepository = FakeQueuePlaybackRepository(sampleSnapshot())
+        val lyricsRepository = DeferredQueueLyricsRepository()
+        val artworkCacheStore = FakePlayerArtworkCacheStore(
+            cachedKeys = setOf("album:local-1:artist a:album a"),
+        )
+        val store = PlayerStore(
+            playbackRepository = playbackRepository,
+            lyricsRepository = lyricsRepository,
+            storeScope = scope,
+            artworkCacheStore = artworkCacheStore,
+        )
+
+        advanceUntilIdle()
+        lyricsRepository.complete(
+            trackId = "track-1",
+            result = resolvedLyricsResult(
+                sourceId = "source-track-1",
+                line = "lyrics for track-1",
+                artworkLocator = "/tmp/track-1-auto.jpg",
+            ),
+        )
+        advanceUntilIdle()
+
+        assertEquals("/tmp/track-1-auto.jpg", playbackRepository.lastArtworkOverride)
+        assertEquals("/tmp/track-1-auto.jpg", store.state.value.snapshot.currentDisplayArtworkLocator)
         assertEquals("lyrics for track-1", store.state.value.lyrics?.rawPayload)
         scope.cancel()
     }
