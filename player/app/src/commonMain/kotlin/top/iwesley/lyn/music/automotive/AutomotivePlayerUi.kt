@@ -144,51 +144,58 @@ private fun AutomotivePlaybackPane(
     modifier: Modifier = Modifier,
 ) {
     val snapshot = state.snapshot
-    Column(
-        modifier = modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val controlsLayout = resolveAutomotivePlaybackControlsLayout(
+            maxWidth = maxWidth,
+            maxHeight = maxHeight,
+        )
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.SpaceBetween,
         ) {
-            AutomotiveRoundIconButton(
-                icon = Icons.Rounded.KeyboardArrowDown,
-                contentDescription = "收起播放页",
-                onClick = { onPlayerIntent(PlayerIntent.ExpandedChanged(false)) },
-                buttonSize = 64.dp,
-                iconSize = 34.dp,
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                AutomotiveRoundIconButton(
+                    icon = Icons.Rounded.KeyboardArrowDown,
+                    contentDescription = "收起播放页",
+                    onClick = { onPlayerIntent(PlayerIntent.ExpandedChanged(false)) },
+                    buttonSize = 64.dp,
+                    iconSize = 34.dp,
+                )
+                AutomotiveRoundIconButton(
+                    icon = Icons.Rounded.Search,
+                    contentDescription = "搜索歌词",
+                    onClick = { onPlayerIntent(PlayerIntent.OpenManualLyricsSearch) },
+                    buttonSize = 64.dp,
+                    iconSize = 30.dp,
+                )
+            }
+            AutomotiveTrackAndProgress(
+                snapshot = snapshot,
+                track = track,
+                artworkBitmap = artworkBitmap,
+                playerArtworkStyle = playerArtworkStyle,
+                isFavorite = isFavorite,
+                canToggleFavorite = canToggleFavorite,
+                onToggleFavorite = onToggleFavorite,
+                onlineNavigationSourceId = onlineNavigationSourceId,
+                onOpenLibraryNavigationTarget = onOpenLibraryNavigationTarget,
+                onPlayerIntent = onPlayerIntent,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
             )
-            AutomotiveRoundIconButton(
-                icon = Icons.Rounded.Search,
-                contentDescription = "搜索歌词",
-                onClick = { onPlayerIntent(PlayerIntent.OpenManualLyricsSearch) },
-                buttonSize = 64.dp,
-                iconSize = 30.dp,
+            AutomotivePlaybackControls(
+                snapshot = snapshot,
+                layout = controlsLayout,
+                onOpenQueue = onOpenQueue,
+                onPlayerIntent = onPlayerIntent,
+                modifier = Modifier.fillMaxWidth(),
             )
         }
-        AutomotiveTrackAndProgress(
-            snapshot = snapshot,
-            track = track,
-            artworkBitmap = artworkBitmap,
-            playerArtworkStyle = playerArtworkStyle,
-            isFavorite = isFavorite,
-            canToggleFavorite = canToggleFavorite,
-            onToggleFavorite = onToggleFavorite,
-            onlineNavigationSourceId = onlineNavigationSourceId,
-            onOpenLibraryNavigationTarget = onOpenLibraryNavigationTarget,
-            onPlayerIntent = onPlayerIntent,
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth(),
-        )
-        AutomotivePlaybackControls(
-            snapshot = snapshot,
-            onOpenQueue = onOpenQueue,
-            onPlayerIntent = onPlayerIntent,
-            modifier = Modifier.fillMaxWidth(),
-        )
     }
 }
 
@@ -577,91 +584,57 @@ private fun automotiveTransparentSliderColors() = SliderDefaults.colors(
 @Composable
 private fun AutomotivePlaybackControls(
     snapshot: PlaybackSnapshot,
+    layout: AutomotivePlaybackControlsLayout,
     onOpenQueue: () -> Unit,
     onPlayerIntent: (PlayerIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    BoxWithConstraints(modifier = modifier) {
-        val narrowControls = maxWidth < 400.dp
-        val compactControls = maxWidth < 560.dp
-        val actionButtonSize = when {
-            narrowControls -> 40.dp
-            compactControls -> 48.dp
-            else -> 60.dp
-        }
-        val skipButtonSize = when {
-            narrowControls -> 46.dp
-            compactControls -> 54.dp
-            else -> 68.dp
-        }
-        val playButtonSize = when {
-            narrowControls -> 60.dp
-            compactControls -> 70.dp
-            else -> 84.dp
-        }
-        val actionIconSize = when {
-            narrowControls -> 22.dp
-            compactControls -> 24.dp
-            else -> 28.dp
-        }
-        val skipIconSize = when {
-            narrowControls -> 26.dp
-            compactControls -> 30.dp
-            else -> 34.dp
-        }
-        val playIconSize = when {
-            narrowControls -> 46.dp
-            compactControls -> 54.dp
-            else -> 60.dp
-        }
-        val controlGap = when {
-            narrowControls -> 0.dp
-            compactControls -> 4.dp
-            else -> 8.dp
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (layout.showSecondaryControls) {
             AutomotiveRoundIconButton(
                 icon = playbackModeIcon(snapshot.mode),
                 contentDescription = "切换播放模式",
                 onClick = { onPlayerIntent(PlayerIntent.CycleMode) },
-                buttonSize = actionButtonSize,
-                iconSize = actionIconSize,
+                buttonSize = layout.actionButtonSize,
+                iconSize = layout.actionIconSize,
             )
-            Spacer(Modifier.width(controlGap))
-            AutomotiveRoundIconButton(
-                icon = Icons.Rounded.SkipPrevious,
-                contentDescription = "上一首",
-                onClick = { onPlayerIntent(PlayerIntent.SkipPrevious) },
-                buttonSize = skipButtonSize,
-                iconSize = skipIconSize,
-            )
-            Spacer(Modifier.width(controlGap))
-            AutomotiveRoundIconButton(
-                icon = if (snapshot.isPlaying) Icons.Rounded.PauseCircle else Icons.Rounded.PlayCircle,
-                contentDescription = if (snapshot.isPlaying) "暂停" else "播放",
-                onClick = { onPlayerIntent(PlayerIntent.TogglePlayPause) },
-                buttonSize = playButtonSize,
-                iconSize = playIconSize,
-            )
-            Spacer(Modifier.width(controlGap))
-            AutomotiveRoundIconButton(
-                icon = Icons.Rounded.SkipNext,
-                contentDescription = "下一首",
-                onClick = { onPlayerIntent(PlayerIntent.SkipNext) },
-                buttonSize = skipButtonSize,
-                iconSize = skipIconSize,
-            )
-            Spacer(Modifier.width(controlGap))
+            Spacer(Modifier.width(layout.controlGap))
+        }
+        AutomotiveRoundIconButton(
+            icon = Icons.Rounded.SkipPrevious,
+            contentDescription = "上一首",
+            onClick = { onPlayerIntent(PlayerIntent.SkipPrevious) },
+            buttonSize = layout.skipButtonSize,
+            iconSize = layout.skipIconSize,
+        )
+        Spacer(Modifier.width(layout.controlGap))
+        AutomotiveRoundIconButton(
+            icon = if (snapshot.isPlaying) Icons.Rounded.PauseCircle else Icons.Rounded.PlayCircle,
+            contentDescription = if (snapshot.isPlaying) "暂停" else "播放",
+            onClick = { onPlayerIntent(PlayerIntent.TogglePlayPause) },
+            buttonSize = layout.playButtonSize,
+            iconSize = layout.playIconSize,
+        )
+        Spacer(Modifier.width(layout.controlGap))
+        AutomotiveRoundIconButton(
+            icon = Icons.Rounded.SkipNext,
+            contentDescription = "下一首",
+            onClick = { onPlayerIntent(PlayerIntent.SkipNext) },
+            buttonSize = layout.skipButtonSize,
+            iconSize = layout.skipIconSize,
+        )
+        if (layout.showSecondaryControls) {
+            Spacer(Modifier.width(layout.controlGap))
             AutomotiveRoundIconButton(
                 icon = Icons.AutoMirrored.Rounded.QueueMusic,
                 contentDescription = "播放队列",
                 onClick = onOpenQueue,
-                buttonSize = actionButtonSize,
-                iconSize = actionIconSize,
+                buttonSize = layout.actionButtonSize,
+                iconSize = layout.actionIconSize,
             )
         }
     }
@@ -714,6 +687,92 @@ private fun AutomotiveRoundIconButton(
     }
 }
 
+internal data class AutomotivePlaybackControlsLayout(
+    val showSecondaryControls: Boolean,
+    val actionButtonSize: Dp,
+    val skipButtonSize: Dp,
+    val playButtonSize: Dp,
+    val actionIconSize: Dp,
+    val skipIconSize: Dp,
+    val playIconSize: Dp,
+    val controlGap: Dp,
+)
+
+internal val AutomotivePlaybackControlsLayout.totalWidth: Dp
+    get() {
+        val primaryControlsWidth =
+            skipButtonSize + skipButtonSize + playButtonSize + controlGap + controlGap
+        return if (showSecondaryControls) {
+            primaryControlsWidth +
+                actionButtonSize + actionButtonSize +
+                controlGap + controlGap
+        } else {
+            primaryControlsWidth
+        }
+    }
+
+internal fun resolveAutomotivePlaybackControlsLayout(
+    maxWidth: Dp,
+    maxHeight: Dp,
+): AutomotivePlaybackControlsLayout {
+    return when {
+        maxWidth < 252.dp -> AutomotivePlaybackControlsLayout(
+            showSecondaryControls = false,
+            actionButtonSize = 48.dp,
+            skipButtonSize = 48.dp,
+            playButtonSize = 60.dp,
+            actionIconSize = 22.dp,
+            skipIconSize = 26.dp,
+            playIconSize = 46.dp,
+            controlGap = 4.dp,
+        )
+
+        maxWidth < 288.dp || maxHeight < 480.dp -> AutomotivePlaybackControlsLayout(
+            showSecondaryControls = true,
+            actionButtonSize = 48.dp,
+            skipButtonSize = 48.dp,
+            playButtonSize = 60.dp,
+            actionIconSize = 22.dp,
+            skipIconSize = 26.dp,
+            playIconSize = 46.dp,
+            controlGap = 0.dp,
+        )
+
+        maxWidth < 400.dp -> AutomotivePlaybackControlsLayout(
+            showSecondaryControls = true,
+            actionButtonSize = 48.dp,
+            skipButtonSize = 56.dp,
+            playButtonSize = 72.dp,
+            actionIconSize = 26.dp,
+            skipIconSize = 32.dp,
+            playIconSize = 56.dp,
+            controlGap = 2.dp,
+        )
+
+        maxWidth < 520.dp || maxHeight < 520.dp -> AutomotivePlaybackControlsLayout(
+            showSecondaryControls = true,
+            actionButtonSize = 56.dp,
+            skipButtonSize = 64.dp,
+            playButtonSize = 84.dp,
+            actionIconSize = 30.dp,
+            skipIconSize = 36.dp,
+            playIconSize = 64.dp,
+            controlGap = 6.dp,
+        )
+
+        else -> AutomotivePlaybackControlsLayout(
+            showSecondaryControls = true,
+            actionButtonSize = 80.dp,
+            skipButtonSize = 88.dp,
+            playButtonSize = 108.dp,
+            actionIconSize = 36.dp,
+            skipIconSize = 44.dp,
+            playIconSize = 76.dp,
+            controlGap = 10.dp,
+        )
+    }
+}
+
 internal data class AutomotiveTrackAndProgressLayout(
     val compactVertical: Boolean,
     val artworkSize: Dp,
@@ -729,24 +788,64 @@ internal fun resolveAutomotiveTrackAndProgressLayout(
     maxWidth: Dp,
     maxHeight: Dp,
 ): AutomotiveTrackAndProgressLayout {
+    val ultraCompactVertical = maxHeight < 320.dp
     val compactVertical = maxHeight < 420.dp
-    val artworkMaximumSize = if (compactVertical) 250.dp else 360.dp
+    val artworkMaximumSize = when {
+        ultraCompactVertical -> 220.dp
+        compactVertical -> 250.dp
+        else -> 360.dp
+    }
+    val artworkWidthFraction = when {
+        ultraCompactVertical -> 0.52f
+        compactVertical -> 0.56f
+        else -> 0.66f
+    }
+    val artworkHeightFraction = when {
+        ultraCompactVertical -> 0.44f
+        compactVertical -> 0.48f
+        else -> 0.56f
+    }
+    val artworkMinimumSize = when {
+        ultraCompactVertical -> 140.dp
+        compactVertical -> 150.dp
+        else -> 190.dp
+    }
     val artworkSize = minOf(
-        maxWidth * if (compactVertical) 0.56f else 0.66f,
-        maxHeight * if (compactVertical) 0.48f else 0.56f,
+        maxWidth * artworkWidthFraction,
+        maxHeight * artworkHeightFraction,
     ).coerceIn(
-        minimumValue = if (compactVertical) 150.dp else 190.dp,
+        minimumValue = artworkMinimumSize,
         maximumValue = artworkMaximumSize,
     )
     return AutomotiveTrackAndProgressLayout(
         compactVertical = compactVertical,
         artworkSize = artworkSize,
         artworkMaximumSize = artworkMaximumSize,
-        artworkTitleGap = if (compactVertical) 12.dp else 20.dp,
-        metadataGap = if (compactVertical) 4.dp else 8.dp,
-        progressTopGap = if (compactVertical) 26.dp else 44.dp,
-        bottomPadding = if (compactVertical) 8.dp else 6.dp,
-        progressWidthFraction = if (compactVertical) 0.9f else 0.86f,
+        artworkTitleGap = when {
+            ultraCompactVertical -> 8.dp
+            compactVertical -> 12.dp
+            else -> 20.dp
+        },
+        metadataGap = when {
+            ultraCompactVertical -> 2.dp
+            compactVertical -> 4.dp
+            else -> 8.dp
+        },
+        progressTopGap = when {
+            ultraCompactVertical -> 16.dp
+            compactVertical -> 26.dp
+            else -> 44.dp
+        },
+        bottomPadding = when {
+            ultraCompactVertical -> 4.dp
+            compactVertical -> 8.dp
+            else -> 6.dp
+        },
+        progressWidthFraction = when {
+            ultraCompactVertical -> 0.92f
+            compactVertical -> 0.9f
+            else -> 0.86f
+        },
     )
 }
 

@@ -4,11 +4,175 @@ import androidx.compose.ui.unit.dp
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import top.iwesley.lyn.music.core.model.PlaybackSnapshot
 import top.iwesley.lyn.music.core.model.PlayerArtworkStyle
 import top.iwesley.lyn.music.feature.player.PlayerIntent
 
 class AutomotivePlayerUiLogicTest {
+    @Test
+    fun `playback controls hide secondary actions below 252 dp width`() {
+        listOf(200.dp, 251.dp).forEach { maxWidth ->
+            val layout = resolveAutomotivePlaybackControlsLayout(
+                maxWidth = maxWidth,
+                maxHeight = 800.dp,
+            )
+
+            assertEquals(false, layout.showSecondaryControls)
+            assertEquals(48.dp, layout.skipButtonSize)
+            assertEquals(60.dp, layout.playButtonSize)
+            assertEquals(26.dp, layout.skipIconSize)
+            assertEquals(46.dp, layout.playIconSize)
+            assertEquals(4.dp, layout.controlGap)
+            assertEquals(164.dp, layout.totalWidth)
+            assertTrue(layout.totalWidth <= maxWidth)
+        }
+    }
+
+    @Test
+    fun `playback controls show safe compact five button layout from 252 through 287 dp`() {
+        listOf(252.dp, 287.dp).forEach { maxWidth ->
+            val layout = resolveAutomotivePlaybackControlsLayout(
+                maxWidth = maxWidth,
+                maxHeight = 800.dp,
+            )
+
+            assertEquals(true, layout.showSecondaryControls)
+            assertEquals(48.dp, layout.actionButtonSize)
+            assertEquals(48.dp, layout.skipButtonSize)
+            assertEquals(60.dp, layout.playButtonSize)
+            assertEquals(22.dp, layout.actionIconSize)
+            assertEquals(26.dp, layout.skipIconSize)
+            assertEquals(46.dp, layout.playIconSize)
+            assertEquals(0.dp, layout.controlGap)
+            assertEquals(252.dp, layout.totalWidth)
+            assertTrue(layout.totalWidth <= maxWidth)
+        }
+    }
+
+    @Test
+    fun `playback controls switch to enlarged narrow layout at 288 dp`() {
+        val layout = resolveAutomotivePlaybackControlsLayout(
+            maxWidth = 288.dp,
+            maxHeight = 800.dp,
+        )
+
+        assertEquals(true, layout.showSecondaryControls)
+        assertEquals(48.dp, layout.actionButtonSize)
+        assertEquals(56.dp, layout.skipButtonSize)
+        assertEquals(72.dp, layout.playButtonSize)
+        assertEquals(2.dp, layout.controlGap)
+    }
+
+    @Test
+    fun `playback controls use enlarged narrow layout below 400 dp`() {
+        val layout = resolveAutomotivePlaybackControlsLayout(
+            maxWidth = 399.dp,
+            maxHeight = 800.dp,
+        )
+
+        assertEquals(true, layout.showSecondaryControls)
+        assertEquals(48.dp, layout.actionButtonSize)
+        assertEquals(56.dp, layout.skipButtonSize)
+        assertEquals(72.dp, layout.playButtonSize)
+        assertEquals(26.dp, layout.actionIconSize)
+        assertEquals(32.dp, layout.skipIconSize)
+        assertEquals(56.dp, layout.playIconSize)
+        assertEquals(2.dp, layout.controlGap)
+    }
+
+    @Test
+    fun `playback controls use compact layout from 400 through 519 dp`() {
+        listOf(400.dp, 519.dp).forEach { maxWidth ->
+            val layout = resolveAutomotivePlaybackControlsLayout(
+                maxWidth = maxWidth,
+                maxHeight = 800.dp,
+            )
+
+            assertEquals(true, layout.showSecondaryControls)
+            assertEquals(56.dp, layout.actionButtonSize)
+            assertEquals(64.dp, layout.skipButtonSize)
+            assertEquals(84.dp, layout.playButtonSize)
+            assertEquals(30.dp, layout.actionIconSize)
+            assertEquals(36.dp, layout.skipIconSize)
+            assertEquals(64.dp, layout.playIconSize)
+            assertEquals(6.dp, layout.controlGap)
+        }
+    }
+
+    @Test
+    fun `playback controls use extra compact layout for wide short car pane`() {
+        val layout = resolveAutomotivePlaybackControlsLayout(
+            maxWidth = 520.dp,
+            maxHeight = 424.dp,
+        )
+
+        assertEquals(true, layout.showSecondaryControls)
+        assertEquals(48.dp, layout.actionButtonSize)
+        assertEquals(48.dp, layout.skipButtonSize)
+        assertEquals(60.dp, layout.playButtonSize)
+        assertEquals(22.dp, layout.actionIconSize)
+        assertEquals(26.dp, layout.skipIconSize)
+        assertEquals(46.dp, layout.playIconSize)
+        assertEquals(0.dp, layout.controlGap)
+    }
+
+    @Test
+    fun `playback controls use compact layout below 520 dp height`() {
+        val layout = resolveAutomotivePlaybackControlsLayout(
+            maxWidth = 520.dp,
+            maxHeight = 480.dp,
+        )
+
+        assertEquals(true, layout.showSecondaryControls)
+        assertEquals(56.dp, layout.actionButtonSize)
+        assertEquals(64.dp, layout.skipButtonSize)
+        assertEquals(84.dp, layout.playButtonSize)
+        assertEquals(30.dp, layout.actionIconSize)
+        assertEquals(36.dp, layout.skipIconSize)
+        assertEquals(64.dp, layout.playIconSize)
+        assertEquals(6.dp, layout.controlGap)
+    }
+
+    @Test
+    fun `playback controls switch to large layout at 520 dp width and height`() {
+        val layout = resolveAutomotivePlaybackControlsLayout(
+            maxWidth = 520.dp,
+            maxHeight = 520.dp,
+        )
+
+        assertEquals(true, layout.showSecondaryControls)
+        assertEquals(80.dp, layout.actionButtonSize)
+        assertEquals(88.dp, layout.skipButtonSize)
+        assertEquals(108.dp, layout.playButtonSize)
+        assertEquals(36.dp, layout.actionIconSize)
+        assertEquals(44.dp, layout.skipIconSize)
+        assertEquals(76.dp, layout.playIconSize)
+        assertEquals(10.dp, layout.controlGap)
+    }
+
+    @Test
+    fun `playback controls never expose a button below minimum touch size`() {
+        val layouts = listOf(
+            resolveAutomotivePlaybackControlsLayout(maxWidth = 200.dp, maxHeight = 800.dp),
+            resolveAutomotivePlaybackControlsLayout(maxWidth = 252.dp, maxHeight = 800.dp),
+            resolveAutomotivePlaybackControlsLayout(maxWidth = 288.dp, maxHeight = 800.dp),
+            resolveAutomotivePlaybackControlsLayout(maxWidth = 399.dp, maxHeight = 800.dp),
+            resolveAutomotivePlaybackControlsLayout(maxWidth = 400.dp, maxHeight = 800.dp),
+            resolveAutomotivePlaybackControlsLayout(maxWidth = 519.dp, maxHeight = 800.dp),
+            resolveAutomotivePlaybackControlsLayout(maxWidth = 520.dp, maxHeight = 424.dp),
+            resolveAutomotivePlaybackControlsLayout(maxWidth = 520.dp, maxHeight = 520.dp),
+        )
+
+        layouts.forEach { layout ->
+            assertTrue(layout.skipButtonSize >= 48.dp)
+            assertTrue(layout.playButtonSize >= 48.dp)
+            if (layout.showSecondaryControls) {
+                assertTrue(layout.actionButtonSize >= 48.dp)
+            }
+        }
+    }
+
     @Test
     fun `track and progress layout caps normal artwork at larger car size`() {
         val layout = resolveAutomotiveTrackAndProgressLayout(
@@ -39,6 +203,23 @@ class AutomotivePlayerUiLogicTest {
         assertEquals(26.dp, layout.progressTopGap)
         assertEquals(8.dp, layout.bottomPadding)
         assertEquals(0.9f, layout.progressWidthFraction)
+    }
+
+    @Test
+    fun `track and progress layout reduces vertical chrome for ultra compact height`() {
+        val layout = resolveAutomotiveTrackAndProgressLayout(
+            maxWidth = 520.dp,
+            maxHeight = 300.dp,
+        )
+
+        assertEquals(true, layout.compactVertical)
+        assertEquals(140.dp, layout.artworkSize)
+        assertEquals(220.dp, layout.artworkMaximumSize)
+        assertEquals(8.dp, layout.artworkTitleGap)
+        assertEquals(2.dp, layout.metadataGap)
+        assertEquals(16.dp, layout.progressTopGap)
+        assertEquals(4.dp, layout.bottomPadding)
+        assertEquals(0.92f, layout.progressWidthFraction)
     }
 
     @Test
