@@ -19,6 +19,23 @@ import top.iwesley.lyn.music.platform.JvmSettingsPropertiesFile
 
 class JvmAppPreferencesStoreTest {
     @Test
+    fun `auto open player on startup preference defaults to false and survives a file round trip`() = runTest {
+        val temporaryDirectory = Files.createTempDirectory("lynmusic-auto-open-player-preference")
+        try {
+            val settingsFile = temporaryDirectory.resolve("settings.properties").toFile()
+            val store = JvmAppPreferencesStore(settingsFile)
+
+            assertFalse(store.autoOpenPlayerOnStartup.value)
+            store.setAutoOpenPlayerOnStartup(true)
+
+            val reloadedStore = JvmAppPreferencesStore(settingsFile)
+            assertTrue(reloadedStore.autoOpenPlayerOnStartup.value)
+        } finally {
+            temporaryDirectory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `minimize window on close preference survives a file round trip`() = runTest {
         val temporaryDirectory = Files.createTempDirectory("lynmusic-preferences-roundtrip")
         try {

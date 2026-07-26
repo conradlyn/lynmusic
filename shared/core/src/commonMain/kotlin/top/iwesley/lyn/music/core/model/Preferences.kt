@@ -95,6 +95,12 @@ interface AutoPlayOnStartupPreferencesStore {
     suspend fun setAutoPlayOnStartup(enabled: Boolean)
 }
 
+interface AutoOpenPlayerOnStartupPreferencesStore {
+    val autoOpenPlayerOnStartup: StateFlow<Boolean>
+
+    suspend fun setAutoOpenPlayerOnStartup(enabled: Boolean)
+}
+
 interface WindowClosePreferencesStore {
     val minimizeWindowOnClose: StateFlow<Boolean>
 
@@ -170,6 +176,16 @@ object UnsupportedAutoPlayOnStartupPreferencesStore : AutoPlayOnStartupPreferenc
 
     override suspend fun setAutoPlayOnStartup(enabled: Boolean) {
         mutableAutoPlayOnStartup.value = enabled
+    }
+}
+
+object UnsupportedAutoOpenPlayerOnStartupPreferencesStore : AutoOpenPlayerOnStartupPreferencesStore {
+    private val mutableAutoOpenPlayerOnStartup = MutableStateFlow(false)
+
+    override val autoOpenPlayerOnStartup: StateFlow<Boolean> = mutableAutoOpenPlayerOnStartup
+
+    override suspend fun setAutoOpenPlayerOnStartup(enabled: Boolean) {
+        mutableAutoOpenPlayerOnStartup.value = enabled
     }
 }
 

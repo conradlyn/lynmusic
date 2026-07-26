@@ -6,9 +6,13 @@ import top.iwesley.lyn.music.platform.createIosAppComponent
 
 fun MainViewController() = ComposeUIViewController {
     val appComponentResult = remember { runCatching { createIosAppComponent() } }
+    val startupAutoOpenGate = remember { StartupAutoOpenGate() }
     val appComponent = appComponentResult.getOrNull()
     if (appComponent != null) {
-        App(appComponent)
+        App(
+            component = appComponent,
+            startupAutoOpenGate = startupAutoOpenGate,
+        )
     } else {
         StartupDatabaseErrorScreen(
             error = appComponentResult.exceptionOrNull(),

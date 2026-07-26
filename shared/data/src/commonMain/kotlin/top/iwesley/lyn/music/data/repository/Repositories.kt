@@ -18,6 +18,7 @@ import top.iwesley.lyn.music.core.model.AudioTagGateway
 import top.iwesley.lyn.music.core.model.AudioTagSnapshot
 import top.iwesley.lyn.music.core.model.ArtworkCacheStore
 import top.iwesley.lyn.music.core.model.Artist
+import top.iwesley.lyn.music.core.model.AutoOpenPlayerOnStartupPreferencesStore
 import top.iwesley.lyn.music.core.model.AutoPlayOnStartupPreferencesStore
 import top.iwesley.lyn.music.core.model.AppDisplayPreferencesStore
 import top.iwesley.lyn.music.core.model.AppDisplayScalePreset
@@ -79,6 +80,7 @@ import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.UnsupportedAudioTagGateway
 import top.iwesley.lyn.music.core.model.UnsupportedOfflineDownloadGateway
 import top.iwesley.lyn.music.core.model.UnsupportedAppDisplayPreferencesStore
+import top.iwesley.lyn.music.core.model.UnsupportedAutoOpenPlayerOnStartupPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedAutoPlayOnStartupPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedCompactPlayerLyricsPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedDesktopLyricsPreferencesStore
@@ -471,6 +473,7 @@ interface SettingsRepository {
     val showDesktopLyrics: StateFlow<Boolean>
     val showMenuBarLyricsControls: StateFlow<Boolean>
     val autoPlayOnStartup: StateFlow<Boolean>
+    val autoOpenPlayerOnStartup: StateFlow<Boolean>
     val minimizeWindowOnClose: StateFlow<Boolean>
     val appDisplayScalePreset: StateFlow<AppDisplayScalePreset>
     val navidromeWifiAudioQuality: StateFlow<NavidromeAudioQuality>
@@ -490,6 +493,7 @@ interface SettingsRepository {
     suspend fun setShowDesktopLyrics(enabled: Boolean)
     suspend fun setShowMenuBarLyricsControls(enabled: Boolean)
     suspend fun setAutoPlayOnStartup(enabled: Boolean)
+    suspend fun setAutoOpenPlayerOnStartup(enabled: Boolean)
     suspend fun setMinimizeWindowOnClose(enabled: Boolean)
     suspend fun setAppDisplayScalePreset(preset: AppDisplayScalePreset)
     suspend fun setNavidromeWifiAudioQuality(quality: NavidromeAudioQuality)
@@ -2329,6 +2333,8 @@ class DefaultSettingsRepository(
         UnsupportedMenuBarLyricsControlsPreferencesStore,
     private val autoPlayOnStartupPreferencesStore: AutoPlayOnStartupPreferencesStore =
         UnsupportedAutoPlayOnStartupPreferencesStore,
+    private val autoOpenPlayerOnStartupPreferencesStore: AutoOpenPlayerOnStartupPreferencesStore =
+        UnsupportedAutoOpenPlayerOnStartupPreferencesStore,
     private val windowClosePreferencesStore: WindowClosePreferencesStore =
         UnsupportedWindowClosePreferencesStore,
     private val navidromeAudioQualityPreferencesStore: NavidromeAudioQualityPreferencesStore =
@@ -2354,6 +2360,8 @@ class DefaultSettingsRepository(
         menuBarLyricsControlsPreferencesStore.showMenuBarLyricsControls
     override val autoPlayOnStartup: StateFlow<Boolean> =
         autoPlayOnStartupPreferencesStore.autoPlayOnStartup
+    override val autoOpenPlayerOnStartup: StateFlow<Boolean> =
+        autoOpenPlayerOnStartupPreferencesStore.autoOpenPlayerOnStartup
     override val minimizeWindowOnClose: StateFlow<Boolean> =
         windowClosePreferencesStore.minimizeWindowOnClose
     override val appDisplayScalePreset: StateFlow<AppDisplayScalePreset> =
@@ -2416,6 +2424,10 @@ class DefaultSettingsRepository(
 
     override suspend fun setAutoPlayOnStartup(enabled: Boolean) {
         autoPlayOnStartupPreferencesStore.setAutoPlayOnStartup(enabled)
+    }
+
+    override suspend fun setAutoOpenPlayerOnStartup(enabled: Boolean) {
+        autoOpenPlayerOnStartupPreferencesStore.setAutoOpenPlayerOnStartup(enabled)
     }
 
     override suspend fun setMinimizeWindowOnClose(enabled: Boolean) {

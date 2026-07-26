@@ -666,6 +666,8 @@ private fun GeneralSettingsPane(
         shouldShowMacOsWindowCloseBehaviorSetting(currentPlatformDescriptor)
     val showCompactPlayerLyricsSetting = isMobilePlatform
     val showPlayerArtworkStyleSetting = shouldShowPlayerArtworkStyleSetting(currentPlatformDescriptor)
+    val showAutoOpenPlayerOnStartupSetting =
+        shouldShowAutoOpenPlayerOnStartupSetting(currentPlatformDescriptor)
     val showDesktopLyricsSetting = currentPlatformDescriptor.capabilities.supportsDesktopLyrics
     val showMenuBarLyricsControlsSetting =
         currentPlatformDescriptor.capabilities.supportsMenuBarLyricsControls
@@ -721,6 +723,40 @@ private fun GeneralSettingsPane(
                     },
                     colors = SwitchDefaults.colors(),
                 )
+            }
+        }
+        if (showAutoOpenPlayerOnStartupSetting) {
+            MainShellElevatedCard(shape = RoundedCornerShape(28.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = "启动后自动进入全屏播放",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = "启动时恢复到上次歌曲后，自动打开全屏播放页。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = shellColors.secondaryText,
+                        )
+                    }
+                    Switch(
+                        checked = state.autoOpenPlayerOnStartup,
+                        onCheckedChange = { enabled ->
+                            onSettingsIntent(SettingsIntent.AutoOpenPlayerOnStartupChanged(enabled))
+                        },
+                        colors = SwitchDefaults.colors(),
+                    )
+                }
             }
         }
         if (showMacOsWindowCloseBehaviorSetting) {
@@ -1093,6 +1129,10 @@ private fun GeneralSettingsPane(
             }
         }
     }
+}
+
+internal fun shouldShowAutoOpenPlayerOnStartupSetting(platform: PlatformDescriptor): Boolean {
+    return !platform.isAndroidTV()
 }
 
 @Composable

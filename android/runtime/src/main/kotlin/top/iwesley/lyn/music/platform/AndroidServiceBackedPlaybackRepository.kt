@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import top.iwesley.lyn.music.core.model.PlaybackSnapshot
 import top.iwesley.lyn.music.core.model.Track
+import top.iwesley.lyn.music.data.repository.PlaybackHydrationResult
 import top.iwesley.lyn.music.data.repository.PlaybackRepository
 
 internal object AndroidPlaybackRuntimeRegistry {
@@ -63,9 +64,8 @@ internal class AndroidServiceBackedPlaybackRepository(
         }
     }
 
-    override suspend fun hydratePersistedQueueIfNeeded() {
+    override suspend fun hydratePersistedQueueIfNeeded(): PlaybackHydrationResult =
         repository().hydratePersistedQueueIfNeeded()
-    }
 
     override suspend fun playTracks(tracks: List<Track>, startIndex: Int) {
         Log.w(

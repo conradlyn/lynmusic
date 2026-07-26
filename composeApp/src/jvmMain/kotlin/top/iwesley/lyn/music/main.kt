@@ -48,6 +48,7 @@ fun main() {
     try {
         application {
             val dataLocationManager = remember { JvmDataLocationManager() }
+            val startupAutoOpenGate = remember { StartupAutoOpenGate() }
             val applicationScope = rememberCoroutineScope()
             var startupAttempt by remember { mutableIntStateOf(0) }
             var requiresDataLocationOperation by remember { mutableStateOf(false) }
@@ -204,6 +205,7 @@ fun main() {
                     is JvmDesktopStartupState.Ready ->
                         App(
                             component = current.component,
+                            startupAutoOpenGate = startupAutoOpenGate,
                             desktopWindowChrome = desktopWindowChrome,
                             onExitApplicationRequest = {
                                 try {

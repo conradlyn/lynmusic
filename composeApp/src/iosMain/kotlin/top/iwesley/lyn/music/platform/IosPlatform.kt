@@ -61,6 +61,7 @@ import top.iwesley.lyn.music.core.model.AppThemeId
 import top.iwesley.lyn.music.core.model.AppThemeTextPalette
 import top.iwesley.lyn.music.core.model.AppThemeTextPalettePreferences
 import top.iwesley.lyn.music.core.model.AppThemeTokens
+import top.iwesley.lyn.music.core.model.AutoOpenPlayerOnStartupPreferencesStore
 import top.iwesley.lyn.music.core.model.defaultCustomThemeTokens
 import top.iwesley.lyn.music.core.model.defaultThemeTextPalettePreferences
 import top.iwesley.lyn.music.core.model.info
@@ -171,6 +172,7 @@ fun createIosAppComponent(): top.iwesley.lyn.music.LynMusicAppComponent {
             themePreferencesStore = appPreferencesStore,
             compactPlayerLyricsPreferencesStore = appPreferencesStore,
             autoPlayOnStartupPreferencesStore = appPreferencesStore,
+            autoOpenPlayerOnStartupPreferencesStore = appPreferencesStore,
             navidromeAudioQualityPreferencesStore = appPreferencesStore,
             playerArtworkStylePreferencesStore = appPreferencesStore,
             networkConnectionTypeProvider = networkConnectionTypeProvider,
@@ -368,7 +370,8 @@ private class IosKeychainCredentialStore : SecureCredentialStore {
 
 private class IosAppPreferencesStore : PlaybackPreferencesStore, SambaCachePreferencesStore, ThemePreferencesStore,
     CompactPlayerLyricsPreferencesStore, NavidromeAudioQualityPreferencesStore, LyricsShareFontPreferencesStore,
-    PlayerArtworkStylePreferencesStore, LibrarySourceFilterPreferencesStore {
+    PlayerArtworkStylePreferencesStore, LibrarySourceFilterPreferencesStore,
+    AutoOpenPlayerOnStartupPreferencesStore {
     private val defaults = NSUserDefaults.standardUserDefaults
     private val mutableUseSambaCache = MutableStateFlow(
         if (defaults.objectForKey(KEY_USE_SAMBA_CACHE) == null) false else defaults.boolForKey(KEY_USE_SAMBA_CACHE),
@@ -386,6 +389,13 @@ private class IosAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
             false
         } else {
             defaults.boolForKey(KEY_AUTO_PLAY_ON_STARTUP)
+        },
+    )
+    private val mutableAutoOpenPlayerOnStartup = MutableStateFlow(
+        if (defaults.objectForKey(KEY_AUTO_OPEN_PLAYER_ON_STARTUP) == null) {
+            false
+        } else {
+            defaults.boolForKey(KEY_AUTO_OPEN_PLAYER_ON_STARTUP)
         },
     )
     private val mutableNavidromeWifiAudioQuality = MutableStateFlow(
@@ -415,6 +425,8 @@ private class IosAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
     override val playbackVolume: StateFlow<Float> = mutablePlaybackVolume.asStateFlow()
     override val showCompactPlayerLyrics: StateFlow<Boolean> = mutableShowCompactPlayerLyrics.asStateFlow()
     override val autoPlayOnStartup: StateFlow<Boolean> = mutableAutoPlayOnStartup.asStateFlow()
+    override val autoOpenPlayerOnStartup: StateFlow<Boolean> =
+        mutableAutoOpenPlayerOnStartup.asStateFlow()
     override val navidromeWifiAudioQuality: StateFlow<NavidromeAudioQuality> =
         mutableNavidromeWifiAudioQuality.asStateFlow()
     override val navidromeMobileAudioQuality: StateFlow<NavidromeAudioQuality> =
@@ -451,6 +463,11 @@ private class IosAppPreferencesStore : PlaybackPreferencesStore, SambaCachePrefe
     override suspend fun setAutoPlayOnStartup(enabled: Boolean) {
         defaults.setBool(enabled, KEY_AUTO_PLAY_ON_STARTUP)
         mutableAutoPlayOnStartup.value = enabled
+    }
+
+    override suspend fun setAutoOpenPlayerOnStartup(enabled: Boolean) {
+        defaults.setBool(enabled, KEY_AUTO_OPEN_PLAYER_ON_STARTUP)
+        mutableAutoOpenPlayerOnStartup.value = enabled
     }
 
     override suspend fun setNavidromeWifiAudioQuality(quality: NavidromeAudioQuality) {
@@ -875,6 +892,7 @@ private const val KEY_USE_SAMBA_CACHE = "use_samba_cache"
 private const val KEY_PLAYBACK_VOLUME = "playback_volume"
 private const val KEY_SHOW_COMPACT_PLAYER_LYRICS = "show_compact_player_lyrics"
 private const val KEY_AUTO_PLAY_ON_STARTUP = "auto_play_on_startup"
+private const val KEY_AUTO_OPEN_PLAYER_ON_STARTUP = "auto_open_player_on_startup"
 private const val KEY_PLAYER_ARTWORK_STYLE = "player_artwork_style"
 private const val KEY_NAVIDROME_WIFI_AUDIO_QUALITY = "navidrome_wifi_audio_quality"
 private const val KEY_NAVIDROME_MOBILE_AUDIO_QUALITY = "navidrome_mobile_audio_quality"

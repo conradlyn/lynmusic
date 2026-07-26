@@ -15,6 +15,7 @@ import top.iwesley.lyn.music.core.model.AppThemeTextPalette
 import top.iwesley.lyn.music.core.model.AppThemeTextPalettePreferences
 import top.iwesley.lyn.music.core.model.AppThemeTokens
 import top.iwesley.lyn.music.core.model.AutoPlayOnStartupPreferencesStore
+import top.iwesley.lyn.music.core.model.AutoOpenPlayerOnStartupPreferencesStore
 import top.iwesley.lyn.music.core.model.CompactPlayerLyricsPreferencesStore
 import top.iwesley.lyn.music.core.model.DesktopLyricsPreferencesStore
 import top.iwesley.lyn.music.core.model.DesktopVlcPreferencesStore
@@ -218,6 +219,44 @@ class SettingsRepositoryTest {
 
         assertEquals(false, preferences.autoPlayOnStartup.value)
         assertEquals(false, repository.autoPlayOnStartup.value)
+    }
+
+    @Test
+    fun `auto open player on startup preference defaults to false`() = runTest {
+        val database = createSettingsTestDatabase()
+        val preferences = FakePreferencesStore()
+        val repository = DefaultSettingsRepository(
+            database = database,
+            sambaCachePreferencesStore = preferences,
+            themePreferencesStore = preferences,
+            desktopVlcPreferencesStore = preferences,
+            autoOpenPlayerOnStartupPreferencesStore = preferences,
+        )
+
+        assertEquals(false, repository.autoOpenPlayerOnStartup.value)
+    }
+
+    @Test
+    fun `setting auto open player on startup preference writes through to preference store`() = runTest {
+        val database = createSettingsTestDatabase()
+        val preferences = FakePreferencesStore()
+        val repository = DefaultSettingsRepository(
+            database = database,
+            sambaCachePreferencesStore = preferences,
+            themePreferencesStore = preferences,
+            desktopVlcPreferencesStore = preferences,
+            autoOpenPlayerOnStartupPreferencesStore = preferences,
+        )
+
+        repository.setAutoOpenPlayerOnStartup(true)
+
+        assertEquals(true, preferences.autoOpenPlayerOnStartup.value)
+        assertEquals(true, repository.autoOpenPlayerOnStartup.value)
+
+        repository.setAutoOpenPlayerOnStartup(false)
+
+        assertEquals(false, preferences.autoOpenPlayerOnStartup.value)
+        assertEquals(false, repository.autoOpenPlayerOnStartup.value)
     }
 
     @Test
@@ -679,7 +718,7 @@ private fun createSettingsTestDatabase(): LynMusicDatabase {
 }
 
 private class FakePreferencesStore : SambaCachePreferencesStore, ThemePreferencesStore, DesktopVlcPreferencesStore,
-    AutoPlayOnStartupPreferencesStore, WindowClosePreferencesStore,
+    AutoPlayOnStartupPreferencesStore, AutoOpenPlayerOnStartupPreferencesStore, WindowClosePreferencesStore,
     CompactPlayerLyricsPreferencesStore, DesktopLyricsPreferencesStore, MenuBarLyricsControlsPreferencesStore,
     NavidromeAudioQualityPreferencesStore, PlaybackDecoderPreferencesStore, PlayerArtworkStylePreferencesStore {
     override val useSambaCache = MutableStateFlow(true)
@@ -687,6 +726,7 @@ private class FakePreferencesStore : SambaCachePreferencesStore, ThemePreference
     override val showDesktopLyrics = MutableStateFlow(false)
     override val showMenuBarLyricsControls = MutableStateFlow(false)
     override val autoPlayOnStartup = MutableStateFlow(false)
+    override val autoOpenPlayerOnStartup = MutableStateFlow(false)
     override val minimizeWindowOnClose = MutableStateFlow(true)
     override val useAndroidExtensionDecoder = MutableStateFlow(false)
     override val playerArtworkStyle = MutableStateFlow(PlayerArtworkStyle.VINYL)
@@ -717,6 +757,10 @@ private class FakePreferencesStore : SambaCachePreferencesStore, ThemePreference
 
     override suspend fun setAutoPlayOnStartup(enabled: Boolean) {
         autoPlayOnStartup.value = enabled
+    }
+
+    override suspend fun setAutoOpenPlayerOnStartup(enabled: Boolean) {
+        autoOpenPlayerOnStartup.value = enabled
     }
 
     override suspend fun setMinimizeWindowOnClose(enabled: Boolean) {

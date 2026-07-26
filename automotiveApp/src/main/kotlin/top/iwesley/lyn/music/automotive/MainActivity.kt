@@ -9,6 +9,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
@@ -16,6 +17,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
+import androidx.lifecycle.ViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -26,6 +28,7 @@ import top.iwesley.lyn.music.ANDROID_AUTOMOTIVE_PLATFORM_NAME
 import kotlin.math.min
 import top.iwesley.lyn.music.App
 import top.iwesley.lyn.music.LynMusicAppComponent
+import top.iwesley.lyn.music.StartupAutoOpenGate
 import top.iwesley.lyn.music.StartupDatabaseErrorScreen
 import top.iwesley.lyn.music.buildPlayerAppComponent
 import top.iwesley.lyn.music.core.model.AppDisplayScalePreset
@@ -37,6 +40,7 @@ import top.iwesley.lyn.music.platform.createAndroidRuntimeGraph
 import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
+    private val startupAutoOpenViewModel by viewModels<StartupAutoOpenViewModel>()
     private val externalAudioOpenScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var appComponent: LynMusicAppComponent? = null
     private var pendingExternalAudioOpenIntent: Intent? = null
@@ -69,7 +73,10 @@ class MainActivity : ComponentActivity() {
             if (appComponent != null) {
                 val appDisplayScalePreset by appComponent.appDisplayScalePreset.collectAsState()
                 ProvideFixedAndroidComposeDensity(appDisplayScalePreset = appDisplayScalePreset) {
-                    App(appComponent)
+                    App(
+                        component = appComponent,
+                        startupAutoOpenGate = startupAutoOpenViewModel.gate,
+                    )
                 }
             } else {
                 StartupDatabaseErrorScreen(
@@ -121,6 +128,10 @@ class MainActivity : ComponentActivity() {
             component.playerStore.dispatch(PlayerIntent.PlayTransientTracks(tracks, 0))
         }
     }
+}
+
+internal class StartupAutoOpenViewModel : ViewModel() {
+    val gate = StartupAutoOpenGate()
 }
 
 @Composable

@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import top.iwesley.lyn.music.cast.CastGateway
@@ -54,6 +55,7 @@ import top.iwesley.lyn.music.core.model.trackArtworkCacheKey
 import top.iwesley.lyn.music.core.model.warn
 import top.iwesley.lyn.music.core.mvi.BaseStore
 import top.iwesley.lyn.music.data.repository.LyricsRepository
+import top.iwesley.lyn.music.data.repository.PlaybackHydrationResult
 import top.iwesley.lyn.music.data.repository.PlaybackRepository
 
 const val MIN_SLEEP_TIMER_MINUTES = 1
@@ -300,11 +302,27 @@ class PlayerStore(
         }
     }
 
-    fun startHydration() {
+    fun startHydration(expandPlayerAfterHydration: Boolean = false): Job =
         storeScope.launch {
-            playbackRepository.hydratePersistedQueueIfNeeded()
+            val hydrationResult = playbackRepository.hydratePersistedQueueIfNeeded()
+            if (!expandPlayerAfterHydration) return@launch
+            if (
+                hydrationResult !is PlaybackHydrationResult.Restored &&
+                hydrationResult != PlaybackHydrationResult.ExistingPlayback
+            ) {
+                return@launch
+            }
+            val hydratedSnapshot = playbackRepository.snapshot.first { snapshot ->
+                !snapshot.isHydratingPlayback
+            }
+            val canExpand = when (hydrationResult) {
+                is PlaybackHydrationResult.Restored -> hydrationResult.loadToken.isCurrent()
+                PlaybackHydrationResult.ExistingPlayback -> true
+            }
+            if (canExpand && hydratedSnapshot.currentTrack != null) {
+                updateState { it.copy(isExpanded = true) }
+            }
         }
-    }
 
     override suspend fun handleIntent(intent: PlayerIntent) {
         when (intent) {

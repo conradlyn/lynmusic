@@ -73,6 +73,7 @@ import top.iwesley.lyn.music.cast.UnsupportedCastNotificationPermissionRequester
 import top.iwesley.lyn.music.cast.upnp.android.AndroidUpnpCastGateway
 import top.iwesley.lyn.music.core.model.AndroidDiagnosticLogger
 import top.iwesley.lyn.music.core.model.AppDisplayPreferencesStore
+import top.iwesley.lyn.music.core.model.AutoOpenPlayerOnStartupPreferencesStore
 import top.iwesley.lyn.music.core.model.AppDisplayScalePreset
 import top.iwesley.lyn.music.core.model.AudioTagGateway
 import top.iwesley.lyn.music.core.model.AudioTagPatch
@@ -377,6 +378,7 @@ private fun createAndroidRuntimeGraph(
                 compactPlayerLyricsPreferencesStore = appPreferencesStore,
                 desktopLyricsPreferencesStore = appPreferencesStore,
                 autoPlayOnStartupPreferencesStore = appPreferencesStore,
+                autoOpenPlayerOnStartupPreferencesStore = appPreferencesStore,
                 navidromeAudioQualityPreferencesStore = appPreferencesStore,
                 playbackDecoderPreferencesStore = appPreferencesStore,
                 playerArtworkStylePreferencesStore = appPreferencesStore,
@@ -666,7 +668,7 @@ internal class AndroidAppPreferencesStore(
 ) : PlaybackPreferencesStore, SambaCachePreferencesStore, ThemePreferencesStore, AppDisplayPreferencesStore,
     CompactPlayerLyricsPreferencesStore, DesktopLyricsPreferencesStore, NavidromeAudioQualityPreferencesStore, LibrarySourceFilterPreferencesStore,
     LyricsShareFontPreferencesStore, PlaybackDecoderPreferencesStore, PlayerArtworkStylePreferencesStore,
-    AndroidEqualizerPreferencesStore {
+    AndroidEqualizerPreferencesStore, AutoOpenPlayerOnStartupPreferencesStore {
     private val preferences: SharedPreferences =
         context.getSharedPreferences("lynmusic.settings", Context.MODE_PRIVATE)
     private val mutableUseSambaCache = MutableStateFlow(
@@ -681,6 +683,9 @@ internal class AndroidAppPreferencesStore(
     )
     private val mutableAutoPlayOnStartup = MutableStateFlow(
         preferences.getBoolean(KEY_AUTO_PLAY_ON_STARTUP, false),
+    )
+    private val mutableAutoOpenPlayerOnStartup = MutableStateFlow(
+        preferences.getBoolean(KEY_AUTO_OPEN_PLAYER_ON_STARTUP, false),
     )
     private val mutableUseAndroidExtensionDecoder = MutableStateFlow(
         preferences.getBoolean(
@@ -782,6 +787,8 @@ internal class AndroidAppPreferencesStore(
     override val showCompactPlayerLyrics: StateFlow<Boolean> = mutableShowCompactPlayerLyrics.asStateFlow()
     override val showDesktopLyrics: StateFlow<Boolean> = mutableShowDesktopLyrics.asStateFlow()
     override val autoPlayOnStartup: StateFlow<Boolean> = mutableAutoPlayOnStartup.asStateFlow()
+    override val autoOpenPlayerOnStartup: StateFlow<Boolean> =
+        mutableAutoOpenPlayerOnStartup.asStateFlow()
     override val useAndroidExtensionDecoder: StateFlow<Boolean> =
         mutableUseAndroidExtensionDecoder.asStateFlow()
     override val playerArtworkStyle: StateFlow<PlayerArtworkStyle> = mutablePlayerArtworkStyle.asStateFlow()
@@ -829,6 +836,11 @@ internal class AndroidAppPreferencesStore(
     override suspend fun setAutoPlayOnStartup(enabled: Boolean) {
         preferences.edit().putBoolean(KEY_AUTO_PLAY_ON_STARTUP, enabled).apply()
         mutableAutoPlayOnStartup.value = enabled
+    }
+
+    override suspend fun setAutoOpenPlayerOnStartup(enabled: Boolean) {
+        preferences.edit().putBoolean(KEY_AUTO_OPEN_PLAYER_ON_STARTUP, enabled).apply()
+        mutableAutoOpenPlayerOnStartup.value = enabled
     }
 
     override suspend fun setUseAndroidExtensionDecoder(enabled: Boolean) {
@@ -3243,6 +3255,7 @@ private const val KEY_PLAYBACK_VOLUME = "playback_volume"
 private const val KEY_SHOW_COMPACT_PLAYER_LYRICS = "show_compact_player_lyrics"
 private const val KEY_SHOW_DESKTOP_LYRICS = "show_desktop_lyrics"
 private const val KEY_AUTO_PLAY_ON_STARTUP = "auto_play_on_startup"
+private const val KEY_AUTO_OPEN_PLAYER_ON_STARTUP = "auto_open_player_on_startup"
 private const val KEY_ANDROID_EXTENSION_DECODER_ENABLED = "android_extension_decoder_enabled"
 private const val KEY_PLAYER_ARTWORK_STYLE = "player_artwork_style"
 private const val KEY_APP_DISPLAY_SCALE_PRESET = "app_display_scale_preset"

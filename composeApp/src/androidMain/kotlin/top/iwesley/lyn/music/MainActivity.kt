@@ -11,6 +11,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
@@ -19,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
+import androidx.lifecycle.ViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -37,6 +39,7 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
+    private val startupAutoOpenViewModel by viewModels<StartupAutoOpenViewModel>()
     private val externalAudioOpenScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var appComponent: LynMusicAppComponent? = null
     private var pendingExternalAudioOpenIntent: Intent? = null
@@ -83,7 +86,10 @@ class MainActivity : ComponentActivity() {
                 val appDisplayScalePreset by appComponent.appDisplayScalePreset.collectAsState()
                 ProvideFixedAndroidComposeDensity(appDisplayScalePreset = appDisplayScalePreset) {
                     AndroidMainShellSystemBars(appComponent)
-                    App(appComponent)
+                    App(
+                        component = appComponent,
+                        startupAutoOpenGate = startupAutoOpenViewModel.gate,
+                    )
                 }
             } else {
                 StartupDatabaseErrorScreen(
@@ -135,6 +141,10 @@ class MainActivity : ComponentActivity() {
             component.playerStore.dispatch(PlayerIntent.PlayTransientTracks(tracks, 0))
         }
     }
+}
+
+internal class StartupAutoOpenViewModel : ViewModel() {
+    val gate = StartupAutoOpenGate()
 }
 
 @Composable

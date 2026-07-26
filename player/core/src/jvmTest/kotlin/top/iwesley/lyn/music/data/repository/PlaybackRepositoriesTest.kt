@@ -6,6 +6,7 @@ import kotlin.io.path.absolutePathString
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -13,6 +14,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -1545,6 +1547,10 @@ class PlaybackRepositoriesTest {
         try {
             advanceUntilIdle()
 
+            assertEquals(
+                PlaybackHydrationResult.ExistingPlayback,
+                repository.hydratePersistedQueueIfNeeded(),
+            )
             val snapshot = repository.snapshot.value
             assertEquals(listOf("track-3", "track-1", "track-4", "track-2"), trackIds(snapshot.queue))
             assertEquals(listOf("track-1", "track-2", "track-3", "track-4"), trackIds(snapshot.orderedQueue))
@@ -1554,6 +1560,193 @@ class PlaybackRepositoriesTest {
             assertEquals("track-4", gateway.loadCalls.single().track.id)
             assertEquals(false, gateway.loadCalls.single().playWhenReady)
             assertEquals(12_000L, gateway.loadCalls.single().startPositionMs)
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `hydrate reports empty when no persisted queue exists`() = runTest {
+        val database = createTestDatabase()
+        val gateway = FakePlaybackGateway()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = FakePlaybackPreferencesStore(),
+            scope = scope,
+            hydrateImmediately = false,
+        )
+
+        try {
+            assertEquals(
+                PlaybackHydrationResult.Empty,
+                repository.hydratePersistedQueueIfNeeded(),
+            )
+            assertEquals(
+                PlaybackHydrationResult.Empty,
+                repository.hydratePersistedQueueIfNeeded(),
+            )
+            assertEquals(false, repository.snapshot.value.isHydratingPlayback)
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `hydrate reports existing playback when playback already supplied a queue`() = runTest {
+        val database = createTestDatabase()
+        val gateway = FakePlaybackGateway()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = FakePlaybackPreferencesStore(),
+            scope = scope,
+            hydrateImmediately = false,
+        )
+        val tracks = sampleTracks(1)
+
+        try {
+            repository.playTracks(tracks, startIndex = 0)
+
+            assertEquals(
+                PlaybackHydrationResult.ExistingPlayback,
+                repository.hydratePersistedQueueIfNeeded(),
+            )
+            assertEquals("track-1", repository.snapshot.value.currentTrack?.id)
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `hydrate reports existing playback after an empty result is cached`() = runTest {
+        val database = createTestDatabase()
+        val gateway = FakePlaybackGateway()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = FakePlaybackPreferencesStore(),
+            scope = scope,
+            hydrateImmediately = false,
+        )
+
+        try {
+            assertEquals(
+                PlaybackHydrationResult.Empty,
+                repository.hydratePersistedQueueIfNeeded(),
+            )
+
+            repository.playTracks(sampleTracks(1), startIndex = 0)
+
+            assertEquals(
+                PlaybackHydrationResult.ExistingPlayback,
+                repository.hydratePersistedQueueIfNeeded(),
+            )
+            assertEquals("track-1", repository.snapshot.value.currentTrack?.id)
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `hydrate reports superseded when playback changes during restored track load`() = runTest {
+        val database = createTestDatabase()
+        database.trackDao().upsertAll(
+            listOf(sampleTrackEntity("track-1", "Restored Song")),
+        )
+        database.playbackQueueSnapshotDao().upsert(
+            PlaybackQueueSnapshotEntity(
+                queueTrackIds = "track-1",
+                orderedQueueTrackIds = "track-1",
+                currentIndex = 0,
+                positionMs = 12_000L,
+                mode = PlaybackMode.ORDER.name,
+                updatedAt = 1L,
+            ),
+        )
+        val gateway = BlockingPlaybackGateway()
+        val restoreLoadStarted = CompletableDeferred<Unit>()
+        val restoreLoadGate = CompletableDeferred<Unit>()
+        gateway.nextLoadStarted = restoreLoadStarted
+        gateway.nextLoadGate = restoreLoadGate
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = FakePlaybackPreferencesStore(),
+            scope = scope,
+            hydrateImmediately = false,
+        )
+
+        try {
+            val hydration = async { repository.hydratePersistedQueueIfNeeded() }
+            restoreLoadStarted.await()
+
+            repository.playTracks(sampleTracks(2), startIndex = 1)
+            restoreLoadGate.complete(Unit)
+            advanceUntilIdle()
+
+            assertEquals(
+                PlaybackHydrationResult.SupersededByPlayback,
+                hydration.await(),
+            )
+            assertEquals("track-2", repository.snapshot.value.currentTrack?.id)
+        } finally {
+            repository.close()
+            scope.cancel()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `cached restored hydration reports existing playback after playback changes`() = runTest {
+        val database = createTestDatabase()
+        database.trackDao().upsertAll(
+            listOf(sampleTrackEntity("track-1", "Restored Song")),
+        )
+        database.playbackQueueSnapshotDao().upsert(
+            PlaybackQueueSnapshotEntity(
+                queueTrackIds = "track-1",
+                orderedQueueTrackIds = "track-1",
+                currentIndex = 0,
+                positionMs = 12_000L,
+                mode = PlaybackMode.ORDER.name,
+                updatedAt = 1L,
+            ),
+        )
+        val gateway = FakePlaybackGateway()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val repository = DefaultPlaybackRepository(
+            database = database,
+            gateway = gateway,
+            playbackPreferencesStore = FakePlaybackPreferencesStore(),
+            scope = scope,
+            hydrateImmediately = false,
+        )
+
+        try {
+            assertIs<PlaybackHydrationResult.Restored>(
+                repository.hydratePersistedQueueIfNeeded(),
+            )
+
+            repository.playTracks(sampleTracks(2), startIndex = 1)
+
+            assertEquals(
+                PlaybackHydrationResult.ExistingPlayback,
+                repository.hydratePersistedQueueIfNeeded(),
+            )
+            assertEquals("track-2", repository.snapshot.value.currentTrack?.id)
         } finally {
             repository.close()
             scope.cancel()
@@ -3205,6 +3398,7 @@ private class FakePlaybackGateway(
 private class BlockingPlaybackGateway : PlaybackGateway {
     private val mutableState = MutableStateFlow(PlaybackGatewayState())
 
+    var nextLoadStarted: CompletableDeferred<Unit>? = null
     var nextLoadGate: CompletableDeferred<Unit>? = null
     val loadCalls = mutableListOf<LoadCall>()
     val appliedTrackIds = mutableListOf<String>()
@@ -3219,6 +3413,10 @@ private class BlockingPlaybackGateway : PlaybackGateway {
     ) {
         mutableState.value = mutableState.value.copy(canSeek = false)
         loadCalls += LoadCall(track, playWhenReady, startPositionMs)
+        nextLoadStarted?.also { started ->
+            nextLoadStarted = null
+            started.complete(Unit)
+        }
         nextLoadGate?.also { gate ->
             nextLoadGate = null
             gate.await()

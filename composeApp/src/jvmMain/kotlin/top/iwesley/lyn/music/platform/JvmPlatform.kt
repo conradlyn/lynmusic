@@ -101,6 +101,7 @@ import top.iwesley.lyn.music.core.model.AppThemeId
 import top.iwesley.lyn.music.core.model.AppThemeTextPalette
 import top.iwesley.lyn.music.core.model.AppThemeTextPalettePreferences
 import top.iwesley.lyn.music.core.model.AppThemeTokens
+import top.iwesley.lyn.music.core.model.AutoOpenPlayerOnStartupPreferencesStore
 import top.iwesley.lyn.music.core.model.defaultCustomThemeTokens
 import top.iwesley.lyn.music.core.model.defaultThemeTextPalettePreferences
 import top.iwesley.lyn.music.core.model.inferArtworkFileExtension
@@ -259,6 +260,7 @@ fun createJvmAppComponent(
             desktopLyricsPreferencesStore = appPreferencesStore,
             menuBarLyricsControlsPreferencesStore = appPreferencesStore,
             autoPlayOnStartupPreferencesStore = appPreferencesStore,
+            autoOpenPlayerOnStartupPreferencesStore = appPreferencesStore,
             windowClosePreferencesStore = appPreferencesStore,
             playerArtworkStylePreferencesStore = appPreferencesStore,
             desktopVlcPreferencesStore = appPreferencesStore,
@@ -426,7 +428,7 @@ internal class JvmAppPreferencesStore(
 ) : PlaybackPreferencesStore, SambaCachePreferencesStore, ThemePreferencesStore,
     CompactPlayerLyricsPreferencesStore, DesktopLyricsPreferencesStore, MenuBarLyricsControlsPreferencesStore,
     DesktopVlcPreferencesStore, LyricsShareFontPreferencesStore, PlayerArtworkStylePreferencesStore,
-    LibrarySourceFilterPreferencesStore, WindowClosePreferencesStore {
+    LibrarySourceFilterPreferencesStore, WindowClosePreferencesStore, AutoOpenPlayerOnStartupPreferencesStore {
     private val propertiesFile = JvmSettingsPropertiesFile(settingsFile)
     private val mutableUseSambaCache = MutableStateFlow(readUseSambaCache())
     private val mutablePlaybackVolume = MutableStateFlow(readPlaybackVolume())
@@ -434,6 +436,7 @@ internal class JvmAppPreferencesStore(
     private val mutableShowDesktopLyrics = MutableStateFlow(readShowDesktopLyrics())
     private val mutableShowMenuBarLyricsControls = MutableStateFlow(readShowMenuBarLyricsControls())
     private val mutableAutoPlayOnStartup = MutableStateFlow(readAutoPlayOnStartup())
+    private val mutableAutoOpenPlayerOnStartup = MutableStateFlow(readAutoOpenPlayerOnStartup())
     private val mutableMinimizeWindowOnClose = MutableStateFlow(readMinimizeWindowOnClose())
     private val mutableLibrarySourceFilter = MutableStateFlow(readLibrarySourceFilter(KEY_LIBRARY_SOURCE_FILTER))
     private val mutableFavoritesSourceFilter = MutableStateFlow(readLibrarySourceFilter(KEY_FAVORITES_SOURCE_FILTER))
@@ -466,6 +469,8 @@ internal class JvmAppPreferencesStore(
     override val showDesktopLyrics: StateFlow<Boolean> = mutableShowDesktopLyrics.asStateFlow()
     override val showMenuBarLyricsControls: StateFlow<Boolean> = mutableShowMenuBarLyricsControls.asStateFlow()
     override val autoPlayOnStartup: StateFlow<Boolean> = mutableAutoPlayOnStartup.asStateFlow()
+    override val autoOpenPlayerOnStartup: StateFlow<Boolean> =
+        mutableAutoOpenPlayerOnStartup.asStateFlow()
     override val minimizeWindowOnClose: StateFlow<Boolean> = mutableMinimizeWindowOnClose.asStateFlow()
     override val selectedTheme: StateFlow<AppThemeId> = mutableSelectedTheme.asStateFlow()
     override val customThemeTokens: StateFlow<AppThemeTokens> = mutableCustomThemeTokens.asStateFlow()
@@ -523,6 +528,13 @@ internal class JvmAppPreferencesStore(
         updateProperties(
             mutate = { setProperty(KEY_AUTO_PLAY_ON_STARTUP, enabled.toString()) },
             onPersisted = { mutableAutoPlayOnStartup.value = enabled },
+        )
+    }
+
+    override suspend fun setAutoOpenPlayerOnStartup(enabled: Boolean) {
+        updateProperties(
+            mutate = { setProperty(KEY_AUTO_OPEN_PLAYER_ON_STARTUP, enabled.toString()) },
+            onPersisted = { mutableAutoOpenPlayerOnStartup.value = enabled },
         )
     }
 
@@ -687,6 +699,10 @@ internal class JvmAppPreferencesStore(
 
     private fun readAutoPlayOnStartup(): Boolean {
         return loadProperties().getProperty(KEY_AUTO_PLAY_ON_STARTUP)?.toBooleanStrictOrNull() ?: false
+    }
+
+    private fun readAutoOpenPlayerOnStartup(): Boolean {
+        return loadProperties().getProperty(KEY_AUTO_OPEN_PLAYER_ON_STARTUP)?.toBooleanStrictOrNull() ?: false
     }
 
     private fun readMinimizeWindowOnClose(): Boolean {
@@ -3108,6 +3124,7 @@ private const val KEY_SHOW_COMPACT_PLAYER_LYRICS = "show_compact_player_lyrics"
 private const val KEY_SHOW_DESKTOP_LYRICS = "show_desktop_lyrics"
 private const val KEY_SHOW_MENU_BAR_LYRICS_CONTROLS = "show_menu_bar_lyrics_controls"
 private const val KEY_AUTO_PLAY_ON_STARTUP = "auto_play_on_startup"
+private const val KEY_AUTO_OPEN_PLAYER_ON_STARTUP = "auto_open_player_on_startup"
 private const val KEY_MACOS_MINIMIZE_WINDOW_ON_CLOSE = "macos_minimize_window_on_close"
 private const val KEY_PLAYER_ARTWORK_STYLE = "player_artwork_style"
 private const val KEY_LIBRARY_SOURCE_FILTER = "library_source_filter"

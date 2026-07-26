@@ -461,6 +461,44 @@ class SettingsStoreTest {
     }
 
     @Test
+    fun `auto open player on startup preference defaults to false`() = runTest {
+        val repository = FakeSettingsRepository()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(repository, scope)
+
+        assertFalse(store.state.value.autoOpenPlayerOnStartup)
+        scope.cancel()
+    }
+
+    @Test
+    fun `store initializes persisted auto open player on startup preference synchronously`() = runTest {
+        val repository = FakeSettingsRepository(autoOpenPlayerOnStartup = true)
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(repository, scope)
+
+        assertTrue(store.state.value.autoOpenPlayerOnStartup)
+        scope.cancel()
+    }
+
+    @Test
+    fun `updating auto open player on startup preference writes through immediately`() = runTest {
+        val repository = FakeSettingsRepository()
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val store = SettingsStore(repository, scope)
+
+        store.dispatch(SettingsIntent.AutoOpenPlayerOnStartupChanged(true))
+        advanceUntilIdle()
+        assertTrue(store.state.value.autoOpenPlayerOnStartup)
+        assertTrue(repository.currentAutoOpenPlayerOnStartup())
+
+        store.dispatch(SettingsIntent.AutoOpenPlayerOnStartupChanged(false))
+        advanceUntilIdle()
+        assertFalse(store.state.value.autoOpenPlayerOnStartup)
+        assertFalse(repository.currentAutoOpenPlayerOnStartup())
+        scope.cancel()
+    }
+
+    @Test
     fun `minimize window on close preference defaults to true immediately`() = runTest {
         val repository = FakeSettingsRepository()
         val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
@@ -2030,6 +2068,7 @@ private class FakeSettingsRepository(
     showDesktopLyrics: Boolean = false,
     showMenuBarLyricsControls: Boolean = false,
     autoPlayOnStartup: Boolean = false,
+    autoOpenPlayerOnStartup: Boolean = false,
     minimizeWindowOnClose: Boolean = DEFAULT_MINIMIZE_WINDOW_ON_CLOSE,
     useAndroidExtensionDecoder: Boolean = false,
     playerArtworkStyle: PlayerArtworkStyle = PlayerArtworkStyle.VINYL,
@@ -2049,6 +2088,7 @@ private class FakeSettingsRepository(
     private val mutableShowDesktopLyrics = MutableStateFlow(showDesktopLyrics)
     private val mutableShowMenuBarLyricsControls = MutableStateFlow(showMenuBarLyricsControls)
     private val mutableAutoPlayOnStartup = MutableStateFlow(autoPlayOnStartup)
+    private val mutableAutoOpenPlayerOnStartup = MutableStateFlow(autoOpenPlayerOnStartup)
     private val mutableMinimizeWindowOnClose = MutableStateFlow(minimizeWindowOnClose)
     private val mutableUseAndroidExtensionDecoder = MutableStateFlow(useAndroidExtensionDecoder)
     private val mutablePlayerArtworkStyle = MutableStateFlow(playerArtworkStyle)
@@ -2071,6 +2111,8 @@ private class FakeSettingsRepository(
     override val showMenuBarLyricsControls: StateFlow<Boolean> =
         mutableShowMenuBarLyricsControls.asStateFlow()
     override val autoPlayOnStartup: StateFlow<Boolean> = mutableAutoPlayOnStartup.asStateFlow()
+    override val autoOpenPlayerOnStartup: StateFlow<Boolean> =
+        mutableAutoOpenPlayerOnStartup.asStateFlow()
     override val minimizeWindowOnClose: StateFlow<Boolean> = mutableMinimizeWindowOnClose.asStateFlow()
     override val useAndroidExtensionDecoder: StateFlow<Boolean> =
         mutableUseAndroidExtensionDecoder.asStateFlow()
@@ -2095,6 +2137,7 @@ private class FakeSettingsRepository(
     fun currentShowDesktopLyrics(): Boolean = mutableShowDesktopLyrics.value
     fun currentShowMenuBarLyricsControls(): Boolean = mutableShowMenuBarLyricsControls.value
     fun currentAutoPlayOnStartup(): Boolean = mutableAutoPlayOnStartup.value
+    fun currentAutoOpenPlayerOnStartup(): Boolean = mutableAutoOpenPlayerOnStartup.value
     fun currentMinimizeWindowOnClose(): Boolean = mutableMinimizeWindowOnClose.value
     fun currentUseAndroidExtensionDecoder(): Boolean = mutableUseAndroidExtensionDecoder.value
     fun currentPlayerArtworkStyle(): PlayerArtworkStyle = mutablePlayerArtworkStyle.value
@@ -2126,6 +2169,10 @@ private class FakeSettingsRepository(
 
     override suspend fun setAutoPlayOnStartup(enabled: Boolean) {
         mutableAutoPlayOnStartup.value = enabled
+    }
+
+    override suspend fun setAutoOpenPlayerOnStartup(enabled: Boolean) {
+        mutableAutoOpenPlayerOnStartup.value = enabled
     }
 
     override suspend fun setMinimizeWindowOnClose(enabled: Boolean) {

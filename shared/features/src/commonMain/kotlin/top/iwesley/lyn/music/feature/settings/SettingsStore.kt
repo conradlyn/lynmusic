@@ -80,6 +80,7 @@ data class SettingsState(
     val showDesktopLyrics: Boolean = false,
     val showMenuBarLyricsControls: Boolean = false,
     val autoPlayOnStartup: Boolean = false,
+    val autoOpenPlayerOnStartup: Boolean = false,
     val minimizeWindowOnClose: Boolean = DEFAULT_MINIMIZE_WINDOW_ON_CLOSE,
     val appDisplayScalePreset: AppDisplayScalePreset = AppDisplayScalePreset.Default,
     val navidromeWifiAudioQuality: NavidromeAudioQuality = NavidromeAudioQuality.Original,
@@ -141,6 +142,7 @@ sealed interface SettingsIntent {
     data class ShowMenuBarLyricsControlsChanged(val value: Boolean) : SettingsIntent
     data object RecheckDesktopLyricsPermission : SettingsIntent
     data class AutoPlayOnStartupChanged(val value: Boolean) : SettingsIntent
+    data class AutoOpenPlayerOnStartupChanged(val value: Boolean) : SettingsIntent
     data class MinimizeWindowOnCloseChanged(
         val value: Boolean,
         val revision: Long = 0L,
@@ -240,6 +242,7 @@ class SettingsStore(
         UnsupportedDesktopLyricsPlatformService,
 ) : BaseStore<SettingsState, SettingsIntent, SettingsEffect>(
     initialState = SettingsState(
+        autoOpenPlayerOnStartup = repository.autoOpenPlayerOnStartup.value,
         minimizeWindowOnClose = repository.minimizeWindowOnClose.value,
         currentDataRootPath = appDataLocationPlatformService.currentDataRootPath,
         pendingDataCleanupRootPath = appDataLocationPlatformService.pendingCleanupRootPath,
@@ -326,6 +329,11 @@ class SettingsStore(
         scope.launch {
             repository.autoPlayOnStartup.collect { enabled ->
                 updateState { state -> state.copy(autoPlayOnStartup = enabled) }
+            }
+        }
+        scope.launch {
+            repository.autoOpenPlayerOnStartup.collect { enabled ->
+                updateState { state -> state.copy(autoOpenPlayerOnStartup = enabled) }
             }
         }
         scope.launch {
@@ -559,6 +567,11 @@ class SettingsStore(
             is SettingsIntent.AutoPlayOnStartupChanged -> {
                 repository.setAutoPlayOnStartup(intent.value)
                 updateState { it.copy(autoPlayOnStartup = intent.value) }
+            }
+
+            is SettingsIntent.AutoOpenPlayerOnStartupChanged -> {
+                repository.setAutoOpenPlayerOnStartup(intent.value)
+                updateState { it.copy(autoOpenPlayerOnStartup = intent.value) }
             }
 
             is SettingsIntent.MinimizeWindowOnCloseChanged -> {

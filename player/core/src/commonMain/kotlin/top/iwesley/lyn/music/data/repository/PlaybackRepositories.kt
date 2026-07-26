@@ -75,7 +75,7 @@ import top.iwesley.lyn.music.data.db.PlaybackQueueSnapshotEntity
 interface PlaybackRepository {
     val snapshot: StateFlow<PlaybackSnapshot>
 
-    suspend fun hydratePersistedQueueIfNeeded()
+    suspend fun hydratePersistedQueueIfNeeded(): PlaybackHydrationResult
     suspend fun playTracks(tracks: List<Track>, startIndex: Int)
     suspend fun playTransientTracks(tracks: List<Track>, startIndex: Int)
     suspend fun prepareExternalPlaybackQueue(tracks: List<Track>, startIndex: Int): PlaybackSnapshot?
@@ -89,6 +89,17 @@ interface PlaybackRepository {
     suspend fun cycleMode()
     suspend fun overrideCurrentTrackArtwork(artworkLocator: String?)
     suspend fun close()
+}
+
+sealed interface PlaybackHydrationResult {
+    data class Restored(
+        val loadToken: PlaybackLoadToken,
+    ) : PlaybackHydrationResult
+
+    data object ExistingPlayback : PlaybackHydrationResult
+    data object Empty : PlaybackHydrationResult
+    data object SupersededByPlayback : PlaybackHydrationResult
+    data object Failed : PlaybackHydrationResult
 }
 
 class DefaultPlaybackRepository(
@@ -111,6 +122,7 @@ class DefaultPlaybackRepository(
         ),
     )
     private val playbackCommandMutex = Mutex()
+    private val persistedQueueHydrationMutex = Mutex()
     private val closeMutex = Mutex()
     private val lifecycleJobs = mutableListOf<Job>()
     private val playbackStatsScope = CoroutineScope(
@@ -126,8 +138,7 @@ class DefaultPlaybackRepository(
     }
     @Volatile
     private var latestLoadRequestId = 0L
-    @Volatile
-    private var hasHydratedPersistedQueue = false
+    private var persistedQueueHydrationResult: PlaybackHydrationResult? = null
     @Volatile
     private var currentQueueIsTransient = false
     @Volatile
@@ -280,17 +291,36 @@ class DefaultPlaybackRepository(
         }
     }
 
-    override suspend fun hydratePersistedQueueIfNeeded() {
-        if (hasHydratedPersistedQueue) return
-        runCatching { restoreQueueAsync() }
-            .onFailure { throwable ->
+    override suspend fun hydratePersistedQueueIfNeeded(): PlaybackHydrationResult =
+        persistedQueueHydrationMutex.withLock {
+            val hasExistingPlayback = playbackCommandMutex.withLock {
+                val hasCurrentTrack = mutableSnapshot.value.currentTrack != null
+                if (hasCurrentTrack) {
+                    mutableSnapshot.update { it.copy(isHydratingPlayback = false) }
+                }
+                hasCurrentTrack
+            }
+            if (hasExistingPlayback) {
+                return@withLock PlaybackHydrationResult.ExistingPlayback
+            }
+            persistedQueueHydrationResult?.let { cachedResult ->
+                val validatedResult = cachedResult.validateCurrentRestore()
+                persistedQueueHydrationResult = validatedResult
+                return@withLock validatedResult
+            }
+            val result = try {
+                restoreQueueAsync()
+            } catch (throwable: Throwable) {
                 if (throwable is CancellationException) throw throwable
                 mutableSnapshot.update { it.copy(isHydratingPlayback = false) }
                 logger.error(PLAYBACK_LOG_TAG, throwable) {
                     "hydrate-failed"
                 }
+                PlaybackHydrationResult.Failed
             }
-    }
+            persistedQueueHydrationResult = result
+            result
+        }
 
     override suspend fun playTracks(tracks: List<Track>, startIndex: Int) {
         var loadRequest: PlaybackLoadRequest? = null
@@ -610,31 +640,26 @@ class DefaultPlaybackRepository(
         )
     }
 
-    private suspend fun restoreQueueAsync() {
+    private suspend fun restoreQueueAsync(): PlaybackHydrationResult {
         val shouldHydrate = playbackCommandMutex.withLock {
-            if (hasHydratedPersistedQueue) {
+            if (mutableSnapshot.value.queue.isNotEmpty()) {
+                mutableSnapshot.update { it.copy(isHydratingPlayback = false) }
                 false
             } else {
-                hasHydratedPersistedQueue = true
-                if (mutableSnapshot.value.queue.isNotEmpty()) {
-                    mutableSnapshot.update { it.copy(isHydratingPlayback = false) }
-                    false
-                } else {
-                    true
-                }
+                true
             }
         }
-        if (!shouldHydrate) return
+        if (!shouldHydrate) return PlaybackHydrationResult.SupersededByPlayback
 
         val persisted = database.playbackQueueSnapshotDao().get()
         if (persisted == null) {
             mutableSnapshot.update { it.copy(isHydratingPlayback = false) }
-            return
+            return PlaybackHydrationResult.Empty
         }
         val queueIds = persisted.queueTrackIds.split(',').filter { it.isNotBlank() }
         if (queueIds.isEmpty()) {
             mutableSnapshot.update { it.copy(isHydratingPlayback = false) }
-            return
+            return PlaybackHydrationResult.Empty
         }
         val orderedQueueIds = persisted.orderedQueueTrackIds
             .split(',')
@@ -659,7 +684,7 @@ class DefaultPlaybackRepository(
         }.ifEmpty { tracks }
         if (tracks.isEmpty()) {
             mutableSnapshot.update { it.copy(isHydratingPlayback = false) }
-            return
+            return PlaybackHydrationResult.Empty
         }
         val index = restoredTracks.restoredIndexForOriginalIndex(
             persisted.currentIndex.coerceIn(0, queueIds.lastIndex),
@@ -696,9 +721,23 @@ class DefaultPlaybackRepository(
                 )
             }
         }
-        if (!shouldApplyRestore) return
-        loadRequest?.let { loadGatewaySafely(it) }
+        if (!shouldApplyRestore) return PlaybackHydrationResult.SupersededByPlayback
+        val restoreLoadRequest = loadRequest ?: return PlaybackHydrationResult.Failed
+        loadGatewaySafely(restoreLoadRequest)
+        return if (restoreLoadRequest.loadToken.isCurrent()) {
+            PlaybackHydrationResult.Restored(restoreLoadRequest.loadToken)
+        } else {
+            PlaybackHydrationResult.SupersededByPlayback
+        }
     }
+
+    private fun PlaybackHydrationResult.validateCurrentRestore(): PlaybackHydrationResult =
+        when (this) {
+            is PlaybackHydrationResult.Restored ->
+                if (loadToken.isCurrent()) this else PlaybackHydrationResult.SupersededByPlayback
+
+            else -> this
+        }
 
     private suspend fun loadGatewaySafely(
         request: PlaybackLoadRequest,

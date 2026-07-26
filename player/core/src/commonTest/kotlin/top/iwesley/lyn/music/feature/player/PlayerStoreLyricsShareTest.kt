@@ -37,6 +37,7 @@ import top.iwesley.lyn.music.core.model.WorkflowSongCandidate
 import top.iwesley.lyn.music.core.model.trackArtworkCacheKey
 import top.iwesley.lyn.music.data.repository.AppliedLyricsResult
 import top.iwesley.lyn.music.data.repository.LyricsRepository
+import top.iwesley.lyn.music.data.repository.PlaybackHydrationResult
 import top.iwesley.lyn.music.data.repository.PlaybackRepository
 import top.iwesley.lyn.music.data.repository.ResolvedLyricsResult
 
@@ -1172,7 +1173,7 @@ private class FakeLyricsSharePlaybackRepository(
         mutableSnapshot.value = snapshot
     }
 
-    override suspend fun hydratePersistedQueueIfNeeded() = Unit
+    override suspend fun hydratePersistedQueueIfNeeded() = PlaybackHydrationResult.Empty
 
     override suspend fun playTracks(tracks: List<Track>, startIndex: Int) = Unit
 

@@ -28,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -388,6 +389,7 @@ private fun resolveMenuBarLyricsFallbackText(player: PlayerState): String? {
 @Composable
 fun App(
     component: LynMusicAppComponent,
+    startupAutoOpenGate: StartupAutoOpenGate,
     desktopWindowChrome: DesktopWindowChrome = DesktopWindowChrome(),
     onExitApplicationRequest: () -> Unit = {},
     startupWarning: String? = null,
@@ -575,7 +577,6 @@ fun App(
                 preferences = settingsState.textPalettePreferences,
             )
         }
-
     CompositionLocalProvider(
         LocalPlatformDescriptor provides component.platform,
         LocalDesktopWindowChrome provides desktopWindowChrome,
@@ -596,7 +597,22 @@ fun App(
         }
         LaunchedEffect(component) {
             withFrameNanos { }
-            component.playerStore.startHydration()
+            launch {
+                startupAutoOpenGate.runStartupHydration(
+                    requested = shouldAutoOpenPlayerOnStartup(
+                        enabled = settingsState.autoOpenPlayerOnStartup,
+                        platform = component.platform,
+                    ),
+                ) { expandPlayerAfterHydration ->
+                    val hydrationJob = component.playerStore.startHydration(
+                        expandPlayerAfterHydration = expandPlayerAfterHydration,
+                    )
+                    hydrationJob.join()
+                    if (hydrationJob.isCancelled) {
+                        throw CancellationException("Startup playback hydration was cancelled.")
+                    }
+                }
+            }
             component.settingsStore.dispatch(SettingsIntent.CheckAppUpdateSilently)
             activateStartupStores(
                 component = component,
@@ -1030,6 +1046,13 @@ fun App(
             }
         }
     }
+}
+
+internal fun shouldAutoOpenPlayerOnStartup(
+    enabled: Boolean,
+    platform: PlatformDescriptor,
+): Boolean {
+    return enabled && !platform.isAndroidTV()
 }
 
 internal fun secondaryToastMessage(

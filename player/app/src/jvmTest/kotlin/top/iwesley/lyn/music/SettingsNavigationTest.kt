@@ -61,6 +61,37 @@ class SettingsNavigationTest {
     }
 
     @Test
+    fun `auto open player on startup setting is shown on every non tv platform`() {
+        assertTrue(shouldShowAutoOpenPlayerOnStartupSetting(mobilePlatform()))
+        assertTrue(shouldShowAutoOpenPlayerOnStartupSetting(platformNamed(IOS_PLATFORM_NAME)))
+        assertTrue(shouldShowAutoOpenPlayerOnStartupSetting(desktopPlatform()))
+        assertTrue(shouldShowAutoOpenPlayerOnStartupSetting(platformNamed(ANDROID_AUTOMOTIVE_PLATFORM_NAME)))
+    }
+
+    @Test
+    fun `auto open player on startup setting is hidden on tv`() {
+        assertFalse(shouldShowAutoOpenPlayerOnStartupSetting(platformNamed(ANDROID_TV_PLATFORM_NAME)))
+    }
+
+    @Test
+    fun `startup player auto open is enabled only for non tv platforms`() {
+        assertTrue(shouldAutoOpenPlayerOnStartup(enabled = true, platform = mobilePlatform()))
+        assertTrue(
+            shouldAutoOpenPlayerOnStartup(
+                enabled = true,
+                platform = platformNamed(ANDROID_AUTOMOTIVE_PLATFORM_NAME),
+            ),
+        )
+        assertFalse(shouldAutoOpenPlayerOnStartup(enabled = false, platform = mobilePlatform()))
+        assertFalse(
+            shouldAutoOpenPlayerOnStartup(
+                enabled = true,
+                platform = platformNamed(ANDROID_TV_PLATFORM_NAME),
+            ),
+        )
+    }
+
+    @Test
     fun `macos window close behavior setting is shown when supported`() {
         assertTrue(
             shouldShowMacOsWindowCloseBehaviorSetting(

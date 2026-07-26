@@ -23,6 +23,7 @@ import top.iwesley.lyn.music.core.model.PlaybackSnapshot
 import top.iwesley.lyn.music.core.model.Track
 import top.iwesley.lyn.music.core.model.WorkflowSongCandidate
 import top.iwesley.lyn.music.data.repository.LyricsRepository
+import top.iwesley.lyn.music.data.repository.PlaybackHydrationResult
 import top.iwesley.lyn.music.data.repository.PlaybackRepository
 import top.iwesley.lyn.music.data.repository.AppliedLyricsResult
 import top.iwesley.lyn.music.data.repository.ResolvedLyricsResult
@@ -584,7 +585,7 @@ private class FakePlaybackRepository(
 
     override val snapshot: StateFlow<PlaybackSnapshot> = mutableSnapshot.asStateFlow()
 
-    override suspend fun hydratePersistedQueueIfNeeded() = Unit
+    override suspend fun hydratePersistedQueueIfNeeded() = PlaybackHydrationResult.Empty
 
     override suspend fun playTracks(tracks: List<Track>, startIndex: Int) = Unit
     override suspend fun playTransientTracks(tracks: List<Track>, startIndex: Int) = Unit

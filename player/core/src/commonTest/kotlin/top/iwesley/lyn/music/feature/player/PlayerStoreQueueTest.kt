@@ -32,6 +32,7 @@ import top.iwesley.lyn.music.core.model.LyricsSearchApplyMode
 import top.iwesley.lyn.music.core.model.LyricsDocument
 import top.iwesley.lyn.music.core.model.LyricsLine
 import top.iwesley.lyn.music.core.model.LyricsSearchCandidate
+import top.iwesley.lyn.music.core.model.PlaybackLoadToken
 import top.iwesley.lyn.music.core.model.PlaybackMode
 import top.iwesley.lyn.music.core.model.PlaybackSnapshot
 import top.iwesley.lyn.music.core.model.Track
@@ -39,11 +40,186 @@ import top.iwesley.lyn.music.core.model.WorkflowSongCandidate
 import top.iwesley.lyn.music.core.model.buildNavidromeSongLocator
 import top.iwesley.lyn.music.data.repository.AppliedLyricsResult
 import top.iwesley.lyn.music.data.repository.LyricsRepository
+import top.iwesley.lyn.music.data.repository.PlaybackHydrationResult
 import top.iwesley.lyn.music.data.repository.PlaybackRepository
 import top.iwesley.lyn.music.data.repository.ResolvedLyricsResult
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class PlayerStoreQueueTest {
+
+    @Test
+    fun `startup hydration expands restored paused playback when enabled`() = runTest {
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val restoredSnapshot = sampleSnapshot().copy(isPlaying = false, isHydratingPlayback = false)
+        val playbackRepository = FakeQueuePlaybackRepository(
+            initialSnapshot = PlaybackSnapshot(isHydratingPlayback = true),
+            hydratedSnapshot = restoredSnapshot,
+        )
+        val store = PlayerStore(playbackRepository, NoopQueueLyricsRepository(), scope)
+
+        store.startHydration(expandPlayerAfterHydration = true)
+        advanceUntilIdle()
+
+        assertEquals(true, store.state.value.isExpanded)
+        assertEquals(false, store.state.value.snapshot.isPlaying)
+        assertEquals("track-1", store.state.value.snapshot.currentTrack?.id)
+        scope.cancel()
+    }
+
+    @Test
+    fun `startup hydration expands playback that existed before the activity lifecycle`() = runTest {
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val existingSnapshot = sampleSnapshot().copy(
+            isPlaying = true,
+            isHydratingPlayback = false,
+        )
+        val playbackRepository = FakeQueuePlaybackRepository(
+            initialSnapshot = existingSnapshot,
+            hydrationResult = PlaybackHydrationResult.ExistingPlayback,
+        )
+        val store = PlayerStore(playbackRepository, NoopQueueLyricsRepository(), scope)
+
+        store.startHydration(expandPlayerAfterHydration = true)
+        advanceUntilIdle()
+
+        assertEquals(true, store.state.value.isExpanded)
+        assertEquals("track-1", store.state.value.snapshot.currentTrack?.id)
+        scope.cancel()
+    }
+
+    @Test
+    fun `startup hydration waits for delayed repository snapshot before expanding`() = runTest {
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val playbackRepository = FakeQueuePlaybackRepository(
+            initialSnapshot = PlaybackSnapshot(isHydratingPlayback = true),
+            hydratedSnapshot = sampleSnapshot().copy(isHydratingPlayback = false),
+            deferHydratedSnapshotPublication = true,
+        )
+        val store = PlayerStore(playbackRepository, NoopQueueLyricsRepository(), scope)
+
+        store.startHydration(expandPlayerAfterHydration = true)
+        runCurrent()
+
+        assertEquals(false, store.state.value.isExpanded)
+
+        playbackRepository.publishHydratedSnapshot()
+        advanceUntilIdle()
+
+        assertEquals(true, store.state.value.isExpanded)
+        assertEquals("track-1", store.state.value.snapshot.currentTrack?.id)
+        scope.cancel()
+    }
+
+    @Test
+    fun `startup hydration stays collapsed when auto expansion is disabled`() = runTest {
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val playbackRepository = FakeQueuePlaybackRepository(
+            initialSnapshot = PlaybackSnapshot(isHydratingPlayback = true),
+            hydratedSnapshot = sampleSnapshot(),
+        )
+        val store = PlayerStore(playbackRepository, NoopQueueLyricsRepository(), scope)
+
+        store.startHydration(expandPlayerAfterHydration = false)
+        advanceUntilIdle()
+
+        assertEquals(false, store.state.value.isExpanded)
+        scope.cancel()
+    }
+
+    @Test
+    fun `startup hydration stays collapsed when no track is restored`() = runTest {
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val playbackRepository = FakeQueuePlaybackRepository(
+            initialSnapshot = PlaybackSnapshot(isHydratingPlayback = true),
+            hydratedSnapshot = PlaybackSnapshot(isHydratingPlayback = false),
+        )
+        val store = PlayerStore(playbackRepository, NoopQueueLyricsRepository(), scope)
+
+        store.startHydration(expandPlayerAfterHydration = true)
+        advanceUntilIdle()
+
+        assertEquals(false, store.state.value.isExpanded)
+        scope.cancel()
+    }
+
+    @Test
+    fun `manual playback after startup hydration does not auto expand player`() = runTest {
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val playbackRepository = FakeQueuePlaybackRepository(
+            initialSnapshot = PlaybackSnapshot(isHydratingPlayback = true),
+            hydratedSnapshot = PlaybackSnapshot(isHydratingPlayback = false),
+        )
+        val store = PlayerStore(playbackRepository, NoopQueueLyricsRepository(), scope)
+
+        store.startHydration(expandPlayerAfterHydration = true)
+        advanceUntilIdle()
+        store.dispatch(PlayerIntent.PlayTracks(sampleSnapshot().queue, 0))
+        advanceUntilIdle()
+
+        assertEquals(false, store.state.value.isExpanded)
+        assertEquals("track-1", store.state.value.snapshot.currentTrack?.id)
+        scope.cancel()
+    }
+
+    @Test
+    fun `playback that supersedes startup hydration does not auto expand player`() = runTest {
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val playbackRepository = FakeQueuePlaybackRepository(
+            initialSnapshot = PlaybackSnapshot(isHydratingPlayback = true),
+            hydratedSnapshot = sampleSnapshot().copy(isHydratingPlayback = false),
+            hydrationResult = PlaybackHydrationResult.SupersededByPlayback,
+        )
+        val store = PlayerStore(playbackRepository, NoopQueueLyricsRepository(), scope)
+
+        store.startHydration(expandPlayerAfterHydration = true)
+        advanceUntilIdle()
+
+        assertEquals(false, store.state.value.isExpanded)
+        assertEquals("track-1", store.state.value.snapshot.currentTrack?.id)
+        scope.cancel()
+    }
+
+    @Test
+    fun `failed startup hydration does not auto expand player`() = runTest {
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val playbackRepository = FakeQueuePlaybackRepository(
+            initialSnapshot = PlaybackSnapshot(isHydratingPlayback = true),
+            hydratedSnapshot = sampleSnapshot().copy(isHydratingPlayback = false),
+            hydrationResult = PlaybackHydrationResult.Failed,
+        )
+        val store = PlayerStore(playbackRepository, NoopQueueLyricsRepository(), scope)
+
+        store.startHydration(expandPlayerAfterHydration = true)
+        advanceUntilIdle()
+
+        assertEquals(false, store.state.value.isExpanded)
+        scope.cancel()
+    }
+
+    @Test
+    fun `stale restored token does not expand after delayed snapshot publication`() = runTest {
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        var restoreIsCurrent = true
+        val playbackRepository = FakeQueuePlaybackRepository(
+            initialSnapshot = PlaybackSnapshot(isHydratingPlayback = true),
+            hydratedSnapshot = sampleSnapshot().copy(isHydratingPlayback = false),
+            deferHydratedSnapshotPublication = true,
+            hydrationResult = PlaybackHydrationResult.Restored(
+                PlaybackLoadToken(requestId = 1L) { restoreIsCurrent },
+            ),
+        )
+        val store = PlayerStore(playbackRepository, NoopQueueLyricsRepository(), scope)
+
+        store.startHydration(expandPlayerAfterHydration = true)
+        runCurrent()
+
+        restoreIsCurrent = false
+        playbackRepository.publishHydratedSnapshot()
+        advanceUntilIdle()
+
+        assertEquals(false, store.state.value.isExpanded)
+        scope.cancel()
+    }
 
     @Test
     fun `queue visibility intent updates state`() = runTest {
@@ -1188,6 +1364,14 @@ private class FakeCastProxySession : CastProxySession {
 
 private class FakeQueuePlaybackRepository(
     initialSnapshot: PlaybackSnapshot,
+    private val hydratedSnapshot: PlaybackSnapshot? = null,
+    private val deferHydratedSnapshotPublication: Boolean = false,
+    private val hydrationResult: PlaybackHydrationResult =
+        if (hydratedSnapshot?.currentTrack != null) {
+            PlaybackHydrationResult.Restored(PlaybackLoadToken())
+        } else {
+            PlaybackHydrationResult.Empty
+        },
 ) : PlaybackRepository {
     private val mutableSnapshot = MutableStateFlow(initialSnapshot)
 
@@ -1213,7 +1397,16 @@ private class FakeQueuePlaybackRepository(
         mutableSnapshot.value = snapshot
     }
 
-    override suspend fun hydratePersistedQueueIfNeeded() = Unit
+    fun publishHydratedSnapshot() {
+        hydratedSnapshot?.let { mutableSnapshot.value = it }
+    }
+
+    override suspend fun hydratePersistedQueueIfNeeded(): PlaybackHydrationResult {
+        if (!deferHydratedSnapshotPublication) {
+            publishHydratedSnapshot()
+        }
+        return hydrationResult
+    }
 
     override suspend fun playTracks(tracks: List<Track>, startIndex: Int) {
         lastPlayTracks = tracks

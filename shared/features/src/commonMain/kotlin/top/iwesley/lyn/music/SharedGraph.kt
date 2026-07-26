@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import top.iwesley.lyn.music.core.model.ArtworkCacheStore
+import top.iwesley.lyn.music.core.model.AutoOpenPlayerOnStartupPreferencesStore
 import top.iwesley.lyn.music.core.model.AutoPlayOnStartupPreferencesStore
 import top.iwesley.lyn.music.core.model.AppStorageGateway
 import top.iwesley.lyn.music.core.model.AppDataLocationPlatformService
@@ -43,6 +44,7 @@ import top.iwesley.lyn.music.core.model.UnsupportedAppDataLocationPlatformServic
 import top.iwesley.lyn.music.core.model.UnsupportedAudioTagEditorPlatformService
 import top.iwesley.lyn.music.core.model.UnsupportedAudioTagGateway
 import top.iwesley.lyn.music.core.model.UnsupportedAppDisplayPreferencesStore
+import top.iwesley.lyn.music.core.model.UnsupportedAutoOpenPlayerOnStartupPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedAutoPlayOnStartupPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedCompactPlayerLyricsPreferencesStore
 import top.iwesley.lyn.music.core.model.UnsupportedDesktopLyricsPlatformService
@@ -121,6 +123,8 @@ data class SharedRuntimeServices(
         UnsupportedMenuBarLyricsControlsPreferencesStore,
     val autoPlayOnStartupPreferencesStore: AutoPlayOnStartupPreferencesStore =
         UnsupportedAutoPlayOnStartupPreferencesStore,
+    val autoOpenPlayerOnStartupPreferencesStore: AutoOpenPlayerOnStartupPreferencesStore =
+        UnsupportedAutoOpenPlayerOnStartupPreferencesStore,
     val windowClosePreferencesStore: WindowClosePreferencesStore =
         UnsupportedWindowClosePreferencesStore,
     val navidromeAudioQualityPreferencesStore: NavidromeAudioQualityPreferencesStore =
@@ -222,6 +226,7 @@ fun buildSharedGraph(
         desktopLyricsPreferencesStore = runtimeServices.desktopLyricsPreferencesStore,
         menuBarLyricsControlsPreferencesStore = runtimeServices.menuBarLyricsControlsPreferencesStore,
         autoPlayOnStartupPreferencesStore = runtimeServices.autoPlayOnStartupPreferencesStore,
+        autoOpenPlayerOnStartupPreferencesStore = runtimeServices.autoOpenPlayerOnStartupPreferencesStore,
         windowClosePreferencesStore = runtimeServices.windowClosePreferencesStore,
         navidromeAudioQualityPreferencesStore = runtimeServices.navidromeAudioQualityPreferencesStore,
         playbackDecoderPreferencesStore = runtimeServices.playbackDecoderPreferencesStore,
