@@ -810,6 +810,7 @@ fun App(
                             platform = component.platform,
                             logger = component.logger,
                             state = playerState,
+                            appDisplayScalePreset = settingsState.appDisplayScalePreset,
                             showCompactPlayerLyrics = settingsState.showCompactPlayerLyrics,
                             playerArtworkStyle = settingsState.playerArtworkStyle,
                             showEqualizerEntry = component.platform.capabilities.supportsEqualizer &&

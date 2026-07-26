@@ -64,6 +64,7 @@ import top.iwesley.lyn.music.ArtworkDecodeSize
 import top.iwesley.lyn.music.LibraryNavigationTarget
 import top.iwesley.lyn.music.PlayerArtworkDisplay
 import top.iwesley.lyn.music.PlayerLyricsPane
+import top.iwesley.lyn.music.core.model.AppDisplayScalePreset
 import top.iwesley.lyn.music.core.model.PlaybackSnapshot
 import top.iwesley.lyn.music.core.model.PlayerArtworkStyle
 import top.iwesley.lyn.music.core.model.Track
@@ -80,6 +81,7 @@ internal fun AutomotiveLandscapePlayerOverlayContent(
     state: PlayerState,
     track: Track,
     artworkBitmap: ImageBitmap?,
+    appDisplayScalePreset: AppDisplayScalePreset,
     playerArtworkStyle: PlayerArtworkStyle,
     isFavorite: Boolean,
     canToggleFavorite: Boolean = true,
@@ -91,19 +93,27 @@ internal fun AutomotiveLandscapePlayerOverlayContent(
     modifier: Modifier = Modifier,
 ) {
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        val horizontalPadding = if (maxWidth < 900.dp) 28.dp else 44.dp
-        val paneGap = if (maxWidth < 900.dp) 24.dp else 36.dp
+        val frameLayout = resolveAutomotiveLandscapeFrameLayout(maxWidth)
+        val referencePaneConstraints = resolveAutomotivePlaybackPaneReferenceConstraints(
+            overlayMaxWidth = maxWidth,
+            overlayMaxHeight = maxHeight,
+            appDisplayScalePreset = appDisplayScalePreset,
+        )
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = horizontalPadding, vertical = 28.dp),
-            horizontalArrangement = Arrangement.spacedBy(paneGap),
+                .padding(
+                    horizontal = frameLayout.horizontalPadding,
+                    vertical = frameLayout.verticalPadding,
+                ),
+            horizontalArrangement = Arrangement.spacedBy(frameLayout.paneGap),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             AutomotivePlaybackPane(
                 state = state,
                 track = track,
                 artworkBitmap = artworkBitmap,
+                appDisplayScalePreset = appDisplayScalePreset,
                 playerArtworkStyle = playerArtworkStyle,
                 isFavorite = isFavorite,
                 canToggleFavorite = canToggleFavorite,
@@ -112,8 +122,10 @@ internal fun AutomotiveLandscapePlayerOverlayContent(
                 onlineNavigationSourceId = onlineNavigationSourceId,
                 onOpenLibraryNavigationTarget = onOpenLibraryNavigationTarget,
                 onPlayerIntent = onPlayerIntent,
+                controlsReferenceMaxWidth = referencePaneConstraints.maxWidth,
+                controlsReferenceMaxHeight = referencePaneConstraints.maxHeight,
                 modifier = Modifier
-                    .weight(0.46f)
+                    .weight(AutomotivePlaybackPaneWeight)
                     .fillMaxHeight(),
             )
             AutomotiveLyricsPane(
@@ -121,7 +133,7 @@ internal fun AutomotiveLandscapePlayerOverlayContent(
                 track = track,
                 onPlayerIntent = onPlayerIntent,
                 modifier = Modifier
-                    .weight(0.54f)
+                    .weight(AutomotiveLyricsPaneWeight)
                     .fillMaxHeight(),
             )
         }
@@ -133,6 +145,7 @@ private fun AutomotivePlaybackPane(
     state: PlayerState,
     track: Track,
     artworkBitmap: ImageBitmap?,
+    appDisplayScalePreset: AppDisplayScalePreset,
     playerArtworkStyle: PlayerArtworkStyle,
     isFavorite: Boolean,
     canToggleFavorite: Boolean,
@@ -141,6 +154,8 @@ private fun AutomotivePlaybackPane(
     onlineNavigationSourceId: String?,
     onOpenLibraryNavigationTarget: (LibraryNavigationTarget) -> Unit,
     onPlayerIntent: (PlayerIntent) -> Unit,
+    controlsReferenceMaxWidth: Dp,
+    controlsReferenceMaxHeight: Dp,
     modifier: Modifier = Modifier,
 ) {
     val snapshot = state.snapshot
@@ -148,6 +163,9 @@ private fun AutomotivePlaybackPane(
         val controlsLayout = resolveAutomotivePlaybackControlsLayout(
             maxWidth = maxWidth,
             maxHeight = maxHeight,
+            referenceMaxWidth = controlsReferenceMaxWidth,
+            referenceMaxHeight = controlsReferenceMaxHeight,
+            appDisplayScalePreset = appDisplayScalePreset,
         )
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -714,20 +732,14 @@ internal val AutomotivePlaybackControlsLayout.totalWidth: Dp
 internal fun resolveAutomotivePlaybackControlsLayout(
     maxWidth: Dp,
     maxHeight: Dp,
+    referenceMaxWidth: Dp = maxWidth,
+    referenceMaxHeight: Dp = maxHeight,
+    appDisplayScalePreset: AppDisplayScalePreset = AppDisplayScalePreset.Default,
 ): AutomotivePlaybackControlsLayout {
-    return when {
-        maxWidth < 252.dp -> AutomotivePlaybackControlsLayout(
-            showSecondaryControls = false,
-            actionButtonSize = 48.dp,
-            skipButtonSize = 48.dp,
-            playButtonSize = 60.dp,
-            actionIconSize = 22.dp,
-            skipIconSize = 26.dp,
-            playIconSize = 46.dp,
-            controlGap = 4.dp,
-        )
+    val preferredLayout = when {
+        referenceMaxWidth < 252.dp -> automotivePrimaryCompactControlsLayout()
 
-        maxWidth < 288.dp || maxHeight < 480.dp -> AutomotivePlaybackControlsLayout(
+        referenceMaxWidth < 288.dp || referenceMaxHeight < 480.dp -> AutomotivePlaybackControlsLayout(
             showSecondaryControls = true,
             actionButtonSize = 48.dp,
             skipButtonSize = 48.dp,
@@ -738,7 +750,7 @@ internal fun resolveAutomotivePlaybackControlsLayout(
             controlGap = 0.dp,
         )
 
-        maxWidth < 400.dp -> AutomotivePlaybackControlsLayout(
+        referenceMaxWidth < 400.dp -> AutomotivePlaybackControlsLayout(
             showSecondaryControls = true,
             actionButtonSize = 48.dp,
             skipButtonSize = 56.dp,
@@ -749,7 +761,7 @@ internal fun resolveAutomotivePlaybackControlsLayout(
             controlGap = 2.dp,
         )
 
-        maxWidth < 520.dp || maxHeight < 520.dp -> AutomotivePlaybackControlsLayout(
+        referenceMaxWidth < 520.dp || referenceMaxHeight < 520.dp -> AutomotivePlaybackControlsLayout(
             showSecondaryControls = true,
             actionButtonSize = 56.dp,
             skipButtonSize = 64.dp,
@@ -771,7 +783,211 @@ internal fun resolveAutomotivePlaybackControlsLayout(
             controlGap = 10.dp,
         )
     }
+    val widthSafeLayout = if (
+        preferredLayout.showSecondaryControls &&
+        maxWidth < preferredLayout.minimumAutomotiveControlsWidth(appDisplayScalePreset)
+    ) {
+        preferredLayout.asPrimaryAutomotiveControlsLayout()
+    } else {
+        preferredLayout
+    }
+    return widthSafeLayout.fitAutomotiveControlsToWidth(
+        maxWidth = maxWidth,
+        appDisplayScalePreset = appDisplayScalePreset,
+    )
 }
+
+private fun automotivePrimaryCompactControlsLayout(): AutomotivePlaybackControlsLayout =
+    AutomotivePlaybackControlsLayout(
+        showSecondaryControls = false,
+        actionButtonSize = 48.dp,
+        skipButtonSize = 48.dp,
+        playButtonSize = 60.dp,
+        actionIconSize = 22.dp,
+        skipIconSize = 26.dp,
+        playIconSize = 46.dp,
+        controlGap = 4.dp,
+    )
+
+private fun AutomotivePlaybackControlsLayout.asPrimaryAutomotiveControlsLayout() = copy(
+    showSecondaryControls = false,
+    controlGap = maxOf(controlGap, 4.dp),
+)
+
+private fun AutomotivePlaybackControlsLayout.minimumAutomotiveControlsWidth(
+    appDisplayScalePreset: AppDisplayScalePreset,
+): Dp {
+    val minimumActionButtonSize = minimumAutomotiveButtonSize(
+        preferredSize = actionButtonSize,
+        appDisplayScalePreset = appDisplayScalePreset,
+    )
+    val minimumSkipButtonSize = minimumAutomotiveButtonSize(
+        preferredSize = skipButtonSize,
+        appDisplayScalePreset = appDisplayScalePreset,
+    )
+    val minimumPlayButtonSize = minimumAutomotiveButtonSize(
+        preferredSize = playButtonSize,
+        appDisplayScalePreset = appDisplayScalePreset,
+    )
+    return minimumSkipButtonSize + minimumSkipButtonSize + minimumPlayButtonSize +
+        if (showSecondaryControls) {
+            minimumActionButtonSize + minimumActionButtonSize
+        } else {
+            0.dp
+        }
+}
+
+private fun minimumAutomotiveButtonSize(
+    preferredSize: Dp,
+    appDisplayScalePreset: AppDisplayScalePreset,
+): Dp {
+    val displayScale = appDisplayScalePreset.validAutomotiveDisplayScale()
+    val physicalSizeFloor =
+        if (displayScale >= AppDisplayScalePreset.Default.scale) preferredSize / displayScale else 0.dp
+    return maxOf(AutomotiveControlMinimumTouchSize, physicalSizeFloor)
+}
+
+private fun AutomotivePlaybackControlsLayout.fitAutomotiveControlsToWidth(
+    maxWidth: Dp,
+    appDisplayScalePreset: AppDisplayScalePreset,
+): AutomotivePlaybackControlsLayout {
+    if (totalWidth <= maxWidth) return this
+    val physicalFloorActionButtonSize = minimumAutomotiveButtonSize(
+        preferredSize = actionButtonSize,
+        appDisplayScalePreset = appDisplayScalePreset,
+    )
+    val physicalFloorSkipButtonSize = minimumAutomotiveButtonSize(
+        preferredSize = skipButtonSize,
+        appDisplayScalePreset = appDisplayScalePreset,
+    )
+    val physicalFloorPlayButtonSize = minimumAutomotiveButtonSize(
+        preferredSize = playButtonSize,
+        appDisplayScalePreset = appDisplayScalePreset,
+    )
+    val physicalFloorTotalWidth = minimumAutomotiveControlsWidth(appDisplayScalePreset)
+    val absoluteFloorTotalWidth =
+        if (showSecondaryControls) AutomotiveFiveControlsAbsoluteMinimumWidth
+        else AutomotivePrimaryControlsAbsoluteMinimumWidth
+    val (lowerActionButtonSize, lowerSkipButtonSize, lowerPlayButtonSize, upperFraction) =
+        if (maxWidth >= physicalFloorTotalWidth) {
+            val availableSurplus = maxWidth - physicalFloorTotalWidth
+            val preferredSurplus = totalWidth - physicalFloorTotalWidth
+            val fraction = if (preferredSurplus > 0.dp) {
+                (availableSurplus.value / preferredSurplus.value).coerceIn(0f, 1f)
+            } else {
+                1f
+            }
+            AutomotiveControlsFitRange(
+                actionButtonSize = physicalFloorActionButtonSize,
+                skipButtonSize = physicalFloorSkipButtonSize,
+                playButtonSize = physicalFloorPlayButtonSize,
+                fraction = fraction,
+            )
+        } else {
+            val availableSurplus = (maxWidth - absoluteFloorTotalWidth).coerceAtLeast(0.dp)
+            val physicalFloorSurplus = physicalFloorTotalWidth - absoluteFloorTotalWidth
+            val fraction = if (physicalFloorSurplus > 0.dp) {
+                (availableSurplus.value / physicalFloorSurplus.value).coerceIn(0f, 1f)
+            } else {
+                1f
+            }
+            AutomotiveControlsFitRange(
+                actionButtonSize = AutomotiveControlMinimumTouchSize,
+                skipButtonSize = AutomotiveControlMinimumTouchSize,
+                playButtonSize = AutomotiveControlMinimumTouchSize,
+                fraction = fraction,
+            )
+        }
+    val upperActionButtonSize =
+        if (maxWidth >= physicalFloorTotalWidth) actionButtonSize else physicalFloorActionButtonSize
+    val upperSkipButtonSize =
+        if (maxWidth >= physicalFloorTotalWidth) skipButtonSize else physicalFloorSkipButtonSize
+    val upperPlayButtonSize =
+        if (maxWidth >= physicalFloorTotalWidth) playButtonSize else physicalFloorPlayButtonSize
+    val fittedActionButtonSize = lowerActionButtonSize +
+        (upperActionButtonSize - lowerActionButtonSize) * upperFraction
+    val fittedSkipButtonSize = lowerSkipButtonSize +
+        (upperSkipButtonSize - lowerSkipButtonSize) * upperFraction
+    val fittedPlayButtonSize = lowerPlayButtonSize +
+        (upperPlayButtonSize - lowerPlayButtonSize) * upperFraction
+    val fittedGap =
+        if (maxWidth >= physicalFloorTotalWidth) controlGap * upperFraction else 0.dp
+    return copy(
+        actionButtonSize = fittedActionButtonSize,
+        skipButtonSize = fittedSkipButtonSize,
+        playButtonSize = fittedPlayButtonSize,
+        actionIconSize = actionIconSize * (fittedActionButtonSize / actionButtonSize),
+        skipIconSize = skipIconSize * (fittedSkipButtonSize / skipButtonSize),
+        playIconSize = playIconSize * (fittedPlayButtonSize / playButtonSize),
+        controlGap = fittedGap,
+    )
+}
+
+private data class AutomotiveControlsFitRange(
+    val actionButtonSize: Dp,
+    val skipButtonSize: Dp,
+    val playButtonSize: Dp,
+    val fraction: Float,
+)
+
+internal data class AutomotiveLandscapeFrameLayout(
+    val horizontalPadding: Dp,
+    val verticalPadding: Dp,
+    val paneGap: Dp,
+)
+
+internal fun resolveAutomotiveLandscapeFrameLayout(maxWidth: Dp): AutomotiveLandscapeFrameLayout =
+    if (maxWidth < 900.dp) {
+        AutomotiveLandscapeFrameLayout(
+            horizontalPadding = 28.dp,
+            verticalPadding = 28.dp,
+            paneGap = 24.dp,
+        )
+    } else {
+        AutomotiveLandscapeFrameLayout(
+            horizontalPadding = 44.dp,
+            verticalPadding = 28.dp,
+            paneGap = 36.dp,
+        )
+    }
+
+internal data class AutomotivePlaybackPaneReferenceConstraints(
+    val maxWidth: Dp,
+    val maxHeight: Dp,
+)
+
+internal fun resolveAutomotivePlaybackPaneReferenceConstraints(
+    overlayMaxWidth: Dp,
+    overlayMaxHeight: Dp,
+    appDisplayScalePreset: AppDisplayScalePreset,
+): AutomotivePlaybackPaneReferenceConstraints {
+    val displayScale = appDisplayScalePreset.validAutomotiveDisplayScale()
+    val referenceOverlayWidth = overlayMaxWidth * displayScale
+    val referenceOverlayHeight = overlayMaxHeight * displayScale
+    val referenceFrameLayout = resolveAutomotiveLandscapeFrameLayout(referenceOverlayWidth)
+    val referenceContentWidth = (
+        referenceOverlayWidth -
+            referenceFrameLayout.horizontalPadding * 2 -
+            referenceFrameLayout.paneGap
+        ).coerceAtLeast(0.dp)
+    val referenceContentHeight = (
+        referenceOverlayHeight -
+            referenceFrameLayout.verticalPadding * 2
+        ).coerceAtLeast(0.dp)
+    return AutomotivePlaybackPaneReferenceConstraints(
+        maxWidth = referenceContentWidth * AutomotivePlaybackPaneWeight,
+        maxHeight = referenceContentHeight,
+    )
+}
+
+private fun AppDisplayScalePreset.validAutomotiveDisplayScale(): Float =
+    scale.takeIf { it.isFinite() && it > 0f } ?: AppDisplayScalePreset.Default.scale
+
+private val AutomotiveControlMinimumTouchSize = 48.dp
+private val AutomotiveFiveControlsAbsoluteMinimumWidth = AutomotiveControlMinimumTouchSize * 5
+private val AutomotivePrimaryControlsAbsoluteMinimumWidth = AutomotiveControlMinimumTouchSize * 3
+private const val AutomotivePlaybackPaneWeight = 0.46f
+private const val AutomotiveLyricsPaneWeight = 0.54f
 
 internal data class AutomotiveTrackAndProgressLayout(
     val compactVertical: Boolean,

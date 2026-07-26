@@ -127,6 +127,7 @@ import kotlin.math.absoluteValue
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import top.iwesley.lyn.music.core.model.AppDisplayScalePreset
 import top.iwesley.lyn.music.core.model.AppThemeTextPalette
 import top.iwesley.lyn.music.core.model.AppThemeTokens
 import top.iwesley.lyn.music.cast.CastSessionState
@@ -165,6 +166,7 @@ internal fun PlayerDrawerHost(
     platform: PlatformDescriptor,
     logger: DiagnosticLogger,
     state: PlayerState,
+    appDisplayScalePreset: AppDisplayScalePreset,
     showCompactPlayerLyrics: Boolean,
     playerArtworkStyle: PlayerArtworkStyle,
     showEqualizerEntry: Boolean,
@@ -217,6 +219,7 @@ internal fun PlayerDrawerHost(
                 platform = platform,
                 logger = logger,
                 state = state,
+                appDisplayScalePreset = appDisplayScalePreset,
                 showCompactPlayerLyrics = showCompactPlayerLyrics,
                 playerArtworkStyle = playerArtworkStyle,
                 showEqualizerEntry = showEqualizerEntry,
@@ -1142,6 +1145,7 @@ private fun PlayerOverlay(
     platform: PlatformDescriptor,
     logger: DiagnosticLogger,
     state: PlayerState,
+    appDisplayScalePreset: AppDisplayScalePreset,
     showCompactPlayerLyrics: Boolean,
     playerArtworkStyle: PlayerArtworkStyle,
     showEqualizerEntry: Boolean,
@@ -1306,6 +1310,7 @@ private fun PlayerOverlay(
                     state = state,
                     track = track,
                     artworkBitmap = paletteArtworkBitmap,
+                    appDisplayScalePreset = appDisplayScalePreset,
                     playerArtworkStyle = playerArtworkStyle,
                     isFavorite = isFavorite,
                     canToggleFavorite = canToggleFavorite,

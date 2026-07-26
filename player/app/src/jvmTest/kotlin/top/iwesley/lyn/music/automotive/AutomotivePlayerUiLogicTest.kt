@@ -5,11 +5,190 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import top.iwesley.lyn.music.core.model.AppDisplayScalePreset
 import top.iwesley.lyn.music.core.model.PlaybackSnapshot
 import top.iwesley.lyn.music.core.model.PlayerArtworkStyle
 import top.iwesley.lyn.music.feature.player.PlayerIntent
 
 class AutomotivePlayerUiLogicTest {
+    @Test
+    fun `landscape frame layout switches padding and gap at 900 dp`() {
+        val belowBoundary = resolveAutomotiveLandscapeFrameLayout(899.dp)
+        val atBoundary = resolveAutomotiveLandscapeFrameLayout(900.dp)
+
+        assertEquals(28.dp, belowBoundary.horizontalPadding)
+        assertEquals(28.dp, belowBoundary.verticalPadding)
+        assertEquals(24.dp, belowBoundary.paneGap)
+        assertEquals(44.dp, atBoundary.horizontalPadding)
+        assertEquals(28.dp, atBoundary.verticalPadding)
+        assertEquals(36.dp, atBoundary.paneGap)
+    }
+
+    @Test
+    fun `display presets resolve the same default scale playback pane reference`() {
+        val defaultReference = resolveAutomotivePlaybackPaneReferenceConstraints(
+            overlayMaxWidth = 1280.dp,
+            overlayMaxHeight = 752.dp,
+            appDisplayScalePreset = AppDisplayScalePreset.Default,
+        )
+        val compactReference = resolveAutomotivePlaybackPaneReferenceConstraints(
+            overlayMaxWidth = 1280.dp / AppDisplayScalePreset.Compact.scale,
+            overlayMaxHeight = 752.dp / AppDisplayScalePreset.Compact.scale,
+            appDisplayScalePreset = AppDisplayScalePreset.Compact,
+        )
+        val largeReference = resolveAutomotivePlaybackPaneReferenceConstraints(
+            overlayMaxWidth = 1280.dp / AppDisplayScalePreset.Large.scale,
+            overlayMaxHeight = 752.dp / AppDisplayScalePreset.Large.scale,
+            appDisplayScalePreset = AppDisplayScalePreset.Large,
+        )
+
+        assertEquals(531.76f, defaultReference.maxWidth.value, 0.001f)
+        assertEquals(696.dp, defaultReference.maxHeight)
+        assertEquals(defaultReference.maxWidth.value, compactReference.maxWidth.value, 0.001f)
+        assertEquals(defaultReference.maxHeight.value, compactReference.maxHeight.value, 0.001f)
+        assertEquals(defaultReference.maxWidth.value, largeReference.maxWidth.value, 0.001f)
+        assertEquals(defaultReference.maxHeight.value, largeReference.maxHeight.value, 0.001f)
+    }
+
+    @Test
+    fun `default 520 dp playback pane remains in large tier with large display preset`() {
+        val defaultOverlayWidth = 520.dp / 0.46f + 44.dp * 2 + 36.dp
+        val largeOverlayWidth = defaultOverlayWidth / AppDisplayScalePreset.Large.scale
+        val largeActualPane = resolveAutomotivePlaybackPaneReferenceConstraints(
+            overlayMaxWidth = largeOverlayWidth,
+            overlayMaxHeight = 600.dp,
+            appDisplayScalePreset = AppDisplayScalePreset.Default,
+        )
+        val largeReferencePane = resolveAutomotivePlaybackPaneReferenceConstraints(
+            overlayMaxWidth = largeOverlayWidth,
+            overlayMaxHeight = 600.dp,
+            appDisplayScalePreset = AppDisplayScalePreset.Large,
+        )
+        val layout = resolveAutomotivePlaybackControlsLayout(
+            maxWidth = largeActualPane.maxWidth,
+            maxHeight = largeActualPane.maxHeight,
+            referenceMaxWidth = largeReferencePane.maxWidth,
+            referenceMaxHeight = largeReferencePane.maxHeight,
+            appDisplayScalePreset = AppDisplayScalePreset.Large,
+        )
+
+        assertEquals(520f, largeReferencePane.maxWidth.value, 0.001f)
+        assertEquals(true, layout.showSecondaryControls)
+        assertTrue(layout.actionButtonSize > 56.dp)
+        assertTrue(layout.skipButtonSize > 64.dp)
+        assertTrue(layout.playButtonSize > 84.dp)
+    }
+
+    @Test
+    fun `display scale preset keeps current car pane in large controls tier`() {
+        val defaultActualPane = resolveAutomotivePlaybackPaneReferenceConstraints(
+            overlayMaxWidth = 1280.dp,
+            overlayMaxHeight = 752.dp,
+            appDisplayScalePreset = AppDisplayScalePreset.Default,
+        )
+        val compactOverlayWidth = 1280.dp / AppDisplayScalePreset.Compact.scale
+        val compactOverlayHeight = 752.dp / AppDisplayScalePreset.Compact.scale
+        val compactActualPane = resolveAutomotivePlaybackPaneReferenceConstraints(
+            overlayMaxWidth = compactOverlayWidth,
+            overlayMaxHeight = compactOverlayHeight,
+            appDisplayScalePreset = AppDisplayScalePreset.Default,
+        )
+        val compactReferencePane = resolveAutomotivePlaybackPaneReferenceConstraints(
+            overlayMaxWidth = compactOverlayWidth,
+            overlayMaxHeight = compactOverlayHeight,
+            appDisplayScalePreset = AppDisplayScalePreset.Compact,
+        )
+        val largeOverlayWidth = 1280.dp / AppDisplayScalePreset.Large.scale
+        val largeOverlayHeight = 752.dp / AppDisplayScalePreset.Large.scale
+        val largeActualPane = resolveAutomotivePlaybackPaneReferenceConstraints(
+            overlayMaxWidth = largeOverlayWidth,
+            overlayMaxHeight = largeOverlayHeight,
+            appDisplayScalePreset = AppDisplayScalePreset.Default,
+        )
+        val largeReferencePane = resolveAutomotivePlaybackPaneReferenceConstraints(
+            overlayMaxWidth = largeOverlayWidth,
+            overlayMaxHeight = largeOverlayHeight,
+            appDisplayScalePreset = AppDisplayScalePreset.Large,
+        )
+        val defaultLayout = resolveAutomotivePlaybackControlsLayout(
+            maxWidth = defaultActualPane.maxWidth,
+            maxHeight = defaultActualPane.maxHeight,
+            referenceMaxWidth = defaultActualPane.maxWidth,
+            referenceMaxHeight = defaultActualPane.maxHeight,
+            appDisplayScalePreset = AppDisplayScalePreset.Default,
+        )
+        val compactLayout = resolveAutomotivePlaybackControlsLayout(
+            maxWidth = compactActualPane.maxWidth,
+            maxHeight = compactActualPane.maxHeight,
+            referenceMaxWidth = compactReferencePane.maxWidth,
+            referenceMaxHeight = compactReferencePane.maxHeight,
+            appDisplayScalePreset = AppDisplayScalePreset.Compact,
+        )
+        val largeLayout = resolveAutomotivePlaybackControlsLayout(
+            maxWidth = largeActualPane.maxWidth,
+            maxHeight = largeActualPane.maxHeight,
+            referenceMaxWidth = largeReferencePane.maxWidth,
+            referenceMaxHeight = largeReferencePane.maxHeight,
+            appDisplayScalePreset = AppDisplayScalePreset.Large,
+        )
+
+        assertEquals(80.dp, defaultLayout.actionButtonSize)
+        assertEquals(88.dp, defaultLayout.skipButtonSize)
+        assertEquals(108.dp, defaultLayout.playButtonSize)
+        assertEquals(80.dp, compactLayout.actionButtonSize)
+        assertEquals(88.dp, compactLayout.skipButtonSize)
+        assertEquals(108.dp, compactLayout.playButtonSize)
+        assertEquals(true, largeLayout.showSecondaryControls)
+        assertTrue(largeLayout.totalWidth <= largeActualPane.maxWidth)
+        assertTrue(largeLayout.actionButtonSize * AppDisplayScalePreset.Large.scale > defaultLayout.actionButtonSize)
+        assertTrue(largeLayout.skipButtonSize * AppDisplayScalePreset.Large.scale > defaultLayout.skipButtonSize)
+        assertTrue(largeLayout.playButtonSize * AppDisplayScalePreset.Large.scale > defaultLayout.playButtonSize)
+    }
+
+    @Test
+    fun `large preset keeps primary controls until five controls preserve physical size`() {
+        listOf(240.dp, 246.dp).forEach { maxWidth ->
+            val layout = resolveAutomotivePlaybackControlsLayout(
+                maxWidth = maxWidth,
+                maxHeight = 600.dp,
+                referenceMaxWidth = 268.dp,
+                referenceMaxHeight = 600.dp,
+                appDisplayScalePreset = AppDisplayScalePreset.Large,
+            )
+
+            assertEquals(false, layout.showSecondaryControls)
+            assertEquals(60.dp, layout.playButtonSize)
+            assertTrue(layout.playButtonSize * AppDisplayScalePreset.Large.scale > 60.dp)
+        }
+        val firstFiveControlsLayout = resolveAutomotivePlaybackControlsLayout(
+            maxWidth = 247.dp,
+            maxHeight = 600.dp,
+            referenceMaxWidth = 268.dp,
+            referenceMaxHeight = 600.dp,
+            appDisplayScalePreset = AppDisplayScalePreset.Large,
+        )
+
+        assertEquals(true, firstFiveControlsLayout.showSecondaryControls)
+        assertTrue(firstFiveControlsLayout.totalWidth <= 247.dp)
+        assertTrue(firstFiveControlsLayout.playButtonSize * AppDisplayScalePreset.Large.scale >= 60.dp)
+    }
+
+    @Test
+    fun `primary controls fit down to minimum supported width`() {
+        listOf(144.dp, 150.dp, 200.dp).forEach { maxWidth ->
+            val layout = resolveAutomotivePlaybackControlsLayout(
+                maxWidth = maxWidth,
+                maxHeight = 600.dp,
+                appDisplayScalePreset = AppDisplayScalePreset.Default,
+            )
+
+            assertEquals(false, layout.showSecondaryControls)
+            assertTrue(layout.totalWidth <= maxWidth)
+            assertTrue(layout.skipButtonSize >= 48.dp)
+            assertTrue(layout.playButtonSize >= 48.dp)
+        }
+    }
+
     @Test
     fun `playback controls hide secondary actions below 252 dp width`() {
         listOf(200.dp, 251.dp).forEach { maxWidth ->
