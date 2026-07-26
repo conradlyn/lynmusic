@@ -6,6 +6,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -24,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.PauseCircle
 import androidx.compose.material.icons.rounded.PlayCircle
@@ -40,6 +42,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,6 +53,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerId
+import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
@@ -82,6 +88,7 @@ internal fun AutomotiveLandscapePlayerOverlayContent(
     track: Track,
     artworkBitmap: ImageBitmap?,
     appDisplayScalePreset: AppDisplayScalePreset,
+    isPureMode: Boolean,
     playerArtworkStyle: PlayerArtworkStyle,
     isFavorite: Boolean,
     canToggleFavorite: Boolean = true,
@@ -90,9 +97,22 @@ internal fun AutomotiveLandscapePlayerOverlayContent(
     onlineNavigationSourceId: String? = null,
     onOpenLibraryNavigationTarget: (LibraryNavigationTarget) -> Unit,
     onPlayerIntent: (PlayerIntent) -> Unit,
+    onPureModeChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+    val currentIsPureMode by rememberUpdatedState(isPureMode)
+    val currentOnPureModeChanged by rememberUpdatedState(onPureModeChanged)
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                detectAutomotivePureModeToggleTwoFingerTap {
+                    currentOnPureModeChanged(
+                        resolveAutomotivePureModeAfterTwoFingerTap(currentIsPureMode),
+                    )
+                }
+            },
+    ) {
         val frameLayout = resolveAutomotiveLandscapeFrameLayout(maxWidth)
         val referencePaneConstraints = resolveAutomotivePlaybackPaneReferenceConstraints(
             overlayMaxWidth = maxWidth,
@@ -114,6 +134,7 @@ internal fun AutomotiveLandscapePlayerOverlayContent(
                 track = track,
                 artworkBitmap = artworkBitmap,
                 appDisplayScalePreset = appDisplayScalePreset,
+                isPureMode = isPureMode,
                 playerArtworkStyle = playerArtworkStyle,
                 isFavorite = isFavorite,
                 canToggleFavorite = canToggleFavorite,
@@ -124,6 +145,7 @@ internal fun AutomotiveLandscapePlayerOverlayContent(
                 onPlayerIntent = onPlayerIntent,
                 controlsReferenceMaxWidth = referencePaneConstraints.maxWidth,
                 controlsReferenceMaxHeight = referencePaneConstraints.maxHeight,
+                onPureModeChanged = onPureModeChanged,
                 modifier = Modifier
                     .weight(AutomotivePlaybackPaneWeight)
                     .fillMaxHeight(),
@@ -146,6 +168,7 @@ private fun AutomotivePlaybackPane(
     track: Track,
     artworkBitmap: ImageBitmap?,
     appDisplayScalePreset: AppDisplayScalePreset,
+    isPureMode: Boolean,
     playerArtworkStyle: PlayerArtworkStyle,
     isFavorite: Boolean,
     canToggleFavorite: Boolean,
@@ -156,6 +179,7 @@ private fun AutomotivePlaybackPane(
     onPlayerIntent: (PlayerIntent) -> Unit,
     controlsReferenceMaxWidth: Dp,
     controlsReferenceMaxHeight: Dp,
+    onPureModeChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val snapshot = state.snapshot
@@ -167,34 +191,57 @@ private fun AutomotivePlaybackPane(
             referenceMaxHeight = controlsReferenceMaxHeight,
             appDisplayScalePreset = appDisplayScalePreset,
         )
+        val pureModePresentation = resolveAutomotivePureModePresentation(isPureMode)
+        val topControlButtonSize = resolveAutomotiveTopControlButtonSize(maxWidth)
+        val topControlIconScale = topControlButtonSize / AutomotiveTopControlsSlotHeight
         Column(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(AutomotiveTopControlsSlotHeight),
             ) {
-                AutomotiveRoundIconButton(
-                    icon = Icons.Rounded.KeyboardArrowDown,
-                    contentDescription = "收起播放页",
-                    onClick = { onPlayerIntent(PlayerIntent.ExpandedChanged(false)) },
-                    buttonSize = 64.dp,
-                    iconSize = 34.dp,
-                )
-                AutomotiveRoundIconButton(
-                    icon = Icons.Rounded.Search,
-                    contentDescription = "搜索歌词",
-                    onClick = { onPlayerIntent(PlayerIntent.OpenManualLyricsSearch) },
-                    buttonSize = 64.dp,
-                    iconSize = 30.dp,
-                )
+                if (pureModePresentation.showTopControls) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        AutomotiveRoundIconButton(
+                            icon = Icons.Rounded.KeyboardArrowDown,
+                            contentDescription = "收起播放页",
+                            onClick = { onPlayerIntent(PlayerIntent.ExpandedChanged(false)) },
+                            buttonSize = topControlButtonSize,
+                            iconSize = 34.dp * topControlIconScale,
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            AutomotiveRoundIconButton(
+                                icon = Icons.Rounded.Search,
+                                contentDescription = "搜索歌词",
+                                onClick = { onPlayerIntent(PlayerIntent.OpenManualLyricsSearch) },
+                                buttonSize = topControlButtonSize,
+                                iconSize = 30.dp * topControlIconScale,
+                            )
+                            AutomotiveRoundIconButton(
+                                icon = Icons.Rounded.Fullscreen,
+                                contentDescription = "纯净模式",
+                                onClick = { onPureModeChanged(true) },
+                                buttonSize = topControlButtonSize,
+                                iconSize = 30.dp * topControlIconScale,
+                            )
+                        }
+                    }
+                }
             }
             AutomotiveTrackAndProgress(
                 snapshot = snapshot,
                 track = track,
                 artworkBitmap = artworkBitmap,
+                isPureMode = isPureMode,
                 playerArtworkStyle = playerArtworkStyle,
                 isFavorite = isFavorite,
                 canToggleFavorite = canToggleFavorite,
@@ -206,13 +253,22 @@ private fun AutomotivePlaybackPane(
                     .weight(1f)
                     .fillMaxWidth(),
             )
-            AutomotivePlaybackControls(
-                snapshot = snapshot,
-                layout = controlsLayout,
-                onOpenQueue = onOpenQueue,
-                onPlayerIntent = onPlayerIntent,
-                modifier = Modifier.fillMaxWidth(),
-            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(controlsLayout.playButtonSize),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (pureModePresentation.showPlaybackControls) {
+                    AutomotivePlaybackControls(
+                        snapshot = snapshot,
+                        layout = controlsLayout,
+                        onOpenQueue = onOpenQueue,
+                        onPlayerIntent = onPlayerIntent,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
         }
     }
 }
@@ -222,6 +278,7 @@ private fun AutomotiveTrackAndProgress(
     snapshot: PlaybackSnapshot,
     track: Track,
     artworkBitmap: ImageBitmap?,
+    isPureMode: Boolean,
     playerArtworkStyle: PlayerArtworkStyle,
     isFavorite: Boolean,
     canToggleFavorite: Boolean,
@@ -255,6 +312,7 @@ private fun AutomotiveTrackAndProgress(
                 snapshot = snapshot,
                 artworkBitmap = artworkBitmap,
                 artworkSize = layout.artworkSize,
+                isPureMode = isPureMode,
                 playerArtworkStyle = playerArtworkStyle,
                 onPlayerIntent = onPlayerIntent,
             )
@@ -313,6 +371,7 @@ private fun AutomotiveSwipeableArtwork(
     snapshot: PlaybackSnapshot,
     artworkBitmap: ImageBitmap?,
     artworkSize: Dp,
+    isPureMode: Boolean,
     playerArtworkStyle: PlayerArtworkStyle,
     onPlayerIntent: (PlayerIntent) -> Unit,
     modifier: Modifier = Modifier,
@@ -328,6 +387,17 @@ private fun AutomotiveSwipeableArtwork(
         animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
         label = "automotive-artwork-swipe-offset",
     )
+    val artworkTapIntent = resolveAutomotiveArtworkTapIntent(isPureMode)
+    val artworkTapModifier = if (artworkTapIntent != null) {
+        Modifier.clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+        ) {
+            onPlayerIntent(artworkTapIntent)
+        }
+    } else {
+        Modifier
+    }
     Box(
         modifier = modifier
             .size(artworkSize)
@@ -353,7 +423,8 @@ private fun AutomotiveSwipeableArtwork(
                     },
                     onDragCancel = { dragOffsetPx = 0f },
                 )
-            },
+            }
+            .then(artworkTapModifier),
         contentAlignment = Alignment.Center,
     ) {
         val artworkDisplaySpec = resolveAutomotiveArtworkDisplaySpec(
@@ -705,6 +776,138 @@ private fun AutomotiveRoundIconButton(
     }
 }
 
+internal data class AutomotivePureModePresentation(
+    val showTopControls: Boolean,
+    val showPlaybackControls: Boolean,
+)
+
+internal fun resolveAutomotivePureModePresentation(
+    isPureMode: Boolean,
+): AutomotivePureModePresentation = AutomotivePureModePresentation(
+    showTopControls = !isPureMode,
+    showPlaybackControls = !isPureMode,
+)
+
+internal fun resolveAutomotiveTopControlButtonSize(maxWidth: Dp): Dp =
+    minOf(AutomotiveTopControlsSlotHeight, maxWidth / 3f)
+        .coerceAtLeast(AutomotiveControlMinimumTouchSize)
+
+internal fun resolveAutomotiveArtworkTapIntent(
+    isPureMode: Boolean,
+): PlayerIntent? = if (isPureMode) PlayerIntent.TogglePlayPause else null
+
+internal fun resolveAutomotivePureModeAfterTwoFingerTap(
+    isPureMode: Boolean,
+): Boolean = !isPureMode
+
+internal fun isAutomotivePureModeToggleTwoFingerTap(
+    firstDownTimeMillis: Long,
+    secondDownTimeMillis: Long?,
+    lastUpTimeMillis: Long,
+    distinctPointerCount: Int,
+    hadTwoPointersPressed: Boolean,
+    maximumMovementPx: Float,
+    touchSlopPx: Float,
+): Boolean {
+    val secondDown = secondDownTimeMillis ?: return false
+    return distinctPointerCount == 2 &&
+        hadTwoPointersPressed &&
+        secondDown >= firstDownTimeMillis &&
+        secondDown - firstDownTimeMillis <= AutomotivePureModeSecondPointerWindowMillis &&
+        lastUpTimeMillis >= firstDownTimeMillis &&
+        lastUpTimeMillis - firstDownTimeMillis <= AutomotivePureModeTapTimeoutMillis &&
+        maximumMovementPx >= 0f &&
+        maximumMovementPx <= touchSlopPx.coerceAtLeast(0f)
+}
+
+private suspend fun PointerInputScope.detectAutomotivePureModeToggleTwoFingerTap(
+    onTogglePureMode: () -> Unit,
+) {
+    awaitPointerEventScope {
+        var tracker: AutomotiveTwoFingerTapTracker? = null
+        while (true) {
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            val eventTimeMillis = event.changes.maxOfOrNull { it.uptimeMillis } ?: continue
+            val newDowns = event.changes
+                .filter { it.pressed && !it.previousPressed }
+                .sortedBy { it.uptimeMillis }
+            if (tracker == null) {
+                val firstDown = newDowns.firstOrNull() ?: continue
+                tracker = AutomotiveTwoFingerTapTracker(
+                    firstDownTimeMillis = firstDown.uptimeMillis,
+                    pointerStartPositions = mutableMapOf(firstDown.id to firstDown.position),
+                )
+            }
+            val activeTracker = tracker
+            newDowns.forEach { change ->
+                if (change.id !in activeTracker.pointerStartPositions) {
+                    if (activeTracker.pointerStartPositions.size == 1) {
+                        activeTracker.secondDownTimeMillis = change.uptimeMillis
+                        if (
+                            change.uptimeMillis - activeTracker.firstDownTimeMillis >
+                            AutomotivePureModeSecondPointerWindowMillis
+                        ) {
+                            activeTracker.isValid = false
+                        }
+                    } else {
+                        activeTracker.isValid = false
+                    }
+                    activeTracker.pointerStartPositions[change.id] = change.position
+                }
+            }
+            event.changes.forEach { change ->
+                val startPosition = activeTracker.pointerStartPositions[change.id] ?: return@forEach
+                val movement = (change.position - startPosition).getDistance()
+                activeTracker.maximumMovementPx = maxOf(activeTracker.maximumMovementPx, movement)
+                if (movement > viewConfiguration.touchSlop) {
+                    activeTracker.isValid = false
+                }
+            }
+            val pressedTrackedPointerCount = event.changes.count { change ->
+                change.pressed && change.id in activeTracker.pointerStartPositions
+            }
+            if (pressedTrackedPointerCount >= 2) {
+                activeTracker.hadTwoPointersPressed = true
+            }
+            if (activeTracker.pointerStartPositions.size >= 2) {
+                event.changes.forEach { it.consume() }
+            }
+            if (
+                eventTimeMillis - activeTracker.firstDownTimeMillis >
+                AutomotivePureModeTapTimeoutMillis
+            ) {
+                activeTracker.isValid = false
+            }
+            if (event.changes.none { it.pressed }) {
+                if (
+                    activeTracker.isValid &&
+                    isAutomotivePureModeToggleTwoFingerTap(
+                        firstDownTimeMillis = activeTracker.firstDownTimeMillis,
+                        secondDownTimeMillis = activeTracker.secondDownTimeMillis,
+                        lastUpTimeMillis = eventTimeMillis,
+                        distinctPointerCount = activeTracker.pointerStartPositions.size,
+                        hadTwoPointersPressed = activeTracker.hadTwoPointersPressed,
+                        maximumMovementPx = activeTracker.maximumMovementPx,
+                        touchSlopPx = viewConfiguration.touchSlop,
+                    )
+                ) {
+                    onTogglePureMode()
+                }
+                tracker = null
+            }
+        }
+    }
+}
+
+private data class AutomotiveTwoFingerTapTracker(
+    val firstDownTimeMillis: Long,
+    val pointerStartPositions: MutableMap<PointerId, Offset>,
+    var secondDownTimeMillis: Long? = null,
+    var hadTwoPointersPressed: Boolean = false,
+    var maximumMovementPx: Float = 0f,
+    var isValid: Boolean = true,
+)
+
 internal data class AutomotivePlaybackControlsLayout(
     val showSecondaryControls: Boolean,
     val actionButtonSize: Dp,
@@ -986,6 +1189,9 @@ private fun AppDisplayScalePreset.validAutomotiveDisplayScale(): Float =
 private val AutomotiveControlMinimumTouchSize = 48.dp
 private val AutomotiveFiveControlsAbsoluteMinimumWidth = AutomotiveControlMinimumTouchSize * 5
 private val AutomotivePrimaryControlsAbsoluteMinimumWidth = AutomotiveControlMinimumTouchSize * 3
+private val AutomotiveTopControlsSlotHeight = 64.dp
+private const val AutomotivePureModeSecondPointerWindowMillis = 150L
+private const val AutomotivePureModeTapTimeoutMillis = 300L
 private const val AutomotivePlaybackPaneWeight = 0.46f
 private const val AutomotiveLyricsPaneWeight = 0.54f
 

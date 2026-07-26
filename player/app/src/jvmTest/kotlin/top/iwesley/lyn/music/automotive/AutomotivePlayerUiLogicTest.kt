@@ -9,8 +9,112 @@ import top.iwesley.lyn.music.core.model.AppDisplayScalePreset
 import top.iwesley.lyn.music.core.model.PlaybackSnapshot
 import top.iwesley.lyn.music.core.model.PlayerArtworkStyle
 import top.iwesley.lyn.music.feature.player.PlayerIntent
+import top.iwesley.lyn.music.shouldExitAutomotivePureModeOnBack
 
 class AutomotivePlayerUiLogicTest {
+    @Test
+    fun `pure mode hides top and playback controls without changing their slots`() {
+        val normal = resolveAutomotivePureModePresentation(isPureMode = false)
+        val pure = resolveAutomotivePureModePresentation(isPureMode = true)
+
+        assertEquals(true, normal.showTopControls)
+        assertEquals(true, normal.showPlaybackControls)
+        assertEquals(false, pure.showTopControls)
+        assertEquals(false, pure.showPlaybackControls)
+    }
+
+    @Test
+    fun `top controls fit three safe touch targets without changing regular car size`() {
+        assertEquals(48.dp, resolveAutomotiveTopControlButtonSize(144.dp))
+        assertEquals(60.dp, resolveAutomotiveTopControlButtonSize(180.dp))
+        assertEquals(64.dp, resolveAutomotiveTopControlButtonSize(192.dp))
+        assertEquals(64.dp, resolveAutomotiveTopControlButtonSize(532.dp))
+    }
+
+    @Test
+    fun `artwork tap toggles playback only in pure mode`() {
+        assertNull(resolveAutomotiveArtworkTapIntent(isPureMode = false))
+        assertEquals(
+            PlayerIntent.TogglePlayPause,
+            resolveAutomotiveArtworkTapIntent(isPureMode = true),
+        )
+    }
+
+    @Test
+    fun `back exits pure mode only for automotive player`() {
+        assertEquals(
+            true,
+            shouldExitAutomotivePureModeOnBack(
+                useAutomotiveLandscapePlayer = true,
+                isPureMode = true,
+            ),
+        )
+        assertEquals(
+            false,
+            shouldExitAutomotivePureModeOnBack(
+                useAutomotiveLandscapePlayer = true,
+                isPureMode = false,
+            ),
+        )
+        assertEquals(
+            false,
+            shouldExitAutomotivePureModeOnBack(
+                useAutomotiveLandscapePlayer = false,
+                isPureMode = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `two finger tap toggles pure mode in both directions`() {
+        assertEquals(true, resolveAutomotivePureModeAfterTwoFingerTap(isPureMode = false))
+        assertEquals(false, resolveAutomotivePureModeAfterTwoFingerTap(isPureMode = true))
+    }
+
+    @Test
+    fun `two finger tap toggles pure mode at timing and movement boundaries`() {
+        assertEquals(
+            true,
+            isAutomotivePureModeToggleTwoFingerTap(
+                firstDownTimeMillis = 1_000L,
+                secondDownTimeMillis = 1_150L,
+                lastUpTimeMillis = 1_300L,
+                distinctPointerCount = 2,
+                hadTwoPointersPressed = true,
+                maximumMovementPx = 12f,
+                touchSlopPx = 12f,
+            ),
+        )
+    }
+
+    @Test
+    fun `two finger tap rejects incomplete delayed moved and extra pointer gestures`() {
+        val validArguments = {
+            secondDownTimeMillis: Long?,
+            lastUpTimeMillis: Long,
+            distinctPointerCount: Int,
+            hadTwoPointersPressed: Boolean,
+            maximumMovementPx: Float,
+            ->
+            isAutomotivePureModeToggleTwoFingerTap(
+                firstDownTimeMillis = 1_000L,
+                secondDownTimeMillis = secondDownTimeMillis,
+                lastUpTimeMillis = lastUpTimeMillis,
+                distinctPointerCount = distinctPointerCount,
+                hadTwoPointersPressed = hadTwoPointersPressed,
+                maximumMovementPx = maximumMovementPx,
+                touchSlopPx = 12f,
+            )
+        }
+
+        assertEquals(false, validArguments(null, 1_200L, 1, false, 0f))
+        assertEquals(false, validArguments(1_151L, 1_200L, 2, true, 0f))
+        assertEquals(false, validArguments(1_100L, 1_301L, 2, true, 0f))
+        assertEquals(false, validArguments(1_100L, 1_200L, 3, true, 0f))
+        assertEquals(false, validArguments(1_100L, 1_200L, 2, false, 0f))
+        assertEquals(false, validArguments(1_100L, 1_200L, 2, true, 12.1f))
+    }
+
     @Test
     fun `landscape frame layout switches padding and gap at 900 dp`() {
         val belowBoundary = resolveAutomotiveLandscapeFrameLayout(899.dp)

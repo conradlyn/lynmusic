@@ -1164,7 +1164,6 @@ private fun PlayerOverlay(
     val snapshot = state.effectiveSnapshot
     val track = snapshot.currentTrack ?: return
     val desktopWindowChrome = currentDesktopWindowChrome
-    PlatformBackHandler(onBack = { onPlayerIntent(PlayerIntent.ExpandedChanged(false)) })
     val defaultBackgroundColor = Color(0xFF232325)
     var isPureModeRequested by remember { mutableStateOf(false) }
     val artworkLocator = snapshot.currentDisplayArtworkLocator
@@ -1295,6 +1294,20 @@ private fun PlayerOverlay(
                 !wide
             val useAutomotiveLandscapePlayer =
                 shouldUseAutomotiveLandscapePlayerOverlay(layoutProfile)
+            PlatformBackHandler(
+                onBack = {
+                    if (
+                        shouldExitAutomotivePureModeOnBack(
+                            useAutomotiveLandscapePlayer = useAutomotiveLandscapePlayer,
+                            isPureMode = isPureMode,
+                        )
+                    ) {
+                        isPureModeRequested = false
+                    } else {
+                        onPlayerIntent(PlayerIntent.ExpandedChanged(false))
+                    }
+                },
+            )
             LaunchedEffect(wide) {
                 if (!wide) {
                     isPureModeRequested = false
@@ -1311,6 +1324,7 @@ private fun PlayerOverlay(
                     track = track,
                     artworkBitmap = paletteArtworkBitmap,
                     appDisplayScalePreset = appDisplayScalePreset,
+                    isPureMode = isPureMode,
                     playerArtworkStyle = playerArtworkStyle,
                     isFavorite = isFavorite,
                     canToggleFavorite = canToggleFavorite,
@@ -1319,6 +1333,7 @@ private fun PlayerOverlay(
                     onlineNavigationSourceId = onlineNavigationSourceId,
                     onOpenLibraryNavigationTarget = onOpenLibraryNavigationTarget,
                     onPlayerIntent = onPlayerIntent,
+                    onPureModeChanged = { isPureModeRequested = it },
                     modifier = Modifier.fillMaxSize(),
                 )
             } else {
@@ -1543,6 +1558,11 @@ private fun PlayerOverlay(
         }
     }
 }
+
+internal fun shouldExitAutomotivePureModeOnBack(
+    useAutomotiveLandscapePlayer: Boolean,
+    isPureMode: Boolean,
+): Boolean = useAutomotiveLandscapePlayer && isPureMode
 
 internal fun shouldRenderPlaybackBackgroundArtwork(
     platform: PlatformDescriptor,
