@@ -612,6 +612,36 @@ class AutomotivePlayerUiLogicTest {
     }
 
     @Test
+    fun `artwork swipe threshold adapts to available visual travel`() {
+        val compactMaxOffset = resolveAutomotiveArtworkMaxVisualOffset(140.dp)
+        val mediumMaxOffset = resolveAutomotiveArtworkMaxVisualOffset(200.dp)
+        val regularMaxOffset = resolveAutomotiveArtworkMaxVisualOffset(250.dp)
+        val largeMaxOffset = resolveAutomotiveArtworkMaxVisualOffset(300.dp)
+
+        assertEquals(44.8.dp, compactMaxOffset)
+        assertEquals(40.32.dp, resolveAutomotiveArtworkSwipeThreshold(compactMaxOffset))
+        assertEquals(64.dp, mediumMaxOffset)
+        assertEquals(57.6.dp, resolveAutomotiveArtworkSwipeThreshold(mediumMaxOffset))
+        assertEquals(80.dp, regularMaxOffset)
+        assertEquals(72.dp, resolveAutomotiveArtworkSwipeThreshold(regularMaxOffset))
+        assertEquals(96.dp, largeMaxOffset)
+        assertEquals(72.dp, resolveAutomotiveArtworkSwipeThreshold(largeMaxOffset))
+    }
+
+    @Test
+    fun `artwork swipe threshold never exceeds constrained visual travel`() {
+        assertEquals(0.dp, resolveAutomotiveArtworkSwipeThreshold(0.dp))
+        assertEquals(20.dp, resolveAutomotiveArtworkSwipeThreshold(20.dp))
+        assertEquals(132.dp, resolveAutomotiveArtworkMaxVisualOffset(500.dp))
+        assertEquals(
+            72.dp,
+            resolveAutomotiveArtworkSwipeThreshold(
+                resolveAutomotiveArtworkMaxVisualOffset(500.dp),
+            ),
+        )
+    }
+
+    @Test
     fun `artwork drag offset is clamped to visual bounds`() {
         assertEquals(
             40f,

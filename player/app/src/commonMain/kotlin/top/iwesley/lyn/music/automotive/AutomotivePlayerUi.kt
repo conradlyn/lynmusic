@@ -377,10 +377,10 @@ private fun AutomotiveSwipeableArtwork(
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
-    val swipeThresholdPx = with(density) { 72.dp.toPx() }
-    val maxVisualOffsetPx = with(density) {
-        minOf(artworkSize * 0.32f, 132.dp).toPx()
-    }
+    val maxVisualOffset = resolveAutomotiveArtworkMaxVisualOffset(artworkSize)
+    val swipeThreshold = resolveAutomotiveArtworkSwipeThreshold(maxVisualOffset)
+    val maxVisualOffsetPx = with(density) { maxVisualOffset.toPx() }
+    val swipeThresholdPx = with(density) { swipeThreshold.toPx() }
     var dragOffsetPx by remember(snapshot.currentTrack?.id) { mutableStateOf(0f) }
     val animatedDragOffsetPx by animateFloatAsState(
         targetValue = dragOffsetPx,
@@ -1284,6 +1284,16 @@ internal fun resolveAutomotivePlayerSeekPositionMs(
         return null
     }
     return (snapshot.durationMs * fraction.coerceIn(0f, 1f)).roundToLong()
+}
+
+internal fun resolveAutomotiveArtworkMaxVisualOffset(artworkSize: Dp): Dp =
+    minOf(artworkSize.coerceAtLeast(0.dp) * 0.32f, 132.dp)
+
+internal fun resolveAutomotiveArtworkSwipeThreshold(maxVisualOffset: Dp): Dp {
+    val normalizedMaxVisualOffset = maxVisualOffset.coerceAtLeast(0.dp)
+    return (normalizedMaxVisualOffset * 0.9f)
+        .coerceIn(40.dp, 72.dp)
+        .coerceAtMost(normalizedMaxVisualOffset)
 }
 
 internal fun resolveAutomotiveArtworkDragOffsetPx(
