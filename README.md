@@ -107,4 +107,4 @@ LynMusic 以 GNU General Public License version 3 or later（GPL-3.0-or-later）
  ![/锋风](./doc/weixin.jpeg) 
 
 ## Star History
-[![Star History Chart](https://api.star-history.com/svg?repos=wesley666/LynMusic&type=Date)](https://star-history.com/#wesley666/LynMusic&Date)
+[![Star History Chart](https://star-history.dera.page/svg?repos=wesley666/LynMusic&type=Date)](https://star-history.dera.page/#wesley666/LynMusic&Date)
