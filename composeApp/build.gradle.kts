@@ -264,6 +264,7 @@ compose.desktop {
             }
             windows {
                 iconFile.set(project.file("src/jvmMain/resources/desktop-icon.ico"))
+                dirChooser = false
                 shortcut = true
                 menu = true
                 menuGroup = "LynMusic"
